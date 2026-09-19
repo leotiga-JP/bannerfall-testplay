@@ -1,63 +1,30 @@
 # Bannerfall — Phase 1
 
-プレイヤー対AIの1対1戦闘を検証する、ブラウザ向け最小プロトタイプです。
+Player vs AI 1v1 combat prototype.
 
-## 技術構成
-
-- TypeScript
-- Vite
-- HTML5 Canvas
-- 静的ホスティング（GitHub Pages想定）
-
-## 実装済み要件
-
-- WASD移動
-- マウス方向への旋回
-- 左クリック攻撃
-- 攻撃範囲：50px
-- 攻撃角度：90度
-- ダメージ：20
-- 攻撃クールダウン：0.8秒
-- HP：100
-- 自然回復
-- 死亡・約2秒後のリスポーン
-- AI状態：IDLE / APPROACH / ENGAGE / DEAD
-- マップ：矩形アリーナ、画面境界で移動制限
-- 障害物なし
-- 一時停止：Esc / P
-- リスタート：R
-
-## 起動
+## Local development
 
 ```bash
 npm install
 npm run dev
 ```
 
-表示されたローカルURLをPCブラウザで開いてください。
-
-## ビルド
+## Production build
 
 ```bash
 npm run build
+npm run preview
 ```
 
-`dist/` に静的ファイルが生成されます。Viteの `base: './'` 設定により、GitHub Pagesのサブパス配信を想定しています。
+## GitHub Pages
 
-## 操作
+This repository includes `.github/workflows/deploy.yml` for automatic GitHub Pages deployment.
 
-- `WASD`: 移動
-- `Mouse`: 向き
-- `Left Click`: 攻撃
-- `Esc` / `P`: 一時停止
-- `R`: リスタート
+1. Push the repository to GitHub.
+2. Open **Settings → Pages**.
+3. Under **Build and deployment → Source**, select **GitHub Actions**.
+4. Push to `main` (or run the workflow manually from the Actions tab).
 
-## Phase 1で確認したいゲーム体験
+The workflow builds the Vite project and publishes the generated `dist` directory.
 
-1. 向きと攻撃角度によって「当てに行く」操作が成立するか
-2. AIが接近して攻撃することで最低限の対戦が成立するか
-3. 移動しながら攻撃することに意味があるか
-4. 攻撃のクールダウンが戦闘のテンポとして適切か
-5. 1対1戦闘を繰り返し試したくなるか
-
-Phase 2では、この戦闘モデルを壊さずに複数ユニットへ拡張することを想定しています。
+Do not publish the source `index.html` directly as the Pages site root; Vite must first bundle the TypeScript and CSS into `dist`.
