@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 1.7 - Directed Charge Prototype" />
-    <title>Bannerfall - Phase 1.7 Directed Charge</title>
+    <meta name="description" content="Bannerfall Phase 1.8 - Rally & Reform Prototype" />
+    <title>Bannerfall - Phase 1.8 Rally & Reform</title>
   </head>
   <body>
     <main id="app">
@@ -12,7 +12,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p>Phase 1.7 — Directed Charge Prototype</p>
+            <p>Phase 1.8 — Rally & Reform Prototype</p>
           </div>
           <div class="scoreboard">
             <span id="blue-count" class="blue">BLUE 20/20</span>
@@ -22,12 +22,12 @@
         </header>
 
         <div class="battle-info">
-          <span>射撃戦を続けるか、自分で突撃方向を決めて戦列を崩すか。敵軍も状況次第で射撃・後退・突撃を選ぶ。</span>
+          <span>斉射・突撃・離脱・再整列を自分で判断する。白兵戦は右クリックで切り上げ、Fで残存兵を再編成できる。</span>
           <strong id="reload" class="ready">READY — FIRE!</strong>
         </div>
 
         <div class="canvas-wrap">
-          <canvas id="game" width="1280" height="720" aria-label="Bannerfall directed charge battlefield"></canvas>
+          <canvas id="game" width="1280" height="720" aria-label="Bannerfall rally and reform battlefield"></canvas>
           <div class="overlay hidden" id="pause-overlay">
             <div class="overlay-card">
               <h2>PAUSED</h2>
@@ -42,6 +42,8 @@
           <span><kbd>Left Click</kbd> 一斉射撃</span>
           <span><kbd>Hold Right Click / Space</kbd> 突撃方向を指定</span>
           <span><kbd>Release</kbd> 突撃</span>
+          <span><kbd>Right Click</kbd> 突撃・白兵戦を中止して離脱</span>
+          <span><kbd>F</kbd> その場で再整列</span>
           <span><kbd>Esc / P</kbd> 一時停止</span>
           <span><kbd>R</kbd> 再戦</span>
         </footer>

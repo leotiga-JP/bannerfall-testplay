@@ -2,7 +2,7 @@ import { Unit } from './unit';
 import { GAME_CONFIG } from '../game/config';
 import type { Team, Vec2 } from '../game/types';
 
-export type FormationMode = 'line' | 'charging' | 'melee';
+export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming';
 
 export class Formation {
   readonly team: Team;
@@ -14,13 +14,16 @@ export class Formation {
   mode: FormationMode = 'line';
   chargeTarget: Vec2 | null = null;
 
+  private layoutCount: number;
+
   constructor(team: Team, center: Vec2, direction: number) {
     this.team = team;
     this.center = { ...center };
     this.direction = direction;
     const count = GAME_CONFIG.formation.rows * GAME_CONFIG.formation.columns;
+    this.layoutCount = count;
     this.soldiers = Array.from({ length: count }, (_, index) => {
-      const position = this.slotPosition(index);
+      const position = this.slotPosition(index, count);
       const unit = new Unit(`${team}-${index}`, team, index, position);
       unit.direction = direction;
       return unit;
@@ -34,8 +37,10 @@ export class Formation {
     this.volleysFired = 0;
     this.mode = 'line';
     this.chargeTarget = null;
+    this.layoutCount = this.soldiers.length;
     for (const soldier of this.soldiers) {
-      soldier.reset(this.slotPosition(soldier.slotIndex));
+      soldier.formationSlotIndex = soldier.slotIndex;
+      soldier.reset(this.slotPosition(soldier.slotIndex, this.layoutCount));
       soldier.direction = direction;
     }
   }
@@ -76,6 +81,21 @@ export class Formation {
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
   }
 
+  beginReform(direction: number, targetCenter?: Vec2, reloadPenalty: number = GAME_CONFIG.reform.reloadPenalty): boolean {
+    const alive = this.aliveSoldiers();
+    if (alive.length === 0) return false;
+
+    const currentCenter = this.averageAlivePosition();
+    this.center = targetCenter ? { ...targetCenter } : currentCenter;
+    this.direction = direction;
+    this.layoutCount = alive.length;
+    this.assignCompactSlots(alive);
+    this.mode = 'reforming';
+    this.chargeTarget = null;
+    this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
+    return true;
+  }
+
   returnToLine(reloadPenalty = 0): void {
     this.recalculateCenter();
     this.mode = 'line';
@@ -92,20 +112,31 @@ export class Formation {
       return;
     }
 
+    let allSettled = true;
+    const catchupSpeed = this.mode === 'reforming'
+      ? GAME_CONFIG.reform.soldierCatchupSpeed
+      : GAME_CONFIG.formation.soldierCatchupSpeed;
+
     for (const soldier of this.soldiers) {
       if (soldier.dead) continue;
 
-      const target = this.slotPosition(soldier.slotIndex);
+      const target = this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
       const dx = target.x - soldier.position.x;
       const dy = target.y - soldier.position.y;
       const distance = Math.hypot(dx, dy);
-      const maxStep = GAME_CONFIG.formation.soldierCatchupSpeed * dt;
+      if (distance > GAME_CONFIG.reform.settleDistance) allSettled = false;
+
+      const maxStep = catchupSpeed * dt;
       if (distance > 0.01) {
         const ratio = Math.min(1, maxStep / distance);
         soldier.position.x += dx * ratio;
         soldier.position.y += dy * ratio;
       }
       soldier.direction = this.direction;
+    }
+
+    if (this.mode === 'reforming' && allSettled) {
+      this.mode = 'line';
     }
   }
 
@@ -128,12 +159,22 @@ export class Formation {
     this.volleysFired += 1;
   }
 
-  slotPosition(index: number): Vec2 {
-    const { columns, lateralSpacing, rankSpacing } = GAME_CONFIG.formation;
-    const row = Math.floor(index / columns);
-    const column = index % columns;
-    const lateral = (column - (columns - 1) / 2) * lateralSpacing;
-    const depth = row * rankSpacing;
+  averageAlivePosition(): Vec2 {
+    const alive = this.aliveSoldiers();
+    if (alive.length === 0) return { ...this.center };
+    let x = 0;
+    let y = 0;
+    for (const soldier of alive) {
+      x += soldier.position.x;
+      y += soldier.position.y;
+    }
+    return { x: x / alive.length, y: y / alive.length };
+  }
+
+  slotPosition(index: number, count = this.layoutCount): Vec2 {
+    const layout = this.layoutFor(index, count);
+    const lateral = (layout.column - (layout.rowCount - 1) / 2) * GAME_CONFIG.formation.lateralSpacing;
+    const depth = layout.row * GAME_CONFIG.formation.rankSpacing;
 
     const forwardX = Math.cos(this.direction);
     const forwardY = Math.sin(this.direction);
@@ -146,16 +187,40 @@ export class Formation {
     };
   }
 
-  private recalculateCenter(): void {
-    const alive = this.aliveSoldiers();
-    if (alive.length === 0) return;
-    let x = 0;
-    let y = 0;
-    for (const soldier of alive) {
-      x += soldier.position.x;
-      y += soldier.position.y;
+  private layoutFor(index: number, count: number): { row: number; column: number; rowCount: number } {
+    if (count <= 1) return { row: 0, column: 0, rowCount: 1 };
+
+    const frontCount = Math.ceil(count / 2);
+    const rearCount = Math.floor(count / 2);
+    if (index < frontCount) {
+      return { row: 0, column: index, rowCount: frontCount };
     }
-    this.center.x = x / alive.length;
-    this.center.y = y / alive.length;
+    return { row: 1, column: index - frontCount, rowCount: Math.max(1, rearCount) };
+  }
+
+  private assignCompactSlots(alive: Unit[]): void {
+    const remaining = [...alive];
+    for (let slot = 0; slot < alive.length; slot += 1) {
+      const target = this.slotPosition(slot, alive.length);
+      let bestIndex = 0;
+      let bestDistanceSq = Number.POSITIVE_INFINITY;
+
+      for (let i = 0; i < remaining.length; i += 1) {
+        const dx = remaining[i].position.x - target.x;
+        const dy = remaining[i].position.y - target.y;
+        const distanceSq = dx * dx + dy * dy;
+        if (distanceSq < bestDistanceSq) {
+          bestDistanceSq = distanceSq;
+          bestIndex = i;
+        }
+      }
+
+      const [chosen] = remaining.splice(bestIndex, 1);
+      chosen.formationSlotIndex = slot;
+    }
+  }
+
+  private recalculateCenter(): void {
+    this.center = this.averageAlivePosition();
   }
 }

@@ -1,4 +1,4 @@
-import { Formation } from '../entities/formation';
+import { Formation, type FormationMode } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
 import { GAME_CONFIG } from './config';
 import type { Team, Vec2 } from './types';
@@ -17,8 +17,8 @@ export interface GameSnapshot {
   time: number;
   paused: boolean;
   winner: Team | null;
-  playerMode: 'line' | 'charging' | 'melee';
-  enemyMode: 'line' | 'charging' | 'melee';
+  playerMode: FormationMode;
+  enemyMode: FormationMode;
   chargeAiming: boolean;
   chargeAimTarget: Vec2 | null;
   playerAlive: number;
@@ -145,8 +145,28 @@ export class Game {
   private updatePlayerControl(dt: number): void {
     if (this.winner || this.playerFormation.aliveCount() === 0) return;
 
+    const pointer = this.input.getPointer();
+
+    if (this.input.consumeReform()) {
+      this.cancelChargeAim();
+      const center = this.playerFormation.averageAlivePosition();
+      const direction = Math.atan2(pointer.y - center.y, pointer.x - center.x);
+      this.playerFormation.beginReform(direction, undefined, GAME_CONFIG.reform.reloadPenalty);
+      this.consumeCombatInputs();
+      return;
+    }
+
+    if (this.playerFormation.mode === 'charging' || this.playerFormation.mode === 'melee') {
+      if (this.input.consumeBreakOff()) {
+        this.cancelChargeAim();
+        this.orderBreakOff();
+        this.input.consumeAttack();
+        this.input.consumeChargeRelease();
+        return;
+      }
+    }
+
     if (this.playerFormation.mode === 'line') {
-      const pointer = this.input.getPointer();
       this.playerFormation.direction = Math.atan2(
         pointer.y - this.playerFormation.center.y,
         pointer.x - this.playerFormation.center.x,
@@ -161,8 +181,7 @@ export class Game {
         this.chargeAimTarget = this.computeChargeTarget(pointer);
         if (!this.input.isChargeHeld() && this.input.consumeChargeRelease()) {
           const target = this.chargeAimTarget;
-          this.chargeAiming = false;
-          this.chargeAimTarget = null;
+          this.cancelChargeAim();
           if (target && this.playerFormation.beginCharge(target)) {
             this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.chargeShake);
             return;
@@ -176,14 +195,49 @@ export class Game {
           this.performVolley(this.playerFormation, GAME_CONFIG.musket.reloadSeconds);
         }
       }
-    } else {
-      this.chargeAiming = false;
-      this.chargeAimTarget = null;
-      // Consume stray inputs so a held click does not fire immediately after reforming.
-      this.input.consumeAttack();
-      this.input.consumeChargeStart();
-      this.input.consumeChargeRelease();
+      return;
     }
+
+    this.cancelChargeAim();
+    this.consumeCombatInputs();
+  }
+
+  private orderBreakOff(): void {
+    const ownCenter = this.playerFormation.averageAlivePosition();
+    const enemyCenter = this.enemyFormation.averageAlivePosition();
+    let awayX = ownCenter.x - enemyCenter.x;
+    let awayY = ownCenter.y - enemyCenter.y;
+    let distance = Math.hypot(awayX, awayY);
+
+    if (distance < 0.001) {
+      awayX = -Math.cos(this.playerFormation.direction);
+      awayY = -Math.sin(this.playerFormation.direction);
+      distance = 1;
+    }
+
+    const target = this.clampFormationPoint({
+      x: ownCenter.x + (awayX / distance) * GAME_CONFIG.reform.breakOffDistance,
+      y: ownCenter.y + (awayY / distance) * GAME_CONFIG.reform.breakOffDistance,
+    });
+    const facingEnemy = Math.atan2(enemyCenter.y - target.y, enemyCenter.x - target.x);
+
+    this.playerFormation.beginReform(
+      facingEnemy,
+      target,
+      GAME_CONFIG.reform.breakOffReloadPenalty,
+    );
+    this.screenShake = Math.max(this.screenShake, 1.8);
+  }
+
+  private consumeCombatInputs(): void {
+    this.input.consumeAttack();
+    this.input.consumeChargeStart();
+    this.input.consumeChargeRelease();
+  }
+
+  private cancelChargeAim(): void {
+    this.chargeAiming = false;
+    this.chargeAimTarget = null;
   }
 
   private movePlayerFormation(dt: number): void {
@@ -243,7 +297,11 @@ export class Game {
       if (nearby) {
         charger.enterMelee();
       } else {
-        charger.returnToLine(GAME_CONFIG.charge.postChargeReloadPenalty);
+        charger.beginReform(
+          charger.direction,
+          this.clampFormationPoint(charger.center),
+          GAME_CONFIG.charge.postChargeReloadPenalty,
+        );
       }
     }
   }
@@ -274,7 +332,12 @@ export class Game {
 
     const next = timer + dt;
     if (next >= GAME_CONFIG.melee.disengageDelay) {
-      formation.returnToLine(GAME_CONFIG.charge.postChargeReloadPenalty);
+      const own = formation.averageAlivePosition();
+      const enemy = opponent.averageAlivePosition();
+      const direction = opponent.aliveCount() > 0
+        ? Math.atan2(enemy.y - own.y, enemy.x - own.x)
+        : formation.direction;
+      formation.beginReform(direction, undefined, GAME_CONFIG.charge.postChargeReloadPenalty);
       return 0;
     }
     return next;
@@ -290,26 +353,29 @@ export class Game {
     const distance = Math.hypot(dx, dy);
     const maxDistance = GAME_CONFIG.charge.maxDistance;
     const scale = distance > maxDistance ? maxDistance / distance : 1;
-    const target = {
+    return this.clampFormationPoint({
       x: origin.x + dx * scale,
       y: origin.y + dy * scale,
-    };
+    });
+  }
 
+  private clampFormationPoint(point: Vec2): Vec2 {
     return {
-      x: Math.max(GAME_CONFIG.formation.arenaMarginX, Math.min(GAME_CONFIG.width - GAME_CONFIG.formation.arenaMarginX, target.x)),
-      y: Math.max(GAME_CONFIG.formation.arenaMarginY, Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, target.y)),
+      x: Math.max(
+        GAME_CONFIG.formation.arenaMarginX,
+        Math.min(GAME_CONFIG.width - GAME_CONFIG.formation.arenaMarginX, point.x),
+      ),
+      y: Math.max(
+        GAME_CONFIG.formation.arenaMarginY,
+        Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, point.y),
+      ),
     };
   }
 
   private clampFormationCenter(formation: Formation): void {
-    formation.center.x = Math.max(
-      GAME_CONFIG.formation.arenaMarginX,
-      Math.min(GAME_CONFIG.width - GAME_CONFIG.formation.arenaMarginX, formation.center.x),
-    );
-    formation.center.y = Math.max(
-      GAME_CONFIG.formation.arenaMarginY,
-      Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, formation.center.y),
-    );
+    const clamped = this.clampFormationPoint(formation.center);
+    formation.center.x = clamped.x;
+    formation.center.y = clamped.y;
   }
 
   private performVolley(formation: Formation, reloadSeconds: number): void {

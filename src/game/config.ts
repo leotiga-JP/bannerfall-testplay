@@ -12,6 +12,13 @@ export const GAME_CONFIG = {
     arenaMarginX: 180,
     arenaMarginY: 205,
   },
+  reform: {
+    soldierCatchupSpeed: 345,
+    settleDistance: 5,
+    reloadPenalty: 0.75,
+    breakOffReloadPenalty: 1.15,
+    breakOffDistance: 125,
+  },
   soldier: {
     maxHp: 100,
     radius: 9,

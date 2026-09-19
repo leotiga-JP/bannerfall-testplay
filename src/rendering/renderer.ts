@@ -126,11 +126,20 @@ export class Renderer {
     ctx.translate(formation.center.x, formation.center.y);
     ctx.rotate(formation.direction);
     const charging = formation.mode === 'charging';
+    const reforming = formation.mode === 'reforming';
     ctx.strokeStyle = formation.team === 'player'
-      ? charging ? 'rgba(255, 225, 132, 0.72)' : 'rgba(160,202,255,0.32)'
-      : charging ? 'rgba(255, 190, 132, 0.62)' : 'rgba(255,175,175,0.18)';
-    ctx.lineWidth = charging ? 2 : 1;
-    ctx.setLineDash(charging ? [3, 4] : [5, 6]);
+      ? charging
+        ? 'rgba(255, 225, 132, 0.72)'
+        : reforming
+          ? 'rgba(174, 235, 255, 0.72)'
+          : 'rgba(160,202,255,0.32)'
+      : charging
+        ? 'rgba(255, 190, 132, 0.62)'
+        : reforming
+          ? 'rgba(255, 218, 190, 0.58)'
+          : 'rgba(255,175,175,0.18)';
+    ctx.lineWidth = charging || reforming ? 2 : 1;
+    ctx.setLineDash(charging ? [3, 4] : reforming ? [10, 5] : [5, 6]);
     ctx.beginPath();
     ctx.moveTo(0, -205);
     ctx.lineTo(0, 205);
@@ -277,6 +286,7 @@ export class Renderer {
     let text = '';
     if (snapshot.playerMode === 'charging') text = 'FORWARD — CHARGE!';
     else if (snapshot.playerMode === 'melee') text = 'BAYONETS — CLOSE COMBAT!';
+    else if (snapshot.playerMode === 'reforming') text = 'RALLY — REFORM THE LINE!';
     if (!text) return;
 
     const { ctx } = this;
@@ -308,6 +318,7 @@ export class Renderer {
   private modeLabel(mode: GameSnapshot['playerMode']): string {
     if (mode === 'charging') return 'CHARGE';
     if (mode === 'melee') return 'MELEE';
+    if (mode === 'reforming') return 'REFORM';
     return 'LINE';
   }
 }

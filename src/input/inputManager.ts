@@ -15,7 +15,7 @@ export class InputManager {
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'p', 'r', 'escape', ' '].includes(key)) event.preventDefault();
+      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'escape', ' '].includes(key)) event.preventDefault();
     });
 
     window.addEventListener('keyup', (event) => {
@@ -67,6 +67,10 @@ export class InputManager {
     return this.consumePressed('r');
   }
 
+  consumeReform(): boolean {
+    return this.consumePressed('f');
+  }
+
   consumeAttack(): boolean {
     if (!this.attackPressed) return false;
     this.attackPressed = false;
@@ -80,6 +84,12 @@ export class InputManager {
       return true;
     }
     return keyboard;
+  }
+
+  consumeBreakOff(): boolean {
+    if (!this.rightMousePressed) return false;
+    this.rightMousePressed = false;
+    return true;
   }
 
   consumeChargeRelease(): boolean {

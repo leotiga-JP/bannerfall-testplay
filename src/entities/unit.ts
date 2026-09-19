@@ -6,6 +6,7 @@ export class Unit {
   readonly team: Team;
   readonly slotIndex: number;
 
+  formationSlotIndex: number;
   position: Vec2;
   direction = 0;
   hp: number = GAME_CONFIG.soldier.maxHp;
@@ -19,10 +20,12 @@ export class Unit {
     this.id = id;
     this.team = team;
     this.slotIndex = slotIndex;
+    this.formationSlotIndex = slotIndex;
     this.position = { ...position };
   }
 
   reset(position: Vec2): void {
+    this.formationSlotIndex = this.slotIndex;
     this.position = { ...position };
     this.direction = 0;
     this.hp = GAME_CONFIG.soldier.maxHp;

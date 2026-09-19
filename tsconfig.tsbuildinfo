@@ -1,0 +1,1 @@
+{"root":["./src/main.ts","./src/entities/formation.ts","./src/entities/projectile.ts","./src/entities/unit.ts","./src/game/config.ts","./src/game/game.ts","./src/game/types.ts","./src/input/inputManager.ts","./src/rendering/renderer.ts","./src/systems/aiSystem.ts","./src/systems/combatSystem.ts","./src/systems/meleeSystem.ts","./src/ui/hud.ts"],"version":"5.8.3"}
