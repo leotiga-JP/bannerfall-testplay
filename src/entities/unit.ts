@@ -1,5 +1,5 @@
-import type { Team, Vec2 } from '../game/types';
 import { GAME_CONFIG } from '../game/config';
+import type { Team, Vec2 } from '../game/types';
 
 export class Unit {
   readonly id: string;

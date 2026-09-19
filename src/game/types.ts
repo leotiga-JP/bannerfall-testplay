@@ -1,4 +1,4 @@
-export type Team = 'player' | 'enemy';
+export type Team = 'blue' | 'red';
 
 export interface Vec2 {
   x: number;

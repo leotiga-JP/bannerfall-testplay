@@ -1,7 +1,7 @@
 {
-  "name": "bannerfall-phase1-8",
+  "name": "bannerfall-phase2",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

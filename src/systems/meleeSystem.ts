@@ -17,125 +17,144 @@ interface PendingHit {
 }
 
 export class MeleeSystem {
-  formationsInContact(a: Formation, b: Formation, threshold: number = GAME_CONFIG.charge.contactDistance): boolean {
-    const thresholdSq = threshold * threshold;
-    for (const unitA of a.soldiers) {
-      if (unitA.dead) continue;
-      for (const unitB of b.soldiers) {
-        if (unitB.dead) continue;
-        const dx = unitB.position.x - unitA.position.x;
-        const dy = unitB.position.y - unitA.position.y;
-        if (dx * dx + dy * dy <= thresholdSq) return true;
+  findContact(charger: Formation, enemies: Formation[]): Formation | null {
+    const centerRange = GAME_CONFIG.formation.collisionRadius * 2 + GAME_CONFIG.charge.contactDistance;
+    const centerRangeSq = centerRange * centerRange;
+    const contactSq = GAME_CONFIG.charge.contactDistance * GAME_CONFIG.charge.contactDistance;
+
+    for (const enemy of enemies) {
+      if (enemy.aliveCount() === 0) continue;
+      const cdx = enemy.center.x - charger.center.x;
+      const cdy = enemy.center.y - charger.center.y;
+      if (cdx * cdx + cdy * cdy > centerRangeSq) continue;
+      for (const own of charger.soldiers) {
+        if (own.dead) continue;
+        for (const target of enemy.soldiers) {
+          if (target.dead) continue;
+          const dx = target.position.x - own.position.x;
+          const dy = target.position.y - own.position.y;
+          if (dx * dx + dy * dy <= contactSq) return enemy;
+        }
       }
     }
-    return false;
+    return null;
   }
 
-  hasNearbyEnemy(formation: Formation, enemy: Formation, range: number = GAME_CONFIG.melee.disengageDistance): boolean {
+  hasNearbyEnemy(formation: Formation, enemies: Formation[], range: number = GAME_CONFIG.melee.disengageDistance): boolean {
+    const centerRange = range + GAME_CONFIG.formation.collisionRadius * 2;
+    const centerRangeSq = centerRange * centerRange;
     const rangeSq = range * range;
-    for (const unit of formation.soldiers) {
-      if (unit.dead) continue;
-      for (const candidate of enemy.soldiers) {
-        if (candidate.dead) continue;
-        const dx = candidate.position.x - unit.position.x;
-        const dy = candidate.position.y - unit.position.y;
-        if (dx * dx + dy * dy <= rangeSq) return true;
+    for (const enemy of enemies) {
+      if (enemy.aliveCount() === 0) continue;
+      const cdx = enemy.center.x - formation.center.x;
+      const cdy = enemy.center.y - formation.center.y;
+      if (cdx * cdx + cdy * cdy > centerRangeSq) continue;
+      for (const own of formation.soldiers) {
+        if (own.dead) continue;
+        for (const target of enemy.soldiers) {
+          if (target.dead) continue;
+          const dx = target.position.x - own.position.x;
+          const dy = target.position.y - own.position.y;
+          if (dx * dx + dy * dy <= rangeSq) return true;
+        }
       }
     }
     return false;
   }
 
   update(
-    player: Formation,
-    enemy: Formation,
+    formations: Formation[],
     dt: number,
     strikes: MeleeStrike[],
     onDeath: (position: Vec2, team: Team, impactDirection: Vec2) => void,
   ): boolean {
-    const playerAlive = player.aliveSoldiers();
-    const enemyAlive = enemy.aliveSoldiers();
-    if (playerAlive.length === 0 || enemyAlive.length === 0) return false;
-
-    if (player.mode === 'melee') this.moveSide(playerAlive, enemyAlive, playerAlive, dt);
-    if (enemy.mode === 'melee') this.moveSide(enemyAlive, playerAlive, enemyAlive, dt);
-
-    const pendingHits: PendingHit[] = [];
-    if (player.mode === 'melee') this.collectAttacks(playerAlive, enemyAlive, pendingHits);
-    if (enemy.mode === 'melee') this.collectAttacks(enemyAlive, playerAlive, pendingHits);
-
     let anyStrike = false;
+    const pendingHits: PendingHit[] = [];
+
+    for (const formation of formations) {
+      if (formation.mode !== 'melee' || formation.aliveCount() === 0) continue;
+      const enemyUnits = this.nearbyEnemyUnits(formation, formations);
+      if (enemyUnits.length === 0) continue;
+      const own = formation.aliveSoldiers();
+      this.moveSide(own, enemyUnits, dt);
+      this.collectAttacks(own, enemyUnits, pendingHits);
+    }
+
     for (const hit of pendingHits) {
       if (hit.attacker.dead || hit.target.dead) continue;
-
       hit.attacker.meleeCooldown = GAME_CONFIG.melee.attackCooldown * (0.88 + Math.random() * 0.24);
       hit.attacker.meleeStabTimer = GAME_CONFIG.melee.attackWindup;
       hit.attacker.direction = Math.atan2(hit.direction.y, hit.direction.x);
-
       strikes.push({
         start: {
-          x: hit.attacker.position.x + hit.direction.x * 10,
-          y: hit.attacker.position.y + hit.direction.y * 10,
+          x: hit.attacker.position.x + hit.direction.x * 9,
+          y: hit.attacker.position.y + hit.direction.y * 9,
         },
-        end: {
-          x: hit.target.position.x,
-          y: hit.target.position.y,
-        },
+        end: { ...hit.target.position },
         team: hit.attacker.team,
         life: GAME_CONFIG.effects.meleeStrikeLifetime,
       });
-
       const damage = GAME_CONFIG.melee.attackDamage * (0.85 + Math.random() * 0.3);
       const killed = hit.target.takeDamage(damage);
       hit.target.knockback.x += hit.direction.x * GAME_CONFIG.melee.knockbackSpeed;
       hit.target.knockback.y += hit.direction.y * GAME_CONFIG.melee.knockbackSpeed;
       anyStrike = true;
-
       if (killed) onDeath(hit.target.position, hit.target.team, hit.direction);
     }
 
     return anyStrike;
   }
 
-  private moveSide(units: Unit[], enemies: Unit[], allies: Unit[], dt: number): void {
+  private nearbyEnemyUnits(formation: Formation, formations: Formation[]): Unit[] {
+    const result: Unit[] = [];
+    const maxSq = GAME_CONFIG.melee.formationSearchRange * GAME_CONFIG.melee.formationSearchRange;
+    for (const enemy of formations) {
+      if (enemy.team === formation.team || enemy.aliveCount() === 0) continue;
+      const dx = enemy.center.x - formation.center.x;
+      const dy = enemy.center.y - formation.center.y;
+      if (dx * dx + dy * dy > maxSq) continue;
+      result.push(...enemy.aliveSoldiers());
+    }
+    return result;
+  }
+
+  private moveSide(units: Unit[], enemies: Unit[], dt: number): void {
     for (const unit of units) {
       if (unit.dead) continue;
       const target = this.nearestWithin(unit, enemies, GAME_CONFIG.melee.acquireRange);
-
       let moveX = 0;
       let moveY = 0;
+
       if (target) {
-        let dx = target.position.x - unit.position.x;
-        let dy = target.position.y - unit.position.y;
+        const dx = target.position.x - unit.position.x;
+        const dy = target.position.y - unit.position.y;
         const distance = Math.hypot(dx, dy) || 1;
         const nx = dx / distance;
         const ny = dy / distance;
         unit.direction = Math.atan2(dy, dx);
-
         if (distance > GAME_CONFIG.melee.attackRange * 0.82) {
           moveX += nx * GAME_CONFIG.melee.moveSpeed;
           moveY += ny * GAME_CONFIG.melee.moveSpeed;
         }
       }
 
-      for (const ally of allies) {
+      for (const ally of units) {
         if (ally === unit || ally.dead) continue;
         const dx = unit.position.x - ally.position.x;
         const dy = unit.position.y - ally.position.y;
-        const separationDistance = Math.hypot(dx, dy);
-        if (separationDistance <= 0.001 || separationDistance >= GAME_CONFIG.melee.separationRadius) continue;
-        const strength = 1 - separationDistance / GAME_CONFIG.melee.separationRadius;
-        moveX += (dx / separationDistance) * GAME_CONFIG.melee.separationStrength * strength;
-        moveY += (dy / separationDistance) * GAME_CONFIG.melee.separationStrength * strength;
+        const distance = Math.hypot(dx, dy);
+        if (distance <= 0.001 || distance >= GAME_CONFIG.melee.separationRadius) continue;
+        const strength = 1 - distance / GAME_CONFIG.melee.separationRadius;
+        moveX += (dx / distance) * GAME_CONFIG.melee.separationStrength * strength;
+        moveY += (dy / distance) * GAME_CONFIG.melee.separationStrength * strength;
       }
 
       unit.position.x += (moveX + unit.knockback.x) * dt;
       unit.position.y += (moveY + unit.knockback.y) * dt;
       unit.knockback.x *= Math.pow(GAME_CONFIG.melee.knockbackDamping, dt);
       unit.knockback.y *= Math.pow(GAME_CONFIG.melee.knockbackDamping, dt);
-
-      const pad = GAME_CONFIG.melee.arenaPadding;
-      unit.position.x = Math.max(pad, Math.min(GAME_CONFIG.width - pad, unit.position.x));
-      unit.position.y = Math.max(pad, Math.min(GAME_CONFIG.height - pad, unit.position.y));
+      unit.position.x = Math.max(GAME_CONFIG.world.padding, Math.min(GAME_CONFIG.world.width - GAME_CONFIG.world.padding, unit.position.x));
+      unit.position.y = Math.max(GAME_CONFIG.world.padding, Math.min(GAME_CONFIG.world.height - GAME_CONFIG.world.padding, unit.position.y));
     }
   }
 
@@ -156,15 +175,16 @@ export class MeleeSystem {
   }
 
   private nearestWithin(unit: Unit, candidates: Unit[], range: number): Unit | null {
+    const rangeSq = range * range;
     let best: Unit | null = null;
-    let bestDistanceSq = range * range;
+    let bestSq = rangeSq;
     for (const candidate of candidates) {
       if (candidate.dead) continue;
       const dx = candidate.position.x - unit.position.x;
       const dy = candidate.position.y - unit.position.y;
       const distanceSq = dx * dx + dy * dy;
-      if (distanceSq <= bestDistanceSq) {
-        bestDistanceSq = distanceSq;
+      if (distanceSq < bestSq) {
+        bestSq = distanceSq;
         best = candidate;
       }
     }

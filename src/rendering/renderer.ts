@@ -1,8 +1,9 @@
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
-import { Unit } from '../entities/unit';
+import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
 import type { GameSnapshot } from '../game/game';
+import type { Vec2 } from '../game/types';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
 import type { MeleeStrike } from '../systems/meleeSystem';
 
@@ -10,223 +11,180 @@ export class Renderer {
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
 
   render(
-    player: Formation,
-    enemy: Formation,
+    formations: Formation[],
     projectiles: Projectile[],
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
     corpses: CorpseParticle[],
-    meleeStrikes: MeleeStrike[],
+    strikes: MeleeStrike[],
     snapshot: GameSnapshot,
+    camera: Camera,
   ): void {
-    const shakeX = snapshot.screenShake > 0 ? (Math.random() - 0.5) * snapshot.screenShake * 2 : 0;
-    const shakeY = snapshot.screenShake > 0 ? (Math.random() - 0.5) * snapshot.screenShake * 2 : 0;
+    const { ctx } = this;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, GAME_CONFIG.viewport.width, GAME_CONFIG.viewport.height);
+    ctx.fillStyle = '#192014';
+    ctx.fillRect(0, 0, GAME_CONFIG.viewport.width, GAME_CONFIG.viewport.height);
 
-    this.ctx.save();
-    this.ctx.translate(shakeX, shakeY);
-    this.drawBackground();
-    this.drawRangeHint(player, enemy, snapshot);
-    this.drawChargeArrow(player, snapshot);
-    this.drawCorpses(corpses);
-    this.drawFormation(enemy);
-    this.drawFormation(player);
-    this.drawProjectiles(projectiles);
-    this.drawMeleeStrikes(meleeStrikes);
-    this.drawMuzzleFlashes(flashes);
-    this.drawSmoke(smoke);
-    this.drawModeBanner(snapshot);
+    const shake = snapshot.screenShake;
+    const shakeX = shake > 0 ? (Math.random() - 0.5) * shake * 2 : 0;
+    const shakeY = shake > 0 ? (Math.random() - 0.5) * shake * 2 : 0;
+
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+    camera.applyTransform(ctx);
+    this.drawBattlefield(camera);
+    this.drawCorpses(corpses, camera);
+    this.drawSmoke(smoke, camera);
+    this.drawProjectiles(projectiles, camera);
+    this.drawFormations(formations, camera);
+    this.drawMuzzleFlashes(flashes, camera);
+    this.drawMeleeStrikes(strikes, camera);
+    if (snapshot.chargeAiming && snapshot.chargeAimTarget) {
+      const player = formations.find((formation) => formation.isPlayerControlled);
+      if (player) this.drawChargeArrow(player.center, snapshot.chargeAimTarget);
+    }
+    if (snapshot.debugAi) this.drawAiDebug(formations, camera);
+    ctx.restore();
+
+    this.drawMinimap(formations, camera);
+    this.drawPlayerMode(snapshot);
     this.drawResult(snapshot);
-    this.ctx.restore();
   }
 
-  private drawBackground(): void {
+  private drawBattlefield(camera: Camera): void {
     const { ctx } = this;
-    ctx.fillStyle = '#455b39';
-    ctx.fillRect(-20, -20, GAME_CONFIG.width + 40, GAME_CONFIG.height + 40);
+    ctx.fillStyle = '#4c623f';
+    ctx.fillRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
 
-    ctx.strokeStyle = 'rgba(25, 42, 24, 0.20)';
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= GAME_CONFIG.width; x += GAME_CONFIG.backgroundGrid) {
-      ctx.beginPath();
-      ctx.moveTo(x + 0.5, 0);
-      ctx.lineTo(x + 0.5, GAME_CONFIG.height);
-      ctx.stroke();
-    }
-    for (let y = 0; y <= GAME_CONFIG.height; y += GAME_CONFIG.backgroundGrid) {
-      ctx.beginPath();
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(GAME_CONFIG.width, y + 0.5);
-      ctx.stroke();
-    }
+    const bounds = camera.visibleBounds(100);
+    const grid = GAME_CONFIG.world.grid;
+    const startX = Math.max(0, Math.floor(bounds.left / grid) * grid);
+    const endX = Math.min(GAME_CONFIG.world.width, Math.ceil(bounds.right / grid) * grid);
+    const startY = Math.max(0, Math.floor(bounds.top / grid) * grid);
+    const endY = Math.min(GAME_CONFIG.world.height, Math.ceil(bounds.bottom / grid) * grid);
 
-    ctx.fillStyle = 'rgba(242, 225, 178, 0.05)';
-    for (let i = 0; i < 100; i += 1) {
-      const x = (i * 149) % GAME_CONFIG.width;
-      const y = (i * 83) % GAME_CONFIG.height;
-      ctx.fillRect(x, y, 2, 2);
-    }
-
-    ctx.strokeStyle = '#8e8060';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(2, 2, GAME_CONFIG.width - 4, GAME_CONFIG.height - 4);
-  }
-
-  private drawFormation(formation: Formation): void {
-    for (const soldier of formation.soldiers) {
-      if (!soldier.dead) this.drawSoldier(soldier);
-    }
-    if (formation.mode !== 'melee') this.drawFormationMarker(formation);
-  }
-
-  private drawSoldier(unit: Unit): void {
-    const { ctx } = this;
-    const player = unit.team === 'player';
-    const coat = player ? '#315c9e' : '#aa2f35';
-    const trim = player ? '#d7e4f5' : '#f3d6b5';
-    const hat = '#1b1c1d';
-
-    ctx.save();
-    ctx.translate(unit.position.x, unit.position.y);
-    ctx.rotate(unit.direction);
-
-    if (unit.hitFlashTimer > 0) {
-      ctx.shadowColor = '#fff7d2';
-      ctx.shadowBlur = 12;
-    }
-
-    ctx.fillStyle = '#2b241d';
-    ctx.fillRect(-7, -8, 13, 16);
-    ctx.fillStyle = coat;
-    ctx.fillRect(-5, -7, 10, 14);
-    ctx.fillStyle = trim;
-    ctx.fillRect(0, -7, 2, 14);
-
-    ctx.fillStyle = '#d7b58a';
-    ctx.fillRect(4, -4, 5, 8);
-    ctx.fillStyle = hat;
-    ctx.fillRect(2, -6, 6, 12);
-
-    const stabExtension = unit.meleeStabTimer > 0 ? 9 : 0;
-    ctx.fillStyle = '#4c3a25';
-    ctx.fillRect(5, -1, 21 + stabExtension, 2);
-    ctx.fillStyle = '#c0b7a2';
-    ctx.fillRect(21 + stabExtension, -1, 10, 1);
+    ctx.strokeStyle = 'rgba(226, 220, 183, 0.07)';
+    ctx.lineWidth = 1 / camera.zoom;
     ctx.beginPath();
-    ctx.moveTo(31 + stabExtension, -2);
-    ctx.lineTo(38 + stabExtension, 0);
-    ctx.lineTo(31 + stabExtension, 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
-  private drawFormationMarker(formation: Formation): void {
-    const { ctx } = this;
-    ctx.save();
-    ctx.translate(formation.center.x, formation.center.y);
-    ctx.rotate(formation.direction);
-    const charging = formation.mode === 'charging';
-    const reforming = formation.mode === 'reforming';
-    ctx.strokeStyle = formation.team === 'player'
-      ? charging
-        ? 'rgba(255, 225, 132, 0.72)'
-        : reforming
-          ? 'rgba(174, 235, 255, 0.72)'
-          : 'rgba(160,202,255,0.32)'
-      : charging
-        ? 'rgba(255, 190, 132, 0.62)'
-        : reforming
-          ? 'rgba(255, 218, 190, 0.58)'
-          : 'rgba(255,175,175,0.18)';
-    ctx.lineWidth = charging || reforming ? 2 : 1;
-    ctx.setLineDash(charging ? [3, 4] : reforming ? [10, 5] : [5, 6]);
-    ctx.beginPath();
-    ctx.moveTo(0, -205);
-    ctx.lineTo(0, 205);
+    for (let x = startX; x <= endX; x += grid) {
+      ctx.moveTo(x, startY);
+      ctx.lineTo(x, endY);
+    }
+    for (let y = startY; y <= endY; y += grid) {
+      ctx.moveTo(startX, y);
+      ctx.lineTo(endX, y);
+    }
     ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-  }
 
-  private drawChargeArrow(player: Formation, snapshot: GameSnapshot): void {
-    if (!snapshot.chargeAiming || !snapshot.chargeAimTarget || player.mode !== 'line') return;
-    const { ctx } = this;
-    const start = player.center;
-    const end = snapshot.chargeAimTarget;
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < 1) return;
-    const nx = dx / distance;
-    const ny = dy / distance;
+    ctx.strokeStyle = 'rgba(235, 221, 176, 0.35)';
+    ctx.lineWidth = 4 / camera.zoom;
+    ctx.strokeRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
 
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255, 224, 116, 0.92)';
-    ctx.fillStyle = 'rgba(255, 224, 116, 0.95)';
-    ctx.shadowColor = 'rgba(255, 205, 80, 0.45)';
-    ctx.shadowBlur = 10;
-    ctx.lineWidth = 5;
-    ctx.setLineDash([12, 8]);
-    ctx.beginPath();
-    ctx.moveTo(start.x + nx * 26, start.y + ny * 26);
-    ctx.lineTo(end.x - nx * 17, end.y - ny * 17);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    const sideX = -ny;
-    const sideY = nx;
-    ctx.beginPath();
-    ctx.moveTo(end.x, end.y);
-    ctx.lineTo(end.x - nx * 28 + sideX * 13, end.y - ny * 28 + sideY * 13);
-    ctx.lineTo(end.x - nx * 28 - sideX * 13, end.y - ny * 28 - sideY * 13);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.shadowBlur = 0;
-    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(35, 48, 29, 0.32)';
+    ctx.font = `${34 / camera.zoom}px Georgia, serif`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#fff0b5';
-    ctx.fillText('RELEASE TO CHARGE', (start.x + end.x) / 2, (start.y + end.y) / 2 - 13);
+    ctx.fillText('THE OPEN FIELD', GAME_CONFIG.world.width / 2, GAME_CONFIG.world.height / 2);
+  }
+
+  private drawFormations(formations: Formation[], camera: Camera): void {
+    for (const formation of formations) {
+      if (formation.aliveCount() === 0 || !this.pointVisible(formation.center, camera, 260)) continue;
+      if (formation.isPlayerControlled) this.drawPlayerSelection(formation, camera);
+      for (const soldier of formation.soldiers) {
+        if (!soldier.dead) this.drawSoldier(soldier.position, soldier.direction, soldier.team, soldier.hitFlashTimer, soldier.meleeStabTimer, camera);
+      }
+      this.drawFormationLabel(formation, camera);
+    }
+  }
+
+  private drawSoldier(
+    position: Vec2,
+    direction: number,
+    team: 'blue' | 'red',
+    hitFlashTimer: number,
+    stabTimer: number,
+    camera: Camera,
+  ): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.translate(position.x, position.y);
+    ctx.rotate(direction);
+
+    const body = hitFlashTimer > 0
+      ? '#fff1c6'
+      : team === 'blue' ? '#315f99' : '#a43d3d';
+    ctx.fillStyle = body;
+    ctx.fillRect(
+      -GAME_CONFIG.soldier.bodyLength / 2,
+      -GAME_CONFIG.soldier.bodyWidth / 2,
+      GAME_CONFIG.soldier.bodyLength,
+      GAME_CONFIG.soldier.bodyWidth,
+    );
+
+    ctx.fillStyle = '#e4d2aa';
+    ctx.beginPath();
+    ctx.arc(3, 0, 3.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    const stabExtension = stabTimer > 0 ? 8 : 0;
+    ctx.strokeStyle = '#342c21';
+    ctx.lineWidth = 2 / Math.max(0.72, camera.zoom);
+    ctx.beginPath();
+    ctx.moveTo(0, -2);
+    ctx.lineTo(17 + stabExtension, -2);
+    ctx.stroke();
+    ctx.strokeStyle = '#d8d7ca';
+    ctx.lineWidth = 1.2 / Math.max(0.72, camera.zoom);
+    ctx.beginPath();
+    ctx.moveTo(17 + stabExtension, -2);
+    ctx.lineTo(24 + stabExtension, -2);
+    ctx.stroke();
     ctx.restore();
   }
 
-  private drawProjectiles(projectiles: Projectile[]): void {
+  private drawPlayerSelection(formation: Formation, camera: Camera): void {
     const { ctx } = this;
-    ctx.lineCap = 'round';
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 220, 108, 0.92)';
+    ctx.lineWidth = 3 / camera.zoom;
+    ctx.setLineDash([12 / camera.zoom, 8 / camera.zoom]);
+    ctx.beginPath();
+    ctx.arc(formation.center.x, formation.center.y, 205, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawFormationLabel(formation: Formation, camera: Camera): void {
+    const { ctx } = this;
+    const size = Math.max(11, 14 / camera.zoom);
+    ctx.textAlign = 'center';
+    ctx.font = `bold ${size}px ui-monospace, monospace`;
+    ctx.fillStyle = formation.isPlayerControlled
+      ? '#ffe18a'
+      : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
+    const suffix = formation.isPlayerControlled ? ' · YOU' : '';
+    ctx.fillText(`${formation.id}${suffix}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 48);
+  }
+
+  private drawProjectiles(projectiles: Projectile[], camera: Camera): void {
+    const { ctx } = this;
+    ctx.lineWidth = 1.6 / camera.zoom;
     for (const projectile of projectiles) {
-      if (projectile.life <= 0) continue;
-      const speed = Math.hypot(projectile.velocity.x, projectile.velocity.y) || 1;
-      const nx = projectile.velocity.x / speed;
-      const ny = projectile.velocity.y / speed;
-      ctx.strokeStyle = 'rgba(255, 237, 174, 0.95)';
-      ctx.lineWidth = 2;
+      if (!this.pointVisible(projectile.position, camera, 80)) continue;
+      ctx.strokeStyle = projectile.team === 'blue' ? '#e8f2ff' : '#ffe9dc';
       ctx.beginPath();
-      ctx.moveTo(projectile.position.x - nx * 11, projectile.position.y - ny * 11);
-      ctx.lineTo(projectile.position.x + nx * 2, projectile.position.y + ny * 2);
+      const tail = projectile.trail[projectile.trail.length - 1] ?? projectile.position;
+      ctx.moveTo(tail.x, tail.y);
+      ctx.lineTo(projectile.position.x, projectile.position.y);
       ctx.stroke();
     }
   }
 
-  private drawMeleeStrikes(strikes: MeleeStrike[]): void {
-    const { ctx } = this;
-    ctx.lineCap = 'round';
-    for (const strike of strikes) {
-      const alpha = Math.max(0, strike.life / GAME_CONFIG.effects.meleeStrikeLifetime);
-      ctx.strokeStyle = strike.team === 'player'
-        ? `rgba(190, 220, 255, ${alpha * 0.85})`
-        : `rgba(255, 205, 180, ${alpha * 0.85})`;
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(strike.start.x, strike.start.y);
-      ctx.lineTo(strike.end.x, strike.end.y);
-      ctx.stroke();
-    }
-  }
-
-  private drawMuzzleFlashes(flashes: MuzzleFlash[]): void {
+  private drawMuzzleFlashes(flashes: MuzzleFlash[], camera: Camera): void {
     const { ctx } = this;
     for (const flash of flashes) {
+      if (!this.pointVisible(flash.position, camera, 60)) continue;
       const ratio = flash.life / GAME_CONFIG.effects.flashLifetime;
       ctx.save();
       ctx.translate(flash.position.x, flash.position.y);
@@ -235,90 +193,201 @@ export class Renderer {
       ctx.fillStyle = '#ffd35a';
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.lineTo(20, -6);
-      ctx.lineTo(13, 0);
-      ctx.lineTo(20, 6);
+      ctx.lineTo(18, -5);
+      ctx.lineTo(12, 0);
+      ctx.lineTo(18, 5);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
     }
   }
 
-  private drawSmoke(smoke: SmokeParticle[]): void {
+  private drawSmoke(smoke: SmokeParticle[], camera: Camera): void {
     const { ctx } = this;
     for (const particle of smoke) {
+      if (!this.pointVisible(particle.position, camera, 80)) continue;
       const t = Math.min(1, particle.age / particle.lifetime);
-      const radius = particle.size * (0.65 + t * 1.7);
-      ctx.fillStyle = `rgba(224, 224, 213, ${0.28 * (1 - t)})`;
+      const radius = particle.size * (0.65 + t * 1.55);
+      ctx.fillStyle = `rgba(224, 224, 213, ${0.24 * (1 - t)})`;
       ctx.beginPath();
       ctx.arc(particle.position.x, particle.position.y, radius, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  private drawCorpses(corpses: CorpseParticle[]): void {
+  private drawCorpses(corpses: CorpseParticle[], camera: Camera): void {
     const { ctx } = this;
     for (const corpse of corpses) {
-      const alpha = Math.min(1, corpse.life / 0.55, corpse.life / corpse.maxLife + 0.25);
+      if (!this.pointVisible(corpse.position, camera, 60)) continue;
+      const alpha = Math.min(1, corpse.life / 0.5, corpse.life / corpse.maxLife + 0.2);
       ctx.save();
       ctx.translate(corpse.position.x, corpse.position.y);
       ctx.rotate(corpse.angle);
       ctx.globalAlpha = Math.max(0, alpha);
-      ctx.fillStyle = corpse.team === 'player' ? '#233e68' : '#742226';
-      ctx.fillRect(-10, -5, 20, 10);
+      ctx.fillStyle = corpse.team === 'blue' ? '#233e68' : '#742226';
+      ctx.fillRect(-9, -4.5, 18, 9);
       ctx.restore();
     }
   }
 
-  private drawRangeHint(player: Formation, enemy: Formation, snapshot: GameSnapshot): void {
+  private drawMeleeStrikes(strikes: MeleeStrike[], camera: Camera): void {
     const { ctx } = this;
-    ctx.fillStyle = 'rgba(245, 237, 211, 0.78)';
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'center';
-    const distance = Math.hypot(enemy.center.x - player.center.x, enemy.center.y - player.center.y);
-    const playerLabel = this.modeLabel(snapshot.playerMode);
-    const enemyLabel = this.modeLabel(snapshot.enemyMode);
-    ctx.fillText(`LINE DISTANCE ${distance.toFixed(0)}px   BLUE ${playerLabel}   RED ${enemyLabel}`, GAME_CONFIG.width / 2, 23);
+    for (const strike of strikes) {
+      if (!this.pointVisible(strike.start, camera, 60)) continue;
+      const alpha = Math.max(0, strike.life / GAME_CONFIG.effects.meleeStrikeLifetime);
+      ctx.strokeStyle = strike.team === 'blue'
+        ? `rgba(208, 231, 255, ${alpha})`
+        : `rgba(255, 218, 205, ${alpha})`;
+      ctx.lineWidth = 2.4 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(strike.start.x, strike.start.y);
+      ctx.lineTo(strike.end.x, strike.end.y);
+      ctx.stroke();
+    }
   }
 
-  private drawModeBanner(snapshot: GameSnapshot): void {
-    if (snapshot.winner || snapshot.chargeAiming) return;
+  private drawChargeArrow(start: Vec2, end: Vec2): void {
+    const { ctx } = this;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const nx = dx / distance;
+    const ny = dy / distance;
+    const px = -ny;
+    const py = nx;
+    const head = 30;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 220, 98, 0.95)';
+    ctx.fillStyle = 'rgba(255, 220, 98, 0.95)';
+    ctx.lineWidth = 6;
+    ctx.setLineDash([18, 12]);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x - nx * head, end.y - ny * head);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(end.x - nx * head + px * 16, end.y - ny * head + py * 16);
+    ctx.lineTo(end.x - nx * head - px * 16, end.y - ny * head - py * 16);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private drawAiDebug(formations: Formation[], camera: Camera): void {
+    const { ctx } = this;
+    const byId = new Map(formations.map((formation) => [formation.id, formation]));
+    for (const formation of formations) {
+      if (formation.aliveCount() === 0 || formation.isPlayerControlled || !this.pointVisible(formation.center, camera, 300)) continue;
+      const target = formation.debugTargetId ? byId.get(formation.debugTargetId) : undefined;
+      if (target) {
+        ctx.strokeStyle = formation.team === 'blue'
+          ? 'rgba(123, 182, 255, 0.24)'
+          : 'rgba(255, 125, 125, 0.24)';
+        ctx.lineWidth = 2 / camera.zoom;
+        ctx.beginPath();
+        ctx.moveTo(formation.center.x, formation.center.y);
+        ctx.lineTo(target.center.x, target.center.y);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(20, 18, 14, 0.78)';
+      const width = 145 / camera.zoom;
+      const height = 34 / camera.zoom;
+      ctx.fillRect(formation.center.x - width / 2, formation.center.y + 52, width, height);
+      ctx.fillStyle = '#f1e6c9';
+      ctx.font = `${11 / camera.zoom}px ui-monospace, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(
+        `${formation.debugIntent} → ${formation.debugTargetId ?? '-'}`,
+        formation.center.x,
+        formation.center.y + 73 / camera.zoom,
+      );
+    }
+  }
+
+  private drawMinimap(formations: Formation[], camera: Camera): void {
+    const { ctx } = this;
+    const width = 214;
+    const height = 138;
+    const x = GAME_CONFIG.viewport.width - width - 18;
+    const y = GAME_CONFIG.viewport.height - height - 18;
+    const sx = width / GAME_CONFIG.world.width;
+    const sy = height / GAME_CONFIG.world.height;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(19, 20, 15, 0.78)';
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeStyle = 'rgba(224, 211, 170, 0.65)';
+    ctx.strokeRect(x, y, width, height);
+
+    for (const formation of formations) {
+      if (formation.aliveCount() === 0) continue;
+      ctx.fillStyle = formation.isPlayerControlled
+        ? '#ffe073'
+        : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
+      const px = x + formation.center.x * sx;
+      const py = y + formation.center.y * sy;
+      const size = formation.isPlayerControlled ? 5 : 3;
+      ctx.fillRect(px - size / 2, py - size / 2, size, size);
+    }
+
+    const bounds = camera.visibleBounds();
+    ctx.strokeStyle = '#f4e9c9';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(
+      x + bounds.left * sx,
+      y + bounds.top * sy,
+      (bounds.right - bounds.left) * sx,
+      (bounds.bottom - bounds.top) * sy,
+    );
+    ctx.fillStyle = 'rgba(244, 233, 201, 0.9)';
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('TACTICAL MAP', x + 7, y + 12);
+    ctx.restore();
+  }
+
+  private drawPlayerMode(snapshot: GameSnapshot): void {
     let text = '';
-    if (snapshot.playerMode === 'charging') text = 'FORWARD — CHARGE!';
-    else if (snapshot.playerMode === 'melee') text = 'BAYONETS — CLOSE COMBAT!';
-    else if (snapshot.playerMode === 'reforming') text = 'RALLY — REFORM THE LINE!';
+    if (snapshot.chargeAiming) text = 'CHARGE VECTOR — RELEASE TO COMMIT';
+    else if (snapshot.playerMode === 'charging') text = 'PLAYER SQUAD — CHARGING';
+    else if (snapshot.playerMode === 'melee') text = 'PLAYER SQUAD — BAYONET MELEE';
+    else if (snapshot.playerMode === 'reforming') text = 'PLAYER SQUAD — REFORMING';
     if (!text) return;
 
     const { ctx } = this;
-    const pulse = 0.52 + Math.sin(snapshot.time * 8) * 0.08;
-    ctx.fillStyle = `rgba(28, 18, 12, ${pulse})`;
-    ctx.fillRect(GAME_CONFIG.width / 2 - 150, 42, 300, 36);
-    ctx.strokeStyle = 'rgba(232, 210, 160, 0.75)';
-    ctx.strokeRect(GAME_CONFIG.width / 2 - 150, 42, 300, 36);
+    ctx.fillStyle = 'rgba(25, 20, 14, 0.72)';
+    ctx.fillRect(GAME_CONFIG.viewport.width / 2 - 190, 16, 380, 34);
+    ctx.strokeStyle = 'rgba(232, 210, 160, 0.72)';
+    ctx.strokeRect(GAME_CONFIG.viewport.width / 2 - 190, 16, 380, 34);
     ctx.fillStyle = '#f4ddb0';
+    ctx.font = 'bold 15px Georgia, serif';
     ctx.textAlign = 'center';
-    ctx.font = 'bold 17px Georgia, serif';
-    ctx.fillText(text, GAME_CONFIG.width / 2, 66);
+    ctx.fillText(text, GAME_CONFIG.viewport.width / 2, 38);
   }
 
   private drawResult(snapshot: GameSnapshot): void {
     if (!snapshot.winner) return;
     const { ctx } = this;
-    ctx.fillStyle = 'rgba(18, 14, 10, 0.58)';
-    ctx.fillRect(0, 0, GAME_CONFIG.width, GAME_CONFIG.height);
+    ctx.fillStyle = 'rgba(18, 14, 10, 0.64)';
+    ctx.fillRect(0, 0, GAME_CONFIG.viewport.width, GAME_CONFIG.viewport.height);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#f5ead0';
-    ctx.font = 'bold 36px Georgia, serif';
-    ctx.fillText(snapshot.winner === 'player' ? 'THE BLUE LINE HOLDS' : 'THE RED LINE PREVAILS', GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 - 10);
-    ctx.font = '14px monospace';
+    ctx.font = 'bold 38px Georgia, serif';
+    ctx.fillText(
+      snapshot.winner === 'blue' ? 'BLUE ARMY VICTORIOUS' : 'RED ARMY VICTORIOUS',
+      GAME_CONFIG.viewport.width / 2,
+      GAME_CONFIG.viewport.height / 2 - 12,
+    );
+    ctx.font = '14px ui-monospace, monospace';
     ctx.fillStyle = '#d6c8aa';
-    ctx.fillText('R で再戦', GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 + 26);
+    ctx.fillText('R で戦場を再生成', GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 + 26);
   }
 
-  private modeLabel(mode: GameSnapshot['playerMode']): string {
-    if (mode === 'charging') return 'CHARGE';
-    if (mode === 'melee') return 'MELEE';
-    if (mode === 'reforming') return 'REFORM';
-    return 'LINE';
+  private pointVisible(point: Vec2, camera: Camera, margin: number): boolean {
+    const bounds = camera.visibleBounds(margin);
+    return point.x >= bounds.left && point.x <= bounds.right && point.y >= bounds.top && point.y <= bounds.bottom;
   }
 }

@@ -8,14 +8,19 @@ export class InputManager {
   private rightMouseDown = false;
   private rightMousePressed = false;
   private rightMouseReleased = false;
+  private middleMouseDown = false;
   private pointer: Vec2 = { x: 640, y: 360 };
+  private panDelta: Vec2 = { x: 0, y: 0 };
+  private wheelDelta = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (event) => {
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'escape', ' '].includes(key)) event.preventDefault();
+      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3'].includes(key)) {
+        event.preventDefault();
+      }
     });
 
     window.addEventListener('keyup', (event) => {
@@ -24,14 +29,24 @@ export class InputManager {
       this.released.add(key);
     });
 
-    canvas.addEventListener('mousemove', (event) => this.updatePointer(event));
+    canvas.addEventListener('mousemove', (event) => {
+      const before = this.pointer;
+      this.updatePointer(event);
+      if (this.middleMouseDown) {
+        this.panDelta.x += this.pointer.x - before.x;
+        this.panDelta.y += this.pointer.y - before.y;
+      }
+    });
+
     canvas.addEventListener('mousedown', (event) => {
       this.updatePointer(event);
       if (event.button === 0) {
         this.attackPressed = true;
         event.preventDefault();
-      }
-      if (event.button === 2) {
+      } else if (event.button === 1) {
+        this.middleMouseDown = true;
+        event.preventDefault();
+      } else if (event.button === 2) {
         this.rightMouseDown = true;
         this.rightMousePressed = true;
         event.preventDefault();
@@ -39,11 +54,17 @@ export class InputManager {
     });
 
     window.addEventListener('mouseup', (event) => {
+      if (event.button === 1) this.middleMouseDown = false;
       if (event.button === 2) {
         this.rightMouseDown = false;
         this.rightMouseReleased = true;
       }
     });
+
+    canvas.addEventListener('wheel', (event) => {
+      this.wheelDelta += event.deltaY;
+      event.preventDefault();
+    }, { passive: false });
 
     canvas.addEventListener('contextmenu', (event) => event.preventDefault());
   }
@@ -69,6 +90,21 @@ export class InputManager {
 
   consumeReform(): boolean {
     return this.consumePressed('f');
+  }
+
+  consumeCenterCamera(): boolean {
+    return this.consumePressed('c');
+  }
+
+  consumeDebugToggle(): boolean {
+    return this.consumePressed('f3');
+  }
+
+  consumeTimeScale(): number | null {
+    if (this.consumePressed('1')) return 0.5;
+    if (this.consumePressed('2')) return 1;
+    if (this.consumePressed('3')) return 2;
+    return null;
   }
 
   consumeAttack(): boolean {
@@ -110,6 +146,23 @@ export class InputManager {
     return { ...this.pointer };
   }
 
+  consumePanDelta(): Vec2 {
+    const delta = { ...this.panDelta };
+    this.panDelta = { x: 0, y: 0 };
+    return delta;
+  }
+
+  consumeWheelDelta(): number {
+    const delta = this.wheelDelta;
+    this.wheelDelta = 0;
+    return delta;
+  }
+
+  endFrame(): void {
+    this.pressed.clear();
+    this.released.clear();
+  }
+
   private updatePointer(event: MouseEvent): void {
     const rect = this.canvas.getBoundingClientRect();
     const scaleX = this.canvas.width / rect.width;
@@ -118,10 +171,5 @@ export class InputManager {
       x: (event.clientX - rect.left) * scaleX,
       y: (event.clientY - rect.top) * scaleY,
     };
-  }
-
-  endFrame(): void {
-    this.pressed.clear();
-    this.released.clear();
   }
 }

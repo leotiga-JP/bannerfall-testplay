@@ -1,30 +1,35 @@
-import { Unit } from './unit';
 import { GAME_CONFIG } from '../game/config';
 import type { Team, Vec2 } from '../game/types';
+import { Unit } from './unit';
 
 export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming';
 
 export class Formation {
+  readonly id: string;
   readonly team: Team;
   readonly soldiers: Unit[];
+  readonly isPlayerControlled: boolean;
   center: Vec2;
   direction: number;
   reloadTimer = 0;
   volleysFired = 0;
   mode: FormationMode = 'line';
   chargeTarget: Vec2 | null = null;
+  debugIntent = 'HOLD';
+  debugTargetId: string | null = null;
 
   private layoutCount: number;
 
-  constructor(team: Team, center: Vec2, direction: number) {
+  constructor(id: string, team: Team, center: Vec2, direction: number, isPlayerControlled = false) {
+    this.id = id;
     this.team = team;
     this.center = { ...center };
     this.direction = direction;
+    this.isPlayerControlled = isPlayerControlled;
     const count = GAME_CONFIG.formation.rows * GAME_CONFIG.formation.columns;
     this.layoutCount = count;
     this.soldiers = Array.from({ length: count }, (_, index) => {
-      const position = this.slotPosition(index, count);
-      const unit = new Unit(`${team}-${index}`, team, index, position);
+      const unit = new Unit(`${id}-${index}`, team, index, this.slotPosition(index, count));
       unit.direction = direction;
       return unit;
     });
@@ -37,6 +42,8 @@ export class Formation {
     this.volleysFired = 0;
     this.mode = 'line';
     this.chargeTarget = null;
+    this.debugIntent = this.isPlayerControlled ? 'PLAYER' : 'HOLD';
+    this.debugTargetId = null;
     this.layoutCount = this.soldiers.length;
     for (const soldier of this.soldiers) {
       soldier.formationSlotIndex = soldier.slotIndex;
@@ -51,7 +58,6 @@ export class Formation {
     const dy = target.y - this.center.y;
     const distance = Math.hypot(dx, dy);
     if (distance < GAME_CONFIG.charge.arrowMinDistance) return false;
-
     this.direction = Math.atan2(dy, dx);
     this.chargeTarget = { ...target };
     this.mode = 'charging';
@@ -67,7 +73,6 @@ export class Formation {
       this.center = { ...this.chargeTarget };
       return true;
     }
-
     const step = Math.min(distance, GAME_CONFIG.charge.moveSpeed * dt);
     this.center.x += (dx / distance) * step;
     this.center.y += (dy / distance) * step;
@@ -81,12 +86,14 @@ export class Formation {
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
   }
 
-  beginReform(direction: number, targetCenter?: Vec2, reloadPenalty: number = GAME_CONFIG.reform.reloadPenalty): boolean {
+  beginReform(
+    direction: number,
+    targetCenter?: Vec2,
+    reloadPenalty: number = GAME_CONFIG.reform.reloadPenalty,
+  ): boolean {
     const alive = this.aliveSoldiers();
     if (alive.length === 0) return false;
-
-    const currentCenter = this.averageAlivePosition();
-    this.center = targetCenter ? { ...targetCenter } : currentCenter;
+    this.center = targetCenter ? { ...targetCenter } : this.averageAlivePosition();
     this.direction = direction;
     this.layoutCount = alive.length;
     this.assignCompactSlots(alive);
@@ -96,52 +103,40 @@ export class Formation {
     return true;
   }
 
-  returnToLine(reloadPenalty = 0): void {
-    this.recalculateCenter();
-    this.mode = 'line';
-    this.chargeTarget = null;
-    this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
-  }
-
   update(dt: number): void {
     this.reloadTimer = Math.max(0, this.reloadTimer - dt);
     for (const soldier of this.soldiers) soldier.update(dt);
 
     if (this.mode === 'melee') {
-      this.recalculateCenter();
+      this.center = this.averageAlivePosition();
       return;
     }
 
-    let allSettled = true;
-    const catchupSpeed = this.mode === 'reforming'
+    let settled = true;
+    const catchup = this.mode === 'reforming'
       ? GAME_CONFIG.reform.soldierCatchupSpeed
       : GAME_CONFIG.formation.soldierCatchupSpeed;
 
     for (const soldier of this.soldiers) {
       if (soldier.dead) continue;
-
       const target = this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
       const dx = target.x - soldier.position.x;
       const dy = target.y - soldier.position.y;
       const distance = Math.hypot(dx, dy);
-      if (distance > GAME_CONFIG.reform.settleDistance) allSettled = false;
-
-      const maxStep = catchupSpeed * dt;
+      if (distance > GAME_CONFIG.reform.settleDistance) settled = false;
       if (distance > 0.01) {
-        const ratio = Math.min(1, maxStep / distance);
+        const ratio = Math.min(1, (catchup * dt) / distance);
         soldier.position.x += dx * ratio;
         soldier.position.y += dy * ratio;
       }
       soldier.direction = this.direction;
     }
 
-    if (this.mode === 'reforming' && allSettled) {
-      this.mode = 'line';
-    }
+    if (this.mode === 'reforming' && settled) this.mode = 'line';
   }
 
   aliveSoldiers(): Unit[] {
-    return this.soldiers.filter((unit) => !unit.dead);
+    return this.soldiers.filter((soldier) => !soldier.dead);
   }
 
   aliveCount(): number {
@@ -157,6 +152,10 @@ export class Formation {
   beginReload(seconds: number): void {
     this.reloadTimer = seconds;
     this.volleysFired += 1;
+  }
+
+  needsReform(): boolean {
+    return this.mode === 'line' && this.aliveCount() > 0 && this.aliveCount() < this.layoutCount;
   }
 
   averageAlivePosition(): Vec2 {
@@ -175,12 +174,10 @@ export class Formation {
     const layout = this.layoutFor(index, count);
     const lateral = (layout.column - (layout.rowCount - 1) / 2) * GAME_CONFIG.formation.lateralSpacing;
     const depth = layout.row * GAME_CONFIG.formation.rankSpacing;
-
     const forwardX = Math.cos(this.direction);
     const forwardY = Math.sin(this.direction);
     const rightX = -forwardY;
     const rightY = forwardX;
-
     return {
       x: this.center.x + rightX * lateral - forwardX * depth,
       y: this.center.y + rightY * lateral - forwardY * depth,
@@ -189,12 +186,9 @@ export class Formation {
 
   private layoutFor(index: number, count: number): { row: number; column: number; rowCount: number } {
     if (count <= 1) return { row: 0, column: 0, rowCount: 1 };
-
     const frontCount = Math.ceil(count / 2);
     const rearCount = Math.floor(count / 2);
-    if (index < frontCount) {
-      return { row: 0, column: index, rowCount: frontCount };
-    }
+    if (index < frontCount) return { row: 0, column: index, rowCount: frontCount };
     return { row: 1, column: index - frontCount, rowCount: Math.max(1, rearCount) };
   }
 
@@ -204,7 +198,6 @@ export class Formation {
       const target = this.slotPosition(slot, alive.length);
       let bestIndex = 0;
       let bestDistanceSq = Number.POSITIVE_INFINITY;
-
       for (let i = 0; i < remaining.length; i += 1) {
         const dx = remaining[i].position.x - target.x;
         const dy = remaining[i].position.y - target.y;
@@ -214,13 +207,8 @@ export class Formation {
           bestIndex = i;
         }
       }
-
       const [chosen] = remaining.splice(bestIndex, 1);
       chosen.formationSlotIndex = slot;
     }
-  }
-
-  private recalculateCenter(): void {
-    this.center = this.averageAlivePosition();
   }
 }

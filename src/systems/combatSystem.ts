@@ -44,12 +44,14 @@ export function fireVolley(formation: Formation): VolleyResult {
 
   for (const soldier of formation.aliveSoldiers()) {
     const angle = formation.direction + randomSpread();
-    const muzzleX = soldier.position.x + Math.cos(formation.direction) * GAME_CONFIG.musket.muzzleOffset;
-    const muzzleY = soldier.position.y + Math.sin(formation.direction) * GAME_CONFIG.musket.muzzleOffset;
+    const muzzle = {
+      x: soldier.position.x + Math.cos(formation.direction) * GAME_CONFIG.musket.muzzleOffset,
+      y: soldier.position.y + Math.sin(formation.direction) * GAME_CONFIG.musket.muzzleOffset,
+    };
 
     projectiles.push(new Projectile(
       formation.team,
-      { x: muzzleX, y: muzzleY },
+      muzzle,
       {
         x: Math.cos(angle) * GAME_CONFIG.musket.projectileSpeed,
         y: Math.sin(angle) * GAME_CONFIG.musket.projectileSpeed,
@@ -59,31 +61,28 @@ export function fireVolley(formation: Formation): VolleyResult {
     ));
 
     flashes.push({
-      position: { x: muzzleX, y: muzzleY },
+      position: { ...muzzle },
       direction: formation.direction,
       life: GAME_CONFIG.effects.flashLifetime,
     });
 
-    for (let i = 0; i < 2; i += 1) {
-      smoke.push({
-        position: {
-          x: muzzleX + (Math.random() - 0.5) * 7,
-          y: muzzleY + (Math.random() - 0.5) * 7,
-        },
-        velocity: {
-          x: Math.cos(formation.direction) * (14 + Math.random() * 18) + (Math.random() - 0.5) * 18,
-          y: Math.sin(formation.direction) * (14 + Math.random() * 18) + (Math.random() - 0.5) * 18,
-        },
-        age: 0,
-        lifetime: GAME_CONFIG.effects.smokeLifetime * (0.75 + Math.random() * 0.5),
-        size: 8 + Math.random() * 8,
-      });
-    }
+    smoke.push({
+      position: {
+        x: muzzle.x + (Math.random() - 0.5) * 6,
+        y: muzzle.y + (Math.random() - 0.5) * 6,
+      },
+      velocity: {
+        x: Math.cos(formation.direction) * (12 + Math.random() * 16) + (Math.random() - 0.5) * 15,
+        y: Math.sin(formation.direction) * (12 + Math.random() * 16) + (Math.random() - 0.5) * 15,
+      },
+      age: 0,
+      lifetime: GAME_CONFIG.effects.smokeLifetime * (0.8 + Math.random() * 0.4),
+      size: 8 + Math.random() * 7,
+    });
   }
 
   return { projectiles, smoke, flashes };
 }
-
 
 function distanceToSegmentSquared(point: Vec2, start: Vec2, end: Vec2): number {
   const vx = end.x - start.x;
@@ -91,9 +90,7 @@ function distanceToSegmentSquared(point: Vec2, start: Vec2, end: Vec2): number {
   const wx = point.x - start.x;
   const wy = point.y - start.y;
   const lengthSquared = vx * vx + vy * vy;
-  if (lengthSquared <= 0.000001) {
-    return wx * wx + wy * wy;
-  }
+  if (lengthSquared <= 0.000001) return wx * wx + wy * wy;
   const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / lengthSquared));
   const closestX = start.x + vx * t;
   const closestY = start.y + vy * t;
@@ -104,40 +101,56 @@ function distanceToSegmentSquared(point: Vec2, start: Vec2, end: Vec2): number {
 
 export function updateProjectiles(
   projectiles: Projectile[],
-  playerFormation: Formation,
-  enemyFormation: Formation,
+  formations: Formation[],
   dt: number,
   onDeath: (position: Vec2, team: Team, impactDirection: Vec2) => void,
 ): void {
   const bulletRadius = GAME_CONFIG.musket.bulletRadius;
+  const coarseRadius = GAME_CONFIG.formation.collisionRadius + 70;
+  const coarseRadiusSq = coarseRadius * coarseRadius;
 
   for (const projectile of projectiles) {
     if (projectile.life <= 0) continue;
     const previous = { ...projectile.position };
     projectile.update(dt);
+    const segmentMid = {
+      x: (previous.x + projectile.position.x) / 2,
+      y: (previous.y + projectile.position.y) / 2,
+    };
 
-    const targets = projectile.team === 'player' ? enemyFormation.soldiers : playerFormation.soldiers;
-    for (const target of targets) {
-      if (target.dead) continue;
-      const hitRadius = GAME_CONFIG.soldier.radius + bulletRadius;
-      if (distanceToSegmentSquared(target.position, previous, projectile.position) > hitRadius * hitRadius) continue;
+    let hit = false;
+    for (const formation of formations) {
+      if (formation.team === projectile.team || formation.aliveCount() === 0) continue;
+      const cdx = formation.center.x - segmentMid.x;
+      const cdy = formation.center.y - segmentMid.y;
+      if (cdx * cdx + cdy * cdy > coarseRadiusSq) continue;
 
-      const killed = target.takeDamage(projectile.damage);
-      projectile.life = 0;
-      if (killed) {
-        const speed = Math.hypot(projectile.velocity.x, projectile.velocity.y) || 1;
-        onDeath(target.position, target.team, {
-          x: projectile.velocity.x / speed,
-          y: projectile.velocity.y / speed,
-        });
+      for (const target of formation.soldiers) {
+        if (target.dead) continue;
+        const hitRadius = GAME_CONFIG.soldier.radius + bulletRadius;
+        if (distanceToSegmentSquared(target.position, previous, projectile.position) > hitRadius * hitRadius) continue;
+        const killed = target.takeDamage(projectile.damage);
+        projectile.life = 0;
+        if (killed) {
+          const speed = Math.hypot(projectile.velocity.x, projectile.velocity.y) || 1;
+          onDeath(target.position, target.team, {
+            x: projectile.velocity.x / speed,
+            y: projectile.velocity.y / speed,
+          });
+        }
+        hit = true;
+        break;
       }
-      break;
+      if (hit) break;
     }
   }
 
   for (let i = projectiles.length - 1; i >= 0; i -= 1) {
     const projectile = projectiles[i];
-    const outside = projectile.position.x < -30 || projectile.position.x > GAME_CONFIG.width + 30 || projectile.position.y < -30 || projectile.position.y > GAME_CONFIG.height + 30;
+    const outside = projectile.position.x < -50
+      || projectile.position.x > GAME_CONFIG.world.width + 50
+      || projectile.position.y < -50
+      || projectile.position.y > GAME_CONFIG.world.height + 50;
     if (projectile.life <= 0 || outside) projectiles.splice(i, 1);
   }
 }

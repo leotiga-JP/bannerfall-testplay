@@ -7,6 +7,7 @@ export class Hud {
     private readonly blueCountElement: HTMLElement,
     private readonly redCountElement: HTMLElement,
     private readonly reloadElement: HTMLElement,
+    private readonly cameraElement: HTMLElement,
   ) {}
 
   update(snapshot: GameSnapshot): void {
@@ -14,38 +15,41 @@ export class Hud {
     this.statusElement.textContent = snapshot.paused
       ? 'PAUSED'
       : snapshot.winner
-        ? snapshot.winner === 'player' ? 'BLUE VICTORY' : 'RED VICTORY'
+        ? snapshot.winner === 'blue' ? 'BLUE VICTORY' : 'RED VICTORY'
         : snapshot.chargeAiming
           ? 'AIM CHARGE'
           : snapshot.playerMode === 'charging'
             ? 'CHARGING'
             : snapshot.playerMode === 'melee'
-              ? 'BAYONET MELEE'
+              ? 'MELEE'
               : snapshot.playerMode === 'reforming'
                 ? 'REFORMING'
                 : ready ? 'VOLLEY READY' : 'RELOADING';
 
     this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
-    this.blueCountElement.textContent = `BLUE ${snapshot.playerAlive}/20`;
-    this.redCountElement.textContent = `RED ${snapshot.enemyAlive}/20`;
+    this.blueCountElement.textContent = `BLUE ${snapshot.blueSquads}/20 · ${snapshot.blueSoldiers} MEN`;
+    this.redCountElement.textContent = `RED ${snapshot.redSquads}/20 · ${snapshot.redSoldiers} MEN`;
 
     if (snapshot.chargeAiming) {
       this.reloadElement.textContent = 'CHARGE VECTOR — RELEASE TO COMMIT';
       this.reloadElement.classList.add('ready');
     } else if (snapshot.playerMode === 'charging') {
-      this.reloadElement.textContent = 'CHARGE — RIGHT CLICK AGAIN TO BREAK OFF';
+      this.reloadElement.textContent = `YOU ${snapshot.playerAlive}/20 · CHARGE · RIGHT CLICK TO BREAK OFF`;
       this.reloadElement.classList.remove('ready');
     } else if (snapshot.playerMode === 'melee') {
-      this.reloadElement.textContent = 'MELEE — RIGHT CLICK: BREAK OFF / F: REFORM HERE';
+      this.reloadElement.textContent = `YOU ${snapshot.playerAlive}/20 · MELEE · RIGHT CLICK TO BREAK OFF`;
       this.reloadElement.classList.remove('ready');
     } else if (snapshot.playerMode === 'reforming') {
-      this.reloadElement.textContent = 'REFORMING — HOLD FIRE UNTIL THE LINE IS SET';
+      this.reloadElement.textContent = `YOU ${snapshot.playerAlive}/20 · REFORMING`;
       this.reloadElement.classList.remove('ready');
     } else {
-      this.reloadElement.textContent = ready ? 'READY — FIRE!   F: CLOSE GAPS' : `RELOAD ${snapshot.playerReload.toFixed(1)}s   F: REFORM`;
+      this.reloadElement.textContent = ready
+        ? `YOU ${snapshot.playerAlive}/20 · READY — FIRE!`
+        : `YOU ${snapshot.playerAlive}/20 · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
       this.reloadElement.classList.toggle('ready', ready);
     }
 
-    document.title = `Bannerfall P1.8 — Blue ${snapshot.playerAlive} | Red ${snapshot.enemyAlive}`;
+    this.cameraElement.textContent = `CAM ${snapshot.cameraFollow ? 'FOLLOW' : 'FREE'} · ${snapshot.cameraZoom.toFixed(2)}x · TIME ${snapshot.timeScale.toFixed(1)}x${snapshot.debugAi ? ' · AI DEBUG' : ''}`;
+    document.title = `Bannerfall P2 — Blue ${snapshot.blueSquads} | Red ${snapshot.redSquads}`;
   }
 }
