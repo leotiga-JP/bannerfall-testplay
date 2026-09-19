@@ -1,0 +1,93 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #e8edf2;
+  background: #11161b;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; min-height: 100%; }
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    radial-gradient(circle at top, #202a31 0%, #11161b 52%, #0b0e11 100%);
+}
+
+#app { width: min(1100px, 100%); }
+
+.game-shell {
+  background: #161d23;
+  border: 1px solid #39444d;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.35);
+}
+
+.topbar, .controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 16px;
+}
+
+.topbar { border-bottom: 1px solid #2d363e; }
+.topbar h1 { margin: 0; font-size: 18px; letter-spacing: 0.08em; }
+.topbar p { margin: 4px 0 0; color: #a7b1b9; font-size: 12px; }
+.status { font-size: 12px; letter-spacing: 0.16em; color: #dce4e9; }
+
+.canvas-wrap {
+  position: relative;
+  width: 100%;
+  background: #0f1713;
+  overflow: hidden;
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(7, 10, 12, 0.58);
+}
+.overlay.hidden { display: none; }
+.overlay-card {
+  min-width: 220px;
+  padding: 24px 28px;
+  text-align: center;
+  border: 1px solid #5b6974;
+  background: rgba(21, 28, 34, 0.94);
+}
+.overlay-card h2 { margin: 0 0 8px; letter-spacing: 0.18em; }
+.overlay-card p { margin: 0; color: #aeb8c0; font-size: 13px; }
+
+.controls {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  border-top: 1px solid #2d363e;
+  color: #aab4bc;
+  font-size: 12px;
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  margin-right: 3px;
+  border: 1px solid #4b5862;
+  border-radius: 4px;
+  background: #212930;
+  color: #e8edf2;
+  font-size: 11px;
+}
