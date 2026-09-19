@@ -3,8 +3,8 @@ import type { Vec2 } from '../game/types';
 export class InputManager {
   private readonly keys = new Set<string>();
   private readonly pressed = new Set<string>();
-  private attacking = false;
-  private pointer: Vec2 = { x: 0, y: 0 };
+  private attackPressed = false;
+  private pointer: Vec2 = { x: 480, y: 270 };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (event) => {
@@ -20,11 +20,12 @@ export class InputManager {
 
     canvas.addEventListener('mousemove', (event) => this.updatePointer(event));
     canvas.addEventListener('mousedown', (event) => {
-      if (event.button === 0) this.attacking = true;
+      if (event.button === 0) {
+        this.attackPressed = true;
+        event.preventDefault();
+      }
     });
-    window.addEventListener('mouseup', (event) => {
-      if (event.button === 0) this.attacking = false;
-    });
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
   }
 
   isDown(key: string): boolean {
@@ -46,8 +47,10 @@ export class InputManager {
     return this.consumePressed('r');
   }
 
-  isAttacking(): boolean {
-    return this.attacking;
+  consumeAttack(): boolean {
+    if (!this.attackPressed) return false;
+    this.attackPressed = false;
+    return true;
   }
 
   getPointer(): Vec2 {

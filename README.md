@@ -1,6 +1,26 @@
-# Bannerfall — Phase 1
+# Bannerfall — Phase 1.5
 
-Player vs AI 1v1 combat prototype.
+20 vs 20 line-infantry volley prototype inspired by early-modern / Napoleonic battlefield imagery.
+
+## What changed from Phase 1
+
+- 20 blue infantry vs 20 red infantry
+- Two-rank line formations with fixed spacing
+- Player controls the entire blue line with WASD
+- Mouse aims / rotates the formation
+- Left click fires a synchronized musket volley
+- Long reload cycle between volleys
+- Enemy line advances to effective range and fires automatic volleys
+- Projectile travel, inaccuracy/spread, smoke, muzzle flash, screen shake, casualties and knockback corpses
+- No regeneration or respawn; eliminate the opposing formation to win
+
+## Controls
+
+- `WASD`: move the blue formation
+- `Mouse`: face / aim the formation
+- `Left Click`: fire volley when ready
+- `Esc` / `P`: pause
+- `R`: restart
 
 ## Local development
 
@@ -18,13 +38,8 @@ npm run preview
 
 ## GitHub Pages
 
-This repository includes `.github/workflows/deploy.yml` for automatic GitHub Pages deployment.
+The existing `.github/workflows/deploy.yml` remains compatible with this phase. The Vite base path is configured for:
 
-1. Push the repository to GitHub.
-2. Open **Settings → Pages**.
-3. Under **Build and deployment → Source**, select **GitHub Actions**.
-4. Push to `main` (or run the workflow manually from the Actions tab).
+`https://leotiga-jp.github.io/bannerfall-testplay/`
 
-The workflow builds the Vite project and publishes the generated `dist` directory.
-
-Do not publish the source `index.html` directly as the Pages site root; Vite must first bundle the TypeScript and CSS into `dist`.
+Push to `main` and GitHub Actions will build `dist` and deploy it to Pages.

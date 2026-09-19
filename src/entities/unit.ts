@@ -1,82 +1,44 @@
-import type { AiState, Team, Vec2 } from '../game/types';
-
-export interface UnitConfig {
-  maxHp: number;
-  moveSpeed: number;
-  radius: number;
-  attackRange: number;
-  attackAngleDeg: number;
-  damage: number;
-  attackCooldown: number;
-  regenPerSecond: number;
-  regenDelay: number;
-  respawnDelay: number;
-}
+import type { Team, Vec2 } from '../game/types';
+import { GAME_CONFIG } from '../game/config';
 
 export class Unit {
   readonly id: string;
   readonly team: Team;
-  readonly spawn: Vec2;
-  readonly config: UnitConfig;
+  readonly slotIndex: number;
 
   position: Vec2;
   direction = 0;
-  hp: number;
-  attackTimer = 0;
-  timeSinceDamage = 999;
+  hp: number = GAME_CONFIG.soldier.maxHp;
   dead = false;
-  respawnTimer = 0;
-  aiState: AiState = 'IDLE';
   hitFlashTimer = 0;
 
-  constructor(id: string, team: Team, spawn: Vec2, config: UnitConfig) {
+  constructor(id: string, team: Team, slotIndex: number, position: Vec2) {
     this.id = id;
     this.team = team;
-    this.spawn = { ...spawn };
-    this.position = { ...spawn };
-    this.config = config;
-    this.hp = config.maxHp;
+    this.slotIndex = slotIndex;
+    this.position = { ...position };
   }
 
-  reset(): void {
-    this.position = { ...this.spawn };
-    this.hp = this.config.maxHp;
-    this.attackTimer = 0;
-    this.timeSinceDamage = 999;
+  reset(position: Vec2): void {
+    this.position = { ...position };
+    this.direction = 0;
+    this.hp = GAME_CONFIG.soldier.maxHp;
     this.dead = false;
-    this.respawnTimer = 0;
-    this.aiState = 'IDLE';
     this.hitFlashTimer = 0;
   }
 
-  updateTimers(dt: number): void {
-    this.attackTimer = Math.max(0, this.attackTimer - dt);
-    this.timeSinceDamage += dt;
+  update(dt: number): void {
     this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
   }
 
-  canAttack(): boolean {
-    return !this.dead && this.attackTimer <= 0;
-  }
-
-  startAttack(): void {
-    this.attackTimer = this.config.attackCooldown;
-  }
-
-  takeDamage(amount: number): void {
-    if (this.dead) return;
+  takeDamage(amount: number): boolean {
+    if (this.dead) return false;
     this.hp = Math.max(0, this.hp - amount);
-    this.timeSinceDamage = 0;
-    this.hitFlashTimer = 0.1;
+    this.hitFlashTimer = 0.12;
     if (this.hp <= 0) {
       this.dead = true;
-      this.aiState = 'DEAD';
-      this.respawnTimer = this.config.respawnDelay;
+      return true;
     }
-  }
-
-  regenerate(dt: number): void {
-    if (this.dead || this.hp >= this.config.maxHp || this.timeSinceDamage < this.config.regenDelay) return;
-    this.hp = Math.min(this.config.maxHp, this.hp + this.config.regenPerSecond * dt);
+    return false;
   }
 }

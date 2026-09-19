@@ -1,16 +1,28 @@
 import type { GameSnapshot } from '../game/game';
-import { Unit } from '../entities/unit';
 
 export class Hud {
   constructor(
     private readonly statusElement: HTMLElement,
     private readonly pauseOverlay: HTMLElement,
+    private readonly blueCountElement: HTMLElement,
+    private readonly redCountElement: HTMLElement,
+    private readonly reloadElement: HTMLElement,
   ) {}
 
-  update(snapshot: GameSnapshot, player: Unit, enemy: Unit): void {
-    this.statusElement.textContent = snapshot.paused ? 'PAUSED' : snapshot.winner ? snapshot.winner === 'player' ? 'PLAYER WINS' : 'AI WINS' : 'BATTLE';
-    this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
+  update(snapshot: GameSnapshot): void {
+    const ready = snapshot.playerReload <= 0;
+    this.statusElement.textContent = snapshot.paused
+      ? 'PAUSED'
+      : snapshot.winner
+        ? snapshot.winner === 'player' ? 'BLUE VICTORY' : 'RED VICTORY'
+        : ready ? 'VOLLEY READY' : 'RELOADING';
 
-    document.title = `Bannerfall — P ${Math.ceil(player.hp)} | AI ${Math.ceil(enemy.hp)}`;
+    this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
+    this.blueCountElement.textContent = `BLUE ${snapshot.playerAlive}/20`;
+    this.redCountElement.textContent = `RED ${snapshot.enemyAlive}/20`;
+    this.reloadElement.textContent = ready ? 'READY — FIRE!' : `RELOAD ${snapshot.playerReload.toFixed(1)}s`;
+    this.reloadElement.classList.toggle('ready', ready);
+
+    document.title = `Bannerfall P1.5 — Blue ${snapshot.playerAlive} | Red ${snapshot.enemyAlive}`;
   }
 }
