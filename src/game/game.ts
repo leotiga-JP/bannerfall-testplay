@@ -11,11 +11,13 @@ import {
   fireVolley,
   updateProjectiles,
 } from '../systems/combatSystem';
+import { MeleeSystem, type MeleeStrike } from '../systems/meleeSystem';
 
 export interface GameSnapshot {
   time: number;
   paused: boolean;
   winner: Team | null;
+  battleMode: 'line' | 'melee';
   playerAlive: number;
   enemyAlive: number;
   playerReload: number;
@@ -32,11 +34,14 @@ export class Game {
   readonly smoke: SmokeParticle[] = [];
   readonly muzzleFlashes: MuzzleFlash[] = [];
   readonly corpses: CorpseParticle[] = [];
+  readonly meleeStrikes: MeleeStrike[] = [];
 
   private readonly aiSystem = new AiSystem();
+  private readonly meleeSystem = new MeleeSystem();
   private time = 0;
   private paused = false;
   private winner: Team | null = null;
+  private battleMode: 'line' | 'melee' = 'line';
   private screenShake = 0;
 
   constructor(private readonly input: InputManager) {}
@@ -48,9 +53,11 @@ export class Game {
     this.smoke.length = 0;
     this.muzzleFlashes.length = 0;
     this.corpses.length = 0;
+    this.meleeStrikes.length = 0;
     this.time = 0;
     this.paused = false;
     this.winner = null;
+    this.battleMode = 'line';
     this.screenShake = 0;
   }
 
@@ -68,19 +75,36 @@ export class Game {
     }
 
     this.time += dt;
-    this.updatePlayerFormation(dt);
 
-    const enemyShouldVolley = this.aiSystem.update(this.enemyFormation, this.playerFormation, dt);
+    if (this.battleMode === 'line') {
+      this.updatePlayerFormation(dt);
+      const enemyShouldVolley = this.aiSystem.update(this.enemyFormation, this.playerFormation, dt);
 
-    this.playerFormation.update(dt);
-    this.enemyFormation.update(dt);
+      this.playerFormation.update(dt);
+      this.enemyFormation.update(dt);
 
-    if (!this.winner && this.input.consumeAttack() && this.playerFormation.canVolley()) {
-      this.performVolley(this.playerFormation, GAME_CONFIG.musket.reloadSeconds);
-    }
+      if (!this.winner && this.input.consumeAttack() && this.playerFormation.canVolley()) {
+        this.performVolley(this.playerFormation, GAME_CONFIG.musket.reloadSeconds);
+      }
 
-    if (!this.winner && enemyShouldVolley) {
-      this.performVolley(this.enemyFormation, GAME_CONFIG.musket.enemyReloadSeconds);
+      if (!this.winner && enemyShouldVolley) {
+        this.performVolley(this.enemyFormation, GAME_CONFIG.musket.enemyReloadSeconds);
+      }
+
+      if (!this.winner && this.meleeSystem.shouldEnterMelee(this.playerFormation, this.enemyFormation)) {
+        this.beginMelee();
+      }
+    } else {
+      this.playerFormation.update(dt);
+      this.enemyFormation.update(dt);
+      const struck = this.meleeSystem.update(
+        this.playerFormation,
+        this.enemyFormation,
+        dt,
+        this.meleeStrikes,
+        (position, team, impactDirection) => this.spawnCorpse(position, team, impactDirection),
+      );
+      if (struck) this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.meleeShake);
     }
 
     updateProjectiles(
@@ -102,6 +126,7 @@ export class Game {
       time: this.time,
       paused: this.paused,
       winner: this.winner,
+      battleMode: this.battleMode,
       playerAlive: this.playerFormation.aliveCount(),
       enemyAlive: this.enemyFormation.aliveCount(),
       playerReload: this.playerFormation.reloadTimer,
@@ -113,7 +138,7 @@ export class Game {
   }
 
   private updatePlayerFormation(dt: number): void {
-    if (this.winner || this.playerFormation.aliveCount() === 0) return;
+    if (this.winner || this.playerFormation.aliveCount() === 0 || this.playerFormation.mode === 'melee') return;
 
     const pointer = this.input.getPointer();
     this.playerFormation.direction = Math.atan2(
@@ -143,6 +168,13 @@ export class Game {
       GAME_CONFIG.formation.arenaMarginY,
       Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, this.playerFormation.center.y),
     );
+  }
+
+  private beginMelee(): void {
+    this.battleMode = 'melee';
+    this.playerFormation.enterMelee();
+    this.enemyFormation.enterMelee();
+    this.screenShake = Math.max(this.screenShake, 4.5);
   }
 
   private performVolley(formation: Formation, reloadSeconds: number): void {
@@ -185,6 +217,11 @@ export class Game {
     for (const flash of this.muzzleFlashes) flash.life -= dt;
     for (let i = this.muzzleFlashes.length - 1; i >= 0; i -= 1) {
       if (this.muzzleFlashes[i].life <= 0) this.muzzleFlashes.splice(i, 1);
+    }
+
+    for (const strike of this.meleeStrikes) strike.life -= dt;
+    for (let i = this.meleeStrikes.length - 1; i >= 0; i -= 1) {
+      if (this.meleeStrikes[i].life <= 0) this.meleeStrikes.splice(i, 1);
     }
 
     for (const corpse of this.corpses) {

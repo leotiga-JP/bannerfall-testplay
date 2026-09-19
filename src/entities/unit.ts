@@ -11,6 +11,9 @@ export class Unit {
   hp: number = GAME_CONFIG.soldier.maxHp;
   dead = false;
   hitFlashTimer = 0;
+  meleeCooldown = 0;
+  meleeStabTimer = 0;
+  knockback: Vec2 = { x: 0, y: 0 };
 
   constructor(id: string, team: Team, slotIndex: number, position: Vec2) {
     this.id = id;
@@ -25,10 +28,15 @@ export class Unit {
     this.hp = GAME_CONFIG.soldier.maxHp;
     this.dead = false;
     this.hitFlashTimer = 0;
+    this.meleeCooldown = 0;
+    this.meleeStabTimer = 0;
+    this.knockback = { x: 0, y: 0 };
   }
 
   update(dt: number): void {
     this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
+    this.meleeCooldown = Math.max(0, this.meleeCooldown - dt);
+    this.meleeStabTimer = Math.max(0, this.meleeStabTimer - dt);
   }
 
   takeDamage(amount: number): boolean {

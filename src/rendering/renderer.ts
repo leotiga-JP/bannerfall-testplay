@@ -4,6 +4,7 @@ import { Unit } from '../entities/unit';
 import { GAME_CONFIG } from '../game/config';
 import type { GameSnapshot } from '../game/game';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
+import type { MeleeStrike } from '../systems/meleeSystem';
 
 export class Renderer {
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
@@ -15,6 +16,7 @@ export class Renderer {
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
     corpses: CorpseParticle[],
+    meleeStrikes: MeleeStrike[],
     snapshot: GameSnapshot,
   ): void {
     const shakeX = snapshot.screenShake > 0 ? (Math.random() - 0.5) * snapshot.screenShake * 2 : 0;
@@ -23,13 +25,15 @@ export class Renderer {
     this.ctx.save();
     this.ctx.translate(shakeX, shakeY);
     this.drawBackground();
-    this.drawRangeHint(player, enemy);
+    this.drawRangeHint(player, enemy, snapshot);
     this.drawCorpses(corpses);
     this.drawFormation(enemy);
     this.drawFormation(player);
     this.drawProjectiles(projectiles);
+    this.drawMeleeStrikes(meleeStrikes);
     this.drawMuzzleFlashes(flashes);
     this.drawSmoke(smoke);
+    this.drawMeleeBanner(snapshot);
     this.drawResult(snapshot);
     this.ctx.restore();
   }
@@ -70,7 +74,7 @@ export class Renderer {
     for (const soldier of formation.soldiers) {
       if (!soldier.dead) this.drawSoldier(soldier);
     }
-    this.drawFormationMarker(formation);
+    if (formation.mode === 'line') this.drawFormationMarker(formation);
   }
 
   private drawSoldier(unit: Unit): void {
@@ -101,10 +105,17 @@ export class Renderer {
     ctx.fillStyle = hat;
     ctx.fillRect(2, -6, 6, 12);
 
+    const stabExtension = unit.meleeStabTimer > 0 ? 9 : 0;
     ctx.fillStyle = '#4c3a25';
-    ctx.fillRect(5, -1, 21, 2);
+    ctx.fillRect(5, -1, 21 + stabExtension, 2);
     ctx.fillStyle = '#c0b7a2';
-    ctx.fillRect(21, -1, 8, 1);
+    ctx.fillRect(21 + stabExtension, -1, 10, 1);
+    ctx.beginPath();
+    ctx.moveTo(31 + stabExtension, -2);
+    ctx.lineTo(38 + stabExtension, 0);
+    ctx.lineTo(31 + stabExtension, 2);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
@@ -137,6 +148,22 @@ export class Renderer {
       ctx.beginPath();
       ctx.moveTo(projectile.position.x - nx * 11, projectile.position.y - ny * 11);
       ctx.lineTo(projectile.position.x + nx * 2, projectile.position.y + ny * 2);
+      ctx.stroke();
+    }
+  }
+
+  private drawMeleeStrikes(strikes: MeleeStrike[]): void {
+    const { ctx } = this;
+    ctx.lineCap = 'round';
+    for (const strike of strikes) {
+      const alpha = Math.max(0, strike.life / GAME_CONFIG.effects.meleeStrikeLifetime);
+      ctx.strokeStyle = strike.team === 'player'
+        ? `rgba(190, 220, 255, ${alpha * 0.85})`
+        : `rgba(255, 205, 180, ${alpha * 0.85})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(strike.start.x, strike.start.y);
+      ctx.lineTo(strike.end.x, strike.end.y);
       ctx.stroke();
     }
   }
@@ -187,13 +214,31 @@ export class Renderer {
     }
   }
 
-  private drawRangeHint(player: Formation, enemy: Formation): void {
+  private drawRangeHint(player: Formation, enemy: Formation, snapshot: GameSnapshot): void {
     const { ctx } = this;
-    const distance = Math.hypot(enemy.center.x - player.center.x, enemy.center.y - player.center.y);
     ctx.fillStyle = 'rgba(245, 237, 211, 0.78)';
     ctx.font = '12px monospace';
     ctx.textAlign = 'center';
+    if (snapshot.battleMode === 'melee') {
+      ctx.fillText('FORMATION BROKEN — BAYONET MELEE', GAME_CONFIG.width / 2, 22);
+      return;
+    }
+    const distance = Math.hypot(enemy.center.x - player.center.x, enemy.center.y - player.center.y);
     ctx.fillText(`LINE DISTANCE ${distance.toFixed(0)}px`, GAME_CONFIG.width / 2, 22);
+  }
+
+  private drawMeleeBanner(snapshot: GameSnapshot): void {
+    if (snapshot.battleMode !== 'melee' || snapshot.winner) return;
+    const { ctx } = this;
+    const pulse = 0.55 + Math.sin(snapshot.time * 8) * 0.08;
+    ctx.fillStyle = `rgba(28, 18, 12, ${pulse})`;
+    ctx.fillRect(GAME_CONFIG.width / 2 - 132, 39, 264, 35);
+    ctx.strokeStyle = 'rgba(232, 210, 160, 0.75)';
+    ctx.strokeRect(GAME_CONFIG.width / 2 - 132, 39, 264, 35);
+    ctx.fillStyle = '#f4ddb0';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 17px Georgia, serif';
+    ctx.fillText('FIX BAYONETS — MELEE!', GAME_CONFIG.width / 2, 63);
   }
 
   private drawResult(snapshot: GameSnapshot): void {

@@ -1,45 +1,25 @@
-# Bannerfall — Phase 1.5
+# Bannerfall Phase 1.6 — Volley & Bayonet
 
-20 vs 20 line-infantry volley prototype inspired by early-modern / Napoleonic battlefield imagery.
+Phase 1.5の戦列歩兵プロトタイプに、接近時の自動白兵戦モードを追加したバージョンです。
 
-## What changed from Phase 1
+## 操作
 
-- 20 blue infantry vs 20 red infantry
-- Two-rank line formations with fixed spacing
-- Player controls the entire blue line with WASD
-- Mouse aims / rotates the formation
-- Left click fires a synchronized musket volley
-- Long reload cycle between volleys
-- Enemy line advances to effective range and fires automatic volleys
-- Projectile travel, inaccuracy/spread, smoke, muzzle flash, screen shake, casualties and knockback corpses
-- No regeneration or respawn; eliminate the opposing formation to win
+- WASD: 戦列移動（戦列戦中）
+- Mouse: 戦列の向き
+- Left Click: 一斉射撃
+- Esc / P: 一時停止
+- R: 再戦
 
-## Controls
+## Phase 1.6の追加要素
 
-- `WASD`: move the blue formation
-- `Mouse`: face / aim the formation
-- `Left Click`: fire volley when ready
-- `Esc` / `P`: pause
-- `R`: restart
-
-## Local development
-
-```bash
-npm install
-npm run dev
-```
-
-## Production build
-
-```bash
-npm run build
-npm run preview
-```
+- 両軍の距離が一定以下になると自動でMELEEへ移行
+- MELEE移行後は戦列を解除し、各兵士が最寄りの敵を個別追跡
+- 銃剣による近接攻撃、攻撃クールダウン、ノックバック
+- 味方同士の簡易分離処理で乱戦を形成
+- 白兵戦中は一斉射撃不可
+- 銃剣突き・白兵戦ヒットの視覚演出
 
 ## GitHub Pages
 
-The existing `.github/workflows/deploy.yml` remains compatible with this phase. The Vite base path is configured for:
-
-`https://leotiga-jp.github.io/bannerfall-testplay/`
-
-Push to `main` and GitHub Actions will build `dist` and deploy it to Pages.
+`vite.config.ts` の `base` は `/bannerfall-testplay/` のままです。
+既存の `.github/workflows/deploy.yml` はPhase 1.6で変更不要です。現在のWorkflowをそのまま使用してください。

@@ -3,7 +3,7 @@ import { GAME_CONFIG } from '../game/config';
 
 export class AiSystem {
   update(enemy: Formation, player: Formation, dt: number): boolean {
-    if (enemy.aliveCount() === 0 || player.aliveCount() === 0) return false;
+    if (enemy.aliveCount() === 0 || player.aliveCount() === 0 || enemy.mode === 'melee') return false;
 
     const dx = player.center.x - enemy.center.x;
     const dy = player.center.y - enemy.center.y;

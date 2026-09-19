@@ -15,14 +15,22 @@ export class Hud {
       ? 'PAUSED'
       : snapshot.winner
         ? snapshot.winner === 'player' ? 'BLUE VICTORY' : 'RED VICTORY'
-        : ready ? 'VOLLEY READY' : 'RELOADING';
+        : snapshot.battleMode === 'melee'
+          ? 'BAYONET MELEE'
+          : ready ? 'VOLLEY READY' : 'RELOADING';
 
     this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
     this.blueCountElement.textContent = `BLUE ${snapshot.playerAlive}/20`;
     this.redCountElement.textContent = `RED ${snapshot.enemyAlive}/20`;
-    this.reloadElement.textContent = ready ? 'READY — FIRE!' : `RELOAD ${snapshot.playerReload.toFixed(1)}s`;
-    this.reloadElement.classList.toggle('ready', ready);
 
-    document.title = `Bannerfall P1.5 — Blue ${snapshot.playerAlive} | Red ${snapshot.enemyAlive}`;
+    if (snapshot.battleMode === 'melee') {
+      this.reloadElement.textContent = 'LINES BROKEN — CLOSE COMBAT';
+      this.reloadElement.classList.remove('ready');
+    } else {
+      this.reloadElement.textContent = ready ? 'READY — FIRE!' : `RELOAD ${snapshot.playerReload.toFixed(1)}s`;
+      this.reloadElement.classList.toggle('ready', ready);
+    }
+
+    document.title = `Bannerfall P1.6 — Blue ${snapshot.playerAlive} | Red ${snapshot.enemyAlive}`;
   }
 }

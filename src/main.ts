@@ -44,6 +44,7 @@ function frame(now: number): void {
     game.smoke,
     game.muzzleFlashes,
     game.corpses,
+    game.meleeStrikes,
     snapshot,
   );
   hud.update(snapshot);
