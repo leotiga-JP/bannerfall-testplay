@@ -17,7 +17,10 @@ export interface GameSnapshot {
   time: number;
   paused: boolean;
   winner: Team | null;
-  battleMode: 'line' | 'melee';
+  playerMode: 'line' | 'charging' | 'melee';
+  enemyMode: 'line' | 'charging' | 'melee';
+  chargeAiming: boolean;
+  chargeAimTarget: Vec2 | null;
   playerAlive: number;
   enemyAlive: number;
   playerReload: number;
@@ -27,9 +30,12 @@ export interface GameSnapshot {
   screenShake: number;
 }
 
+const PLAYER_START: Vec2 = { x: 250, y: GAME_CONFIG.height / 2 };
+const ENEMY_START: Vec2 = { x: GAME_CONFIG.width - 250, y: GAME_CONFIG.height / 2 };
+
 export class Game {
-  readonly playerFormation = new Formation('player', { x: 225, y: GAME_CONFIG.height / 2 }, 0);
-  readonly enemyFormation = new Formation('enemy', { x: 735, y: GAME_CONFIG.height / 2 }, Math.PI);
+  readonly playerFormation = new Formation('player', PLAYER_START, 0);
+  readonly enemyFormation = new Formation('enemy', ENEMY_START, Math.PI);
   readonly projectiles: Projectile[] = [];
   readonly smoke: SmokeParticle[] = [];
   readonly muzzleFlashes: MuzzleFlash[] = [];
@@ -41,14 +47,19 @@ export class Game {
   private time = 0;
   private paused = false;
   private winner: Team | null = null;
-  private battleMode: 'line' | 'melee' = 'line';
   private screenShake = 0;
+  private chargeAiming = false;
+  private chargeAimTarget: Vec2 | null = null;
+  private playerMeleeQuietTimer = 0;
+  private enemyMeleeQuietTimer = 0;
 
-  constructor(private readonly input: InputManager) {}
+  constructor(private readonly input: InputManager) {
+    this.aiSystem.reset();
+  }
 
   reset(): void {
-    this.playerFormation.reset({ x: 225, y: GAME_CONFIG.height / 2 }, 0);
-    this.enemyFormation.reset({ x: 735, y: GAME_CONFIG.height / 2 }, Math.PI);
+    this.playerFormation.reset(PLAYER_START, 0);
+    this.enemyFormation.reset(ENEMY_START, Math.PI);
     this.projectiles.length = 0;
     this.smoke.length = 0;
     this.muzzleFlashes.length = 0;
@@ -57,8 +68,12 @@ export class Game {
     this.time = 0;
     this.paused = false;
     this.winner = null;
-    this.battleMode = 'line';
     this.screenShake = 0;
+    this.chargeAiming = false;
+    this.chargeAimTarget = null;
+    this.playerMeleeQuietTimer = 0;
+    this.enemyMeleeQuietTimer = 0;
+    this.aiSystem.reset();
   }
 
   update(dt: number): void {
@@ -76,36 +91,23 @@ export class Game {
 
     this.time += dt;
 
-    if (this.battleMode === 'line') {
-      this.updatePlayerFormation(dt);
-      const enemyShouldVolley = this.aiSystem.update(this.enemyFormation, this.playerFormation, dt);
+    this.updatePlayerControl(dt);
+    this.updateEnemyAi(dt);
+    this.updateCharges(dt);
 
-      this.playerFormation.update(dt);
-      this.enemyFormation.update(dt);
+    this.playerFormation.update(dt);
+    this.enemyFormation.update(dt);
 
-      if (!this.winner && this.input.consumeAttack() && this.playerFormation.canVolley()) {
-        this.performVolley(this.playerFormation, GAME_CONFIG.musket.reloadSeconds);
-      }
+    const struck = this.meleeSystem.update(
+      this.playerFormation,
+      this.enemyFormation,
+      dt,
+      this.meleeStrikes,
+      (position, team, impactDirection) => this.spawnCorpse(position, team, impactDirection),
+    );
+    if (struck) this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.meleeShake);
 
-      if (!this.winner && enemyShouldVolley) {
-        this.performVolley(this.enemyFormation, GAME_CONFIG.musket.enemyReloadSeconds);
-      }
-
-      if (!this.winner && this.meleeSystem.shouldEnterMelee(this.playerFormation, this.enemyFormation)) {
-        this.beginMelee();
-      }
-    } else {
-      this.playerFormation.update(dt);
-      this.enemyFormation.update(dt);
-      const struck = this.meleeSystem.update(
-        this.playerFormation,
-        this.enemyFormation,
-        dt,
-        this.meleeStrikes,
-        (position, team, impactDirection) => this.spawnCorpse(position, team, impactDirection),
-      );
-      if (struck) this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.meleeShake);
-    }
+    this.updateMeleeDisengagement(dt);
 
     updateProjectiles(
       this.projectiles,
@@ -126,7 +128,10 @@ export class Game {
       time: this.time,
       paused: this.paused,
       winner: this.winner,
-      battleMode: this.battleMode,
+      playerMode: this.playerFormation.mode,
+      enemyMode: this.enemyFormation.mode,
+      chargeAiming: this.chargeAiming,
+      chargeAimTarget: this.chargeAimTarget ? { ...this.chargeAimTarget } : null,
       playerAlive: this.playerFormation.aliveCount(),
       enemyAlive: this.enemyFormation.aliveCount(),
       playerReload: this.playerFormation.reloadTimer,
@@ -137,15 +142,51 @@ export class Game {
     };
   }
 
-  private updatePlayerFormation(dt: number): void {
-    if (this.winner || this.playerFormation.aliveCount() === 0 || this.playerFormation.mode === 'melee') return;
+  private updatePlayerControl(dt: number): void {
+    if (this.winner || this.playerFormation.aliveCount() === 0) return;
 
-    const pointer = this.input.getPointer();
-    this.playerFormation.direction = Math.atan2(
-      pointer.y - this.playerFormation.center.y,
-      pointer.x - this.playerFormation.center.x,
-    );
+    if (this.playerFormation.mode === 'line') {
+      const pointer = this.input.getPointer();
+      this.playerFormation.direction = Math.atan2(
+        pointer.y - this.playerFormation.center.y,
+        pointer.x - this.playerFormation.center.x,
+      );
 
+      if (this.input.consumeChargeStart()) {
+        this.chargeAiming = true;
+        this.chargeAimTarget = this.computeChargeTarget(pointer);
+      }
+
+      if (this.chargeAiming) {
+        this.chargeAimTarget = this.computeChargeTarget(pointer);
+        if (!this.input.isChargeHeld() && this.input.consumeChargeRelease()) {
+          const target = this.chargeAimTarget;
+          this.chargeAiming = false;
+          this.chargeAimTarget = null;
+          if (target && this.playerFormation.beginCharge(target)) {
+            this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.chargeShake);
+            return;
+          }
+        }
+      }
+
+      if (!this.chargeAiming) {
+        this.movePlayerFormation(dt);
+        if (this.input.consumeAttack() && this.playerFormation.canVolley()) {
+          this.performVolley(this.playerFormation, GAME_CONFIG.musket.reloadSeconds);
+        }
+      }
+    } else {
+      this.chargeAiming = false;
+      this.chargeAimTarget = null;
+      // Consume stray inputs so a held click does not fire immediately after reforming.
+      this.input.consumeAttack();
+      this.input.consumeChargeStart();
+      this.input.consumeChargeRelease();
+    }
+  }
+
+  private movePlayerFormation(dt: number): void {
     let x = 0;
     let y = 0;
     if (this.input.isDown('a')) x -= 1;
@@ -160,21 +201,115 @@ export class Game {
       this.playerFormation.center.y += (y / length) * speed;
     }
 
-    this.playerFormation.center.x = Math.max(
-      GAME_CONFIG.formation.arenaMarginX,
-      Math.min(GAME_CONFIG.width - GAME_CONFIG.formation.arenaMarginX, this.playerFormation.center.x),
+    this.clampFormationCenter(this.playerFormation);
+  }
+
+  private updateEnemyAi(dt: number): void {
+    if (this.winner) return;
+    const decision = this.aiSystem.update(this.enemyFormation, this.playerFormation, dt);
+
+    if (decision.volley && this.enemyFormation.canVolley()) {
+      this.performVolley(this.enemyFormation, GAME_CONFIG.musket.enemyReloadSeconds);
+    }
+
+    if (decision.chargeTarget && this.enemyFormation.mode === 'line') {
+      const target = this.clampChargeTarget(this.enemyFormation.center, decision.chargeTarget);
+      if (this.enemyFormation.beginCharge(target)) {
+        this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.chargeShake * 0.75);
+      }
+    }
+  }
+
+  private updateCharges(dt: number): void {
+    this.updateFormationCharge(this.playerFormation, this.enemyFormation, dt);
+    this.updateFormationCharge(this.enemyFormation, this.playerFormation, dt);
+  }
+
+  private updateFormationCharge(charger: Formation, opponent: Formation, dt: number): void {
+    if (charger.mode !== 'charging') return;
+
+    const reached = charger.advanceCharge(dt);
+    this.clampFormationCenter(charger);
+
+    const contact = this.meleeSystem.formationsInContact(charger, opponent);
+    if (contact) {
+      charger.enterMelee();
+      this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.chargeShake + 1.8);
+      return;
+    }
+
+    if (reached) {
+      const nearby = this.meleeSystem.hasNearbyEnemy(charger, opponent, GAME_CONFIG.melee.acquireRange);
+      if (nearby) {
+        charger.enterMelee();
+      } else {
+        charger.returnToLine(GAME_CONFIG.charge.postChargeReloadPenalty);
+      }
+    }
+  }
+
+  private updateMeleeDisengagement(dt: number): void {
+    this.playerMeleeQuietTimer = this.updateOneDisengagement(
+      this.playerFormation,
+      this.enemyFormation,
+      this.playerMeleeQuietTimer,
+      dt,
     );
-    this.playerFormation.center.y = Math.max(
-      GAME_CONFIG.formation.arenaMarginY,
-      Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, this.playerFormation.center.y),
+    this.enemyMeleeQuietTimer = this.updateOneDisengagement(
+      this.enemyFormation,
+      this.playerFormation,
+      this.enemyMeleeQuietTimer,
+      dt,
     );
   }
 
-  private beginMelee(): void {
-    this.battleMode = 'melee';
-    this.playerFormation.enterMelee();
-    this.enemyFormation.enterMelee();
-    this.screenShake = Math.max(this.screenShake, 4.5);
+  private updateOneDisengagement(
+    formation: Formation,
+    opponent: Formation,
+    timer: number,
+    dt: number,
+  ): number {
+    if (formation.mode !== 'melee') return 0;
+    if (this.meleeSystem.hasNearbyEnemy(formation, opponent)) return 0;
+
+    const next = timer + dt;
+    if (next >= GAME_CONFIG.melee.disengageDelay) {
+      formation.returnToLine(GAME_CONFIG.charge.postChargeReloadPenalty);
+      return 0;
+    }
+    return next;
+  }
+
+  private computeChargeTarget(pointer: Vec2): Vec2 {
+    return this.clampChargeTarget(this.playerFormation.center, pointer);
+  }
+
+  private clampChargeTarget(origin: Vec2, desired: Vec2): Vec2 {
+    const dx = desired.x - origin.x;
+    const dy = desired.y - origin.y;
+    const distance = Math.hypot(dx, dy);
+    const maxDistance = GAME_CONFIG.charge.maxDistance;
+    const scale = distance > maxDistance ? maxDistance / distance : 1;
+    const target = {
+      x: origin.x + dx * scale,
+      y: origin.y + dy * scale,
+    };
+
+    return {
+      x: Math.max(GAME_CONFIG.formation.arenaMarginX, Math.min(GAME_CONFIG.width - GAME_CONFIG.formation.arenaMarginX, target.x)),
+      y: Math.max(GAME_CONFIG.formation.arenaMarginY, Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, target.y)),
+    };
+  }
+
+  private clampFormationCenter(formation: Formation): void {
+    formation.center.x = Math.max(
+      GAME_CONFIG.formation.arenaMarginX,
+      Math.min(GAME_CONFIG.width - GAME_CONFIG.formation.arenaMarginX, formation.center.x),
+    );
+    formation.center.y = Math.max(
+      GAME_CONFIG.formation.arenaMarginY,
+      Math.min(GAME_CONFIG.height - GAME_CONFIG.formation.arenaMarginY, formation.center.y),
+    );
   }
 
   private performVolley(formation: Formation, reloadSeconds: number): void {

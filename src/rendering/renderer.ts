@@ -26,6 +26,7 @@ export class Renderer {
     this.ctx.translate(shakeX, shakeY);
     this.drawBackground();
     this.drawRangeHint(player, enemy, snapshot);
+    this.drawChargeArrow(player, snapshot);
     this.drawCorpses(corpses);
     this.drawFormation(enemy);
     this.drawFormation(player);
@@ -33,7 +34,7 @@ export class Renderer {
     this.drawMeleeStrikes(meleeStrikes);
     this.drawMuzzleFlashes(flashes);
     this.drawSmoke(smoke);
-    this.drawMeleeBanner(snapshot);
+    this.drawModeBanner(snapshot);
     this.drawResult(snapshot);
     this.ctx.restore();
   }
@@ -59,7 +60,7 @@ export class Renderer {
     }
 
     ctx.fillStyle = 'rgba(242, 225, 178, 0.05)';
-    for (let i = 0; i < 70; i += 1) {
+    for (let i = 0; i < 100; i += 1) {
       const x = (i * 149) % GAME_CONFIG.width;
       const y = (i * 83) % GAME_CONFIG.height;
       ctx.fillRect(x, y, 2, 2);
@@ -74,7 +75,7 @@ export class Renderer {
     for (const soldier of formation.soldiers) {
       if (!soldier.dead) this.drawSoldier(soldier);
     }
-    if (formation.mode === 'line') this.drawFormationMarker(formation);
+    if (formation.mode !== 'melee') this.drawFormationMarker(formation);
   }
 
   private drawSoldier(unit: Unit): void {
@@ -124,14 +125,60 @@ export class Renderer {
     ctx.save();
     ctx.translate(formation.center.x, formation.center.y);
     ctx.rotate(formation.direction);
-    ctx.strokeStyle = formation.team === 'player' ? 'rgba(160,202,255,0.32)' : 'rgba(255,175,175,0.18)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([5, 6]);
+    const charging = formation.mode === 'charging';
+    ctx.strokeStyle = formation.team === 'player'
+      ? charging ? 'rgba(255, 225, 132, 0.72)' : 'rgba(160,202,255,0.32)'
+      : charging ? 'rgba(255, 190, 132, 0.62)' : 'rgba(255,175,175,0.18)';
+    ctx.lineWidth = charging ? 2 : 1;
+    ctx.setLineDash(charging ? [3, 4] : [5, 6]);
     ctx.beginPath();
-    ctx.moveTo(0, -178);
-    ctx.lineTo(0, 178);
+    ctx.moveTo(0, -205);
+    ctx.lineTo(0, 205);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  private drawChargeArrow(player: Formation, snapshot: GameSnapshot): void {
+    if (!snapshot.chargeAiming || !snapshot.chargeAimTarget || player.mode !== 'line') return;
+    const { ctx } = this;
+    const start = player.center;
+    const end = snapshot.chargeAimTarget;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1) return;
+    const nx = dx / distance;
+    const ny = dy / distance;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255, 224, 116, 0.92)';
+    ctx.fillStyle = 'rgba(255, 224, 116, 0.95)';
+    ctx.shadowColor = 'rgba(255, 205, 80, 0.45)';
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = 5;
+    ctx.setLineDash([12, 8]);
+    ctx.beginPath();
+    ctx.moveTo(start.x + nx * 26, start.y + ny * 26);
+    ctx.lineTo(end.x - nx * 17, end.y - ny * 17);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const sideX = -ny;
+    const sideY = nx;
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(end.x - nx * 28 + sideX * 13, end.y - ny * 28 + sideY * 13);
+    ctx.lineTo(end.x - nx * 28 - sideX * 13, end.y - ny * 28 - sideY * 13);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff0b5';
+    ctx.fillText('RELEASE TO CHARGE', (start.x + end.x) / 2, (start.y + end.y) / 2 - 13);
     ctx.restore();
   }
 
@@ -219,26 +266,29 @@ export class Renderer {
     ctx.fillStyle = 'rgba(245, 237, 211, 0.78)';
     ctx.font = '12px monospace';
     ctx.textAlign = 'center';
-    if (snapshot.battleMode === 'melee') {
-      ctx.fillText('FORMATION BROKEN — BAYONET MELEE', GAME_CONFIG.width / 2, 22);
-      return;
-    }
     const distance = Math.hypot(enemy.center.x - player.center.x, enemy.center.y - player.center.y);
-    ctx.fillText(`LINE DISTANCE ${distance.toFixed(0)}px`, GAME_CONFIG.width / 2, 22);
+    const playerLabel = this.modeLabel(snapshot.playerMode);
+    const enemyLabel = this.modeLabel(snapshot.enemyMode);
+    ctx.fillText(`LINE DISTANCE ${distance.toFixed(0)}px   BLUE ${playerLabel}   RED ${enemyLabel}`, GAME_CONFIG.width / 2, 23);
   }
 
-  private drawMeleeBanner(snapshot: GameSnapshot): void {
-    if (snapshot.battleMode !== 'melee' || snapshot.winner) return;
+  private drawModeBanner(snapshot: GameSnapshot): void {
+    if (snapshot.winner || snapshot.chargeAiming) return;
+    let text = '';
+    if (snapshot.playerMode === 'charging') text = 'FORWARD — CHARGE!';
+    else if (snapshot.playerMode === 'melee') text = 'BAYONETS — CLOSE COMBAT!';
+    if (!text) return;
+
     const { ctx } = this;
-    const pulse = 0.55 + Math.sin(snapshot.time * 8) * 0.08;
+    const pulse = 0.52 + Math.sin(snapshot.time * 8) * 0.08;
     ctx.fillStyle = `rgba(28, 18, 12, ${pulse})`;
-    ctx.fillRect(GAME_CONFIG.width / 2 - 132, 39, 264, 35);
+    ctx.fillRect(GAME_CONFIG.width / 2 - 150, 42, 300, 36);
     ctx.strokeStyle = 'rgba(232, 210, 160, 0.75)';
-    ctx.strokeRect(GAME_CONFIG.width / 2 - 132, 39, 264, 35);
+    ctx.strokeRect(GAME_CONFIG.width / 2 - 150, 42, 300, 36);
     ctx.fillStyle = '#f4ddb0';
     ctx.textAlign = 'center';
     ctx.font = 'bold 17px Georgia, serif';
-    ctx.fillText('FIX BAYONETS — MELEE!', GAME_CONFIG.width / 2, 63);
+    ctx.fillText(text, GAME_CONFIG.width / 2, 66);
   }
 
   private drawResult(snapshot: GameSnapshot): void {
@@ -248,10 +298,16 @@ export class Renderer {
     ctx.fillRect(0, 0, GAME_CONFIG.width, GAME_CONFIG.height);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#f5ead0';
-    ctx.font = 'bold 34px Georgia, serif';
+    ctx.font = 'bold 36px Georgia, serif';
     ctx.fillText(snapshot.winner === 'player' ? 'THE BLUE LINE HOLDS' : 'THE RED LINE PREVAILS', GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 - 10);
     ctx.font = '14px monospace';
     ctx.fillStyle = '#d6c8aa';
-    ctx.fillText('R で再戦', GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 + 24);
+    ctx.fillText('R で再戦', GAME_CONFIG.width / 2, GAME_CONFIG.height / 2 + 26);
+  }
+
+  private modeLabel(mode: GameSnapshot['playerMode']): string {
+    if (mode === 'charging') return 'CHARGE';
+    if (mode === 'melee') return 'MELEE';
+    return 'LINE';
   }
 }

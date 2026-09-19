@@ -2,7 +2,7 @@ import { Unit } from './unit';
 import { GAME_CONFIG } from '../game/config';
 import type { Team, Vec2 } from '../game/types';
 
-export type FormationMode = 'line' | 'melee';
+export type FormationMode = 'line' | 'charging' | 'melee';
 
 export class Formation {
   readonly team: Team;
@@ -12,6 +12,7 @@ export class Formation {
   reloadTimer = 0;
   volleysFired = 0;
   mode: FormationMode = 'line';
+  chargeTarget: Vec2 | null = null;
 
   constructor(team: Team, center: Vec2, direction: number) {
     this.team = team;
@@ -32,15 +33,54 @@ export class Formation {
     this.reloadTimer = 0;
     this.volleysFired = 0;
     this.mode = 'line';
+    this.chargeTarget = null;
     for (const soldier of this.soldiers) {
       soldier.reset(this.slotPosition(soldier.slotIndex));
       soldier.direction = direction;
     }
   }
 
+  beginCharge(target: Vec2): boolean {
+    if (this.mode !== 'line' || this.aliveCount() === 0) return false;
+    const dx = target.x - this.center.x;
+    const dy = target.y - this.center.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < GAME_CONFIG.charge.arrowMinDistance) return false;
+
+    this.direction = Math.atan2(dy, dx);
+    this.chargeTarget = { ...target };
+    this.mode = 'charging';
+    return true;
+  }
+
+  advanceCharge(dt: number): boolean {
+    if (this.mode !== 'charging' || !this.chargeTarget) return false;
+    const dx = this.chargeTarget.x - this.center.x;
+    const dy = this.chargeTarget.y - this.center.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= GAME_CONFIG.charge.stopDistance) {
+      this.center = { ...this.chargeTarget };
+      return true;
+    }
+
+    const step = Math.min(distance, GAME_CONFIG.charge.moveSpeed * dt);
+    this.center.x += (dx / distance) * step;
+    this.center.y += (dy / distance) * step;
+    this.direction = Math.atan2(dy, dx);
+    return distance - step <= GAME_CONFIG.charge.stopDistance;
+  }
+
   enterMelee(): void {
     this.mode = 'melee';
+    this.chargeTarget = null;
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
+  }
+
+  returnToLine(reloadPenalty = 0): void {
+    this.recalculateCenter();
+    this.mode = 'line';
+    this.chargeTarget = null;
+    this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
   }
 
   update(dt: number): void {

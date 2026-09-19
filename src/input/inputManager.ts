@@ -3,8 +3,12 @@ import type { Vec2 } from '../game/types';
 export class InputManager {
   private readonly keys = new Set<string>();
   private readonly pressed = new Set<string>();
+  private readonly released = new Set<string>();
   private attackPressed = false;
-  private pointer: Vec2 = { x: 480, y: 270 };
+  private rightMouseDown = false;
+  private rightMousePressed = false;
+  private rightMouseReleased = false;
+  private pointer: Vec2 = { x: 640, y: 360 };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (event) => {
@@ -15,16 +19,32 @@ export class InputManager {
     });
 
     window.addEventListener('keyup', (event) => {
-      this.keys.delete(event.key.toLowerCase());
+      const key = event.key.toLowerCase();
+      this.keys.delete(key);
+      this.released.add(key);
     });
 
     canvas.addEventListener('mousemove', (event) => this.updatePointer(event));
     canvas.addEventListener('mousedown', (event) => {
+      this.updatePointer(event);
       if (event.button === 0) {
         this.attackPressed = true;
         event.preventDefault();
       }
+      if (event.button === 2) {
+        this.rightMouseDown = true;
+        this.rightMousePressed = true;
+        event.preventDefault();
+      }
     });
+
+    window.addEventListener('mouseup', (event) => {
+      if (event.button === 2) {
+        this.rightMouseDown = false;
+        this.rightMouseReleased = true;
+      }
+    });
+
     canvas.addEventListener('contextmenu', (event) => event.preventDefault());
   }
 
@@ -53,6 +73,29 @@ export class InputManager {
     return true;
   }
 
+  consumeChargeStart(): boolean {
+    const keyboard = this.consumePressed(' ');
+    if (this.rightMousePressed) {
+      this.rightMousePressed = false;
+      return true;
+    }
+    return keyboard;
+  }
+
+  consumeChargeRelease(): boolean {
+    const keyboard = this.released.has(' ');
+    if (keyboard) this.released.delete(' ');
+    if (this.rightMouseReleased) {
+      this.rightMouseReleased = false;
+      return true;
+    }
+    return keyboard;
+  }
+
+  isChargeHeld(): boolean {
+    return this.keys.has(' ') || this.rightMouseDown;
+  }
+
   getPointer(): Vec2 {
     return { ...this.pointer };
   }
@@ -69,5 +112,6 @@ export class InputManager {
 
   endFrame(): void {
     this.pressed.clear();
+    this.released.clear();
   }
 }
