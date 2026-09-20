@@ -23,7 +23,7 @@ export class MeleeSystem {
     const contactSq = GAME_CONFIG.charge.contactDistance * GAME_CONFIG.charge.contactDistance;
 
     for (const enemy of enemies) {
-      if (enemy.aliveCount() === 0) continue;
+      if (enemy.aliveCount() === 0 || enemy.spawnProtectionTimer > 0) continue;
       const cdx = enemy.center.x - charger.center.x;
       const cdy = enemy.center.y - charger.center.y;
       if (cdx * cdx + cdy * cdy > centerRangeSq) continue;
@@ -45,7 +45,7 @@ export class MeleeSystem {
     const centerRangeSq = centerRange * centerRange;
     const rangeSq = range * range;
     for (const enemy of enemies) {
-      if (enemy.aliveCount() === 0) continue;
+      if (enemy.aliveCount() === 0 || enemy.spawnProtectionTimer > 0) continue;
       const cdx = enemy.center.x - formation.center.x;
       const cdy = enemy.center.y - formation.center.y;
       if (cdx * cdx + cdy * cdy > centerRangeSq) continue;
@@ -109,7 +109,7 @@ export class MeleeSystem {
     const result: Unit[] = [];
     const maxSq = GAME_CONFIG.melee.formationSearchRange * GAME_CONFIG.melee.formationSearchRange;
     for (const enemy of formations) {
-      if (enemy.team === formation.team || enemy.aliveCount() === 0) continue;
+      if (enemy.team === formation.team || enemy.aliveCount() === 0 || enemy.spawnProtectionTimer > 0) continue;
       const dx = enemy.center.x - formation.center.x;
       const dy = enemy.center.y - formation.center.y;
       if (dx * dx + dy * dy > maxSq) continue;

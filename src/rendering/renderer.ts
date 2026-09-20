@@ -1,9 +1,10 @@
+import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
-import type { GameSnapshot } from '../game/game';
-import type { Vec2 } from '../game/types';
+import type { AxeStrike, GameSnapshot } from '../game/game';
+import type { Vec2, WeaponType } from '../game/types';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
 import type { MeleeStrike } from '../systems/meleeSystem';
 
@@ -12,11 +13,13 @@ export class Renderer {
 
   render(
     formations: Formation[],
+    banners: Banner[],
     projectiles: Projectile[],
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
     corpses: CorpseParticle[],
     strikes: MeleeStrike[],
+    axeStrikes: AxeStrike[],
     snapshot: GameSnapshot,
     camera: Camera,
   ): void {
@@ -26,7 +29,7 @@ export class Renderer {
     ctx.fillStyle = '#192014';
     ctx.fillRect(0, 0, GAME_CONFIG.viewport.width, GAME_CONFIG.viewport.height);
 
-    const shake = snapshot.screenShake;
+    const shake = snapshot.introActive ? 0 : snapshot.screenShake;
     const shakeX = shake > 0 ? (Math.random() - 0.5) * shake * 2 : 0;
     const shakeY = shake > 0 ? (Math.random() - 0.5) * shake * 2 : 0;
 
@@ -34,12 +37,14 @@ export class Renderer {
     ctx.translate(shakeX, shakeY);
     camera.applyTransform(ctx);
     this.drawBattlefield(camera);
+    this.drawBanners(banners, camera, snapshot.selectedWeapon);
     this.drawCorpses(corpses, camera);
     this.drawSmoke(smoke, camera);
     this.drawProjectiles(projectiles, camera);
     this.drawFormations(formations, camera);
     this.drawMuzzleFlashes(flashes, camera);
     this.drawMeleeStrikes(strikes, camera);
+    this.drawAxeStrikes(axeStrikes, camera);
     if (snapshot.chargeAiming && snapshot.chargeAimTarget) {
       const player = formations.find((formation) => formation.isPlayerControlled);
       if (player) this.drawChargeArrow(player.center, snapshot.chargeAimTarget);
@@ -47,8 +52,9 @@ export class Renderer {
     if (snapshot.debugAi) this.drawAiDebug(formations, camera);
     ctx.restore();
 
-    this.drawMinimap(formations, camera);
+    this.drawMinimap(formations, banners, camera, snapshot);
     this.drawPlayerMode(snapshot);
+    if (snapshot.introActive) this.drawIntro(snapshot);
     this.drawResult(snapshot);
   }
 
@@ -81,18 +87,122 @@ export class Renderer {
     ctx.lineWidth = 4 / camera.zoom;
     ctx.strokeRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
 
-    ctx.fillStyle = 'rgba(35, 48, 29, 0.32)';
-    ctx.font = `${34 / camera.zoom}px Georgia, serif`;
+    this.drawHomeGround('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.y }, camera);
+    this.drawHomeGround('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.y }, camera);
+
+    ctx.fillStyle = 'rgba(35, 48, 29, 0.28)';
+    ctx.font = `${32 / camera.zoom}px Georgia, serif`;
     ctx.textAlign = 'center';
     ctx.fillText('THE OPEN FIELD', GAME_CONFIG.world.width / 2, GAME_CONFIG.world.height / 2);
+  }
+
+  private drawHomeGround(team: 'blue' | 'red', point: Vec2, camera: Camera): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = team === 'blue' ? 'rgba(93, 151, 225, 0.16)' : 'rgba(225, 93, 93, 0.16)';
+    ctx.lineWidth = 12 / camera.zoom;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 360, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawBanners(banners: Banner[], camera: Camera, selectedWeapon: WeaponType): void {
+    for (const banner of banners) {
+      if (!this.pointVisible(banner.position, camera, 180)) continue;
+      this.drawBanner(banner, camera, selectedWeapon);
+    }
+  }
+
+  private drawBanner(banner: Banner, camera: Camera, selectedWeapon: WeaponType): void {
+    const { ctx } = this;
+    const pulse = banner.underAttackTimer > 0 ? 1 + Math.sin(performance.now() * 0.018) * 0.12 : 1;
+    ctx.save();
+    ctx.translate(banner.position.x, banner.position.y);
+
+    ctx.fillStyle = banner.team === 'blue' ? 'rgba(69, 125, 205, 0.16)' : 'rgba(196, 69, 69, 0.16)';
+    ctx.beginPath();
+    ctx.arc(0, 0, GAME_CONFIG.banner.visualRadius * 1.65 * pulse, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (selectedWeapon === 'axe' && banner.team === 'red' && !banner.destroyed) {
+      ctx.strokeStyle = 'rgba(255, 215, 92, 0.72)';
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.setLineDash([11 / camera.zoom, 8 / camera.zoom]);
+      ctx.beginPath();
+      ctx.arc(0, 0, GAME_CONFIG.banner.clickRadius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.strokeStyle = '#352b1f';
+    ctx.lineWidth = 8 / camera.zoom;
+    ctx.beginPath();
+    ctx.moveTo(0, 52);
+    ctx.lineTo(0, -70);
+    ctx.stroke();
+
+    if (!banner.destroyed) {
+      ctx.fillStyle = banner.team === 'blue' ? '#376eaf' : '#aa3b3b';
+      ctx.beginPath();
+      ctx.moveTo(4, -67);
+      ctx.lineTo(72, -48);
+      ctx.lineTo(4, -22);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = banner.team === 'blue' ? '#b8d6ff' : '#ffd0c7';
+      ctx.lineWidth = 2 / camera.zoom;
+      ctx.stroke();
+    } else {
+      ctx.rotate(0.74);
+      ctx.strokeStyle = '#352b1f';
+      ctx.lineWidth = 8 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(0, 42);
+      ctx.lineTo(0, -66);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#756349';
+    ctx.beginPath();
+    ctx.arc(0, 54, 24, 0, Math.PI * 2);
+    ctx.fill();
+
+    const barWidth = 120 / camera.zoom;
+    const barHeight = 10 / camera.zoom;
+    ctx.fillStyle = 'rgba(25, 20, 15, 0.82)';
+    ctx.fillRect(-barWidth / 2, -105 / camera.zoom, barWidth, barHeight);
+    ctx.fillStyle = banner.team === 'blue' ? '#6ba3e8' : '#e66d6d';
+    ctx.fillRect(-barWidth / 2, -105 / camera.zoom, barWidth * banner.ratio, barHeight);
+    ctx.strokeStyle = 'rgba(244, 234, 210, 0.75)';
+    ctx.lineWidth = 1 / camera.zoom;
+    ctx.strokeRect(-barWidth / 2, -105 / camera.zoom, barWidth, barHeight);
+
+    ctx.fillStyle = '#f5e8c9';
+    ctx.font = `bold ${14 / camera.zoom}px ui-monospace, monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(`${banner.team.toUpperCase()} BANNER`, 0, -119 / camera.zoom);
+    ctx.restore();
   }
 
   private drawFormations(formations: Formation[], camera: Camera): void {
     for (const formation of formations) {
       if (formation.aliveCount() === 0 || !this.pointVisible(formation.center, camera, 260)) continue;
       if (formation.isPlayerControlled) this.drawPlayerSelection(formation, camera);
+      if (formation.spawnProtectionTimer > 0) this.drawSpawnProtection(formation, camera);
       for (const soldier of formation.soldiers) {
-        if (!soldier.dead) this.drawSoldier(soldier.position, soldier.direction, soldier.team, soldier.hitFlashTimer, soldier.meleeStabTimer, camera);
+        if (!soldier.dead) {
+          this.drawSoldier(
+            soldier.position,
+            soldier.direction,
+            soldier.team,
+            soldier.hitFlashTimer,
+            soldier.meleeStabTimer,
+            formation.weapon,
+            formation.mode === 'bannerAttack',
+            camera,
+          );
+        }
       }
       this.drawFormationLabel(formation, camera);
     }
@@ -104,6 +214,8 @@ export class Renderer {
     team: 'blue' | 'red',
     hitFlashTimer: number,
     stabTimer: number,
+    weapon: WeaponType,
+    objectiveAttack: boolean,
     camera: Camera,
   ): void {
     const { ctx } = this;
@@ -127,19 +239,38 @@ export class Renderer {
     ctx.arc(3, 0, 3.8, 0, Math.PI * 2);
     ctx.fill();
 
-    const stabExtension = stabTimer > 0 ? 8 : 0;
-    ctx.strokeStyle = '#342c21';
-    ctx.lineWidth = 2 / Math.max(0.72, camera.zoom);
-    ctx.beginPath();
-    ctx.moveTo(0, -2);
-    ctx.lineTo(17 + stabExtension, -2);
-    ctx.stroke();
-    ctx.strokeStyle = '#d8d7ca';
-    ctx.lineWidth = 1.2 / Math.max(0.72, camera.zoom);
-    ctx.beginPath();
-    ctx.moveTo(17 + stabExtension, -2);
-    ctx.lineTo(24 + stabExtension, -2);
-    ctx.stroke();
+    if (weapon === 'axe' || objectiveAttack) {
+      const swing = objectiveAttack ? Math.sin(performance.now() * 0.018 + position.x * 0.03) * 0.35 : 0;
+      ctx.rotate(swing);
+      ctx.strokeStyle = '#5b4027';
+      ctx.lineWidth = 2.4 / Math.max(0.72, camera.zoom);
+      ctx.beginPath();
+      ctx.moveTo(3, 0);
+      ctx.lineTo(18, -2);
+      ctx.stroke();
+      ctx.strokeStyle = '#c5c9c6';
+      ctx.lineWidth = 4 / Math.max(0.72, camera.zoom);
+      ctx.beginPath();
+      ctx.moveTo(17, -7);
+      ctx.lineTo(20, 3);
+      ctx.stroke();
+    } else {
+      const stabExtension = weapon === 'bayonet' && stabTimer > 0 ? 8 : 0;
+      ctx.strokeStyle = '#342c21';
+      ctx.lineWidth = 2 / Math.max(0.72, camera.zoom);
+      ctx.beginPath();
+      ctx.moveTo(0, -2);
+      ctx.lineTo(17 + stabExtension, -2);
+      ctx.stroke();
+      if (weapon === 'bayonet' || stabTimer > 0) {
+        ctx.strokeStyle = '#d8d7ca';
+        ctx.lineWidth = 1.2 / Math.max(0.72, camera.zoom);
+        ctx.beginPath();
+        ctx.moveTo(17 + stabExtension, -2);
+        ctx.lineTo(24 + stabExtension, -2);
+        ctx.stroke();
+      }
+    }
     ctx.restore();
   }
 
@@ -155,6 +286,17 @@ export class Renderer {
     ctx.restore();
   }
 
+  private drawSpawnProtection(formation: Formation, camera: Camera): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(242, 235, 184, 0.52)';
+    ctx.lineWidth = 4 / camera.zoom;
+    ctx.beginPath();
+    ctx.arc(formation.center.x, formation.center.y, 196, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   private drawFormationLabel(formation: Formation, camera: Camera): void {
     const { ctx } = this;
     const size = Math.max(11, 14 / camera.zoom);
@@ -164,7 +306,8 @@ export class Renderer {
       ? '#ffe18a'
       : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
     const suffix = formation.isPlayerControlled ? ' · YOU' : '';
-    ctx.fillText(`${formation.id}${suffix}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 48);
+    const objective = formation.mode === 'bannerAttack' ? ' · AXE' : '';
+    ctx.fillText(`${formation.id}${suffix}${objective}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 48);
   }
 
   private drawProjectiles(projectiles: Projectile[], camera: Camera): void {
@@ -246,6 +389,20 @@ export class Renderer {
     }
   }
 
+  private drawAxeStrikes(strikes: AxeStrike[], camera: Camera): void {
+    const { ctx } = this;
+    for (const strike of strikes) {
+      if (!this.pointVisible(strike.start, camera, 80)) continue;
+      const alpha = Math.max(0, strike.life / GAME_CONFIG.effects.axeStrikeLifetime);
+      ctx.strokeStyle = `rgba(255, 216, 112, ${alpha})`;
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(strike.start.x, strike.start.y);
+      ctx.lineTo(strike.end.x, strike.end.y);
+      ctx.stroke();
+    }
+  }
+
   private drawChargeArrow(start: Vec2, end: Vec2): void {
     const { ctx } = this;
     const dx = end.x - start.x;
@@ -293,7 +450,7 @@ export class Renderer {
         ctx.stroke();
       }
       ctx.fillStyle = 'rgba(20, 18, 14, 0.78)';
-      const width = 145 / camera.zoom;
+      const width = 164 / camera.zoom;
       const height = 34 / camera.zoom;
       ctx.fillRect(formation.center.x - width / 2, formation.center.y + 52, width, height);
       ctx.fillStyle = '#f1e6c9';
@@ -307,19 +464,20 @@ export class Renderer {
     }
   }
 
-  private drawMinimap(formations: Formation[], camera: Camera): void {
+  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot): void {
     const { ctx } = this;
-    const width = 214;
-    const height = 138;
-    const x = GAME_CONFIG.viewport.width - width - 18;
-    const y = GAME_CONFIG.viewport.height - height - 18;
+    const width = GAME_CONFIG.minimap.width;
+    const height = GAME_CONFIG.minimap.height;
+    const x = GAME_CONFIG.viewport.width - width - GAME_CONFIG.minimap.margin;
+    const y = GAME_CONFIG.viewport.height - height - GAME_CONFIG.minimap.margin;
     const sx = width / GAME_CONFIG.world.width;
     const sy = height / GAME_CONFIG.world.height;
 
     ctx.save();
-    ctx.fillStyle = 'rgba(19, 20, 15, 0.78)';
+    ctx.fillStyle = 'rgba(19, 20, 15, 0.86)';
     ctx.fillRect(x, y, width, height);
-    ctx.strokeStyle = 'rgba(224, 211, 170, 0.65)';
+    ctx.strokeStyle = snapshot.cameraFollow ? 'rgba(224, 211, 170, 0.65)' : 'rgba(255, 218, 115, 0.88)';
+    ctx.lineWidth = 1.5;
     ctx.strokeRect(x, y, width, height);
 
     for (const formation of formations) {
@@ -329,8 +487,21 @@ export class Renderer {
         : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
       const px = x + formation.center.x * sx;
       const py = y + formation.center.y * sy;
-      const size = formation.isPlayerControlled ? 5 : 3;
+      const size = formation.isPlayerControlled ? 6 : formation.mode === 'bannerAttack' ? 5 : 3;
       ctx.fillRect(px - size / 2, py - size / 2, size, size);
+    }
+
+    for (const banner of banners) {
+      const px = x + banner.position.x * sx;
+      const py = y + banner.position.y * sy;
+      ctx.fillStyle = banner.destroyed ? '#5b5142' : banner.team === 'blue' ? '#95c5ff' : '#ff9090';
+      ctx.beginPath();
+      ctx.moveTo(px, py - 7);
+      ctx.lineTo(px + 7, py);
+      ctx.lineTo(px, py + 7);
+      ctx.lineTo(px - 7, py);
+      ctx.closePath();
+      ctx.fill();
     }
 
     const bounds = camera.visibleBounds();
@@ -345,7 +516,7 @@ export class Renderer {
     ctx.fillStyle = 'rgba(244, 233, 201, 0.9)';
     ctx.font = '10px ui-monospace, monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('TACTICAL MAP', x + 7, y + 12);
+    ctx.fillText('TACTICAL MAP · CLICK TO JUMP', x + 7, y + 12);
     ctx.restore();
   }
 
@@ -355,35 +526,72 @@ export class Renderer {
     else if (snapshot.playerMode === 'charging') text = 'PLAYER SQUAD — CHARGING';
     else if (snapshot.playerMode === 'melee') text = 'PLAYER SQUAD — BAYONET MELEE';
     else if (snapshot.playerMode === 'reforming') text = 'PLAYER SQUAD — REFORMING';
+    else if (snapshot.playerMode === 'bannerAttack') {
+      text = snapshot.playerBannerInRange ? 'DESTROYING ENEMY BANNER' : 'ADVANCING TO ENEMY BANNER';
+    }
     if (!text) return;
 
     const { ctx } = this;
     ctx.fillStyle = 'rgba(25, 20, 14, 0.72)';
-    ctx.fillRect(GAME_CONFIG.viewport.width / 2 - 190, 16, 380, 34);
+    ctx.fillRect(GAME_CONFIG.viewport.width / 2 - 205, 16, 410, 34);
     ctx.strokeStyle = 'rgba(232, 210, 160, 0.72)';
-    ctx.strokeRect(GAME_CONFIG.viewport.width / 2 - 190, 16, 380, 34);
+    ctx.strokeRect(GAME_CONFIG.viewport.width / 2 - 205, 16, 410, 34);
     ctx.fillStyle = '#f4ddb0';
     ctx.font = 'bold 15px Georgia, serif';
     ctx.textAlign = 'center';
     ctx.fillText(text, GAME_CONFIG.viewport.width / 2, 38);
   }
 
+  private drawIntro(snapshot: GameSnapshot): void {
+    const { ctx } = this;
+    if (snapshot.introStage === 'pan-enemy' || snapshot.introStage === 'return-player') return;
+
+    const isEnemy = snapshot.introStage === 'enemy-banner';
+    ctx.save();
+    const panelWidth = isEnemy ? 560 : 420;
+    const panelHeight = isEnemy ? 132 : 82;
+    const x = GAME_CONFIG.viewport.width / 2 - panelWidth / 2;
+    const y = GAME_CONFIG.viewport.height * 0.68 - panelHeight / 2;
+    ctx.fillStyle = 'rgba(18, 14, 10, 0.82)';
+    ctx.fillRect(x, y, panelWidth, panelHeight);
+    ctx.strokeStyle = 'rgba(236, 218, 174, 0.82)';
+    ctx.strokeRect(x, y, panelWidth, panelHeight);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f4e7c7';
+    ctx.font = 'bold 25px Georgia, serif';
+    ctx.fillText(isEnemy ? 'ENEMY BANNER' : 'YOUR BANNER', GAME_CONFIG.viewport.width / 2, y + 35);
+    ctx.font = '14px ui-monospace, monospace';
+    ctx.fillStyle = '#d7c8a8';
+    if (isEnemy) {
+      ctx.fillText('この旗を破壊すれば勝利', GAME_CONFIG.viewport.width / 2, y + 66);
+      ctx.fillStyle = '#ffe08a';
+      ctx.fillText('[3] AXE を選択 → 敵旗を右クリック', GAME_CONFIG.viewport.width / 2, y + 96);
+      ctx.fillStyle = '#b7aa91';
+      ctx.fillText('敵部隊を退け、旗を壊す時間を作れ', GAME_CONFIG.viewport.width / 2, y + 119);
+    } else {
+      ctx.fillText('この旗を守り抜け', GAME_CONFIG.viewport.width / 2, y + 63);
+    }
+    ctx.restore();
+  }
+
   private drawResult(snapshot: GameSnapshot): void {
     if (!snapshot.winner) return;
     const { ctx } = this;
-    ctx.fillStyle = 'rgba(18, 14, 10, 0.64)';
+    ctx.fillStyle = 'rgba(18, 14, 10, 0.68)';
     ctx.fillRect(0, 0, GAME_CONFIG.viewport.width, GAME_CONFIG.viewport.height);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#f5ead0';
-    ctx.font = 'bold 38px Georgia, serif';
+    ctx.font = 'bold 48px Georgia, serif';
+    ctx.fillText('BANNERFALL', GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 - 38);
+    ctx.font = 'bold 24px Georgia, serif';
     ctx.fillText(
-      snapshot.winner === 'blue' ? 'BLUE ARMY VICTORIOUS' : 'RED ARMY VICTORIOUS',
+      snapshot.winner === 'blue' ? 'RED BANNER HAS FALLEN — BLUE VICTORY' : 'BLUE BANNER HAS FALLEN — RED VICTORY',
       GAME_CONFIG.viewport.width / 2,
-      GAME_CONFIG.viewport.height / 2 - 12,
+      GAME_CONFIG.viewport.height / 2 + 4,
     );
     ctx.font = '14px ui-monospace, monospace';
     ctx.fillStyle = '#d6c8aa';
-    ctx.fillText('R で戦場を再生成', GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 + 26);
+    ctx.fillText('R で再戦', GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 + 43);
   }
 
   private pointVisible(point: Vec2, camera: Camera, margin: number): boolean {

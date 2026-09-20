@@ -1,10 +1,10 @@
-import type { Vec2 } from '../game/types';
+import type { Vec2, WeaponType } from '../game/types';
 
 export class InputManager {
   private readonly keys = new Set<string>();
   private readonly pressed = new Set<string>();
   private readonly released = new Set<string>();
-  private attackPressed = false;
+  private leftClickPoint: Vec2 | null = null;
   private rightMouseDown = false;
   private rightMousePressed = false;
   private rightMouseReleased = false;
@@ -18,7 +18,7 @@ export class InputManager {
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3'].includes(key)) {
+      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3', 'z', 'x', 'v'].includes(key)) {
         event.preventDefault();
       }
     });
@@ -41,7 +41,7 @@ export class InputManager {
     canvas.addEventListener('mousedown', (event) => {
       this.updatePointer(event);
       if (event.button === 0) {
-        this.attackPressed = true;
+        this.leftClickPoint = { ...this.pointer };
         event.preventDefault();
       } else if (event.button === 1) {
         this.middleMouseDown = true;
@@ -101,16 +101,24 @@ export class InputManager {
   }
 
   consumeTimeScale(): number | null {
-    if (this.consumePressed('1')) return 0.5;
-    if (this.consumePressed('2')) return 1;
-    if (this.consumePressed('3')) return 2;
+    if (this.consumePressed('z')) return 0.5;
+    if (this.consumePressed('x')) return 1;
+    if (this.consumePressed('v')) return 2;
     return null;
   }
 
-  consumeAttack(): boolean {
-    if (!this.attackPressed) return false;
-    this.attackPressed = false;
-    return true;
+  consumeWeaponSelection(): WeaponType | null {
+    if (this.consumePressed('1')) return 'musket';
+    if (this.consumePressed('2')) return 'bayonet';
+    if (this.consumePressed('3')) return 'axe';
+    return null;
+  }
+
+  consumePrimaryClick(): Vec2 | null {
+    if (!this.leftClickPoint) return null;
+    const point = { ...this.leftClickPoint };
+    this.leftClickPoint = null;
+    return point;
   }
 
   consumeChargeStart(): boolean {
@@ -122,10 +130,14 @@ export class InputManager {
     return keyboard;
   }
 
-  consumeBreakOff(): boolean {
+  consumeRightPress(): boolean {
     if (!this.rightMousePressed) return false;
     this.rightMousePressed = false;
     return true;
+  }
+
+  consumeBreakOff(): boolean {
+    return this.consumeRightPress();
   }
 
   consumeChargeRelease(): boolean {
@@ -158,9 +170,20 @@ export class InputManager {
     return delta;
   }
 
+  clearActionInputs(): void {
+    this.leftClickPoint = null;
+    this.rightMousePressed = false;
+    this.rightMouseReleased = false;
+    this.pressed.delete(' ');
+    this.released.delete(' ');
+  }
+
   endFrame(): void {
     this.pressed.clear();
     this.released.clear();
+    this.rightMousePressed = false;
+    this.rightMouseReleased = false;
+    this.leftClickPoint = null;
   }
 
   private updatePointer(event: MouseEvent): void {

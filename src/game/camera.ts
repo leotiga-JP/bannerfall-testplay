@@ -39,6 +39,19 @@ export class Camera {
     this.clamp();
   }
 
+  jumpTo(point: Vec2): void {
+    this.position = { ...point };
+    this.followPlayer = false;
+    this.clamp();
+  }
+
+  setCinematic(point: Vec2, zoom = this.zoom): void {
+    this.followPlayer = false;
+    this.position = { ...point };
+    this.zoom = Math.max(GAME_CONFIG.camera.minZoom, Math.min(GAME_CONFIG.camera.maxZoom, zoom));
+    this.clamp();
+  }
+
   adjustZoom(wheelDelta: number): void {
     const factor = Math.exp(-wheelDelta * GAME_CONFIG.camera.zoomSpeed);
     this.zoom = Math.max(

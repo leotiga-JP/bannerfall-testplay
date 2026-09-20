@@ -120,7 +120,7 @@ export function updateProjectiles(
 
     let hit = false;
     for (const formation of formations) {
-      if (formation.team === projectile.team || formation.aliveCount() === 0) continue;
+      if (formation.team === projectile.team || formation.aliveCount() === 0 || formation.spawnProtectionTimer > 0) continue;
       const cdx = formation.center.x - segmentMid.x;
       const cdy = formation.center.y - segmentMid.y;
       if (cdx * cdx + cdy * cdy > coarseRadiusSq) continue;

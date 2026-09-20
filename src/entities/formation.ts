@@ -1,8 +1,8 @@
 import { GAME_CONFIG } from '../game/config';
-import type { Team, Vec2 } from '../game/types';
+import type { Team, Vec2, WeaponType } from '../game/types';
 import { Unit } from './unit';
 
-export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming';
+export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming' | 'bannerAttack';
 
 export class Formation {
   readonly id: string;
@@ -15,6 +15,10 @@ export class Formation {
   volleysFired = 0;
   mode: FormationMode = 'line';
   chargeTarget: Vec2 | null = null;
+  bannerTargetTeam: Team | null = null;
+  bannerAttackTimer = 0;
+  weapon: WeaponType = 'musket';
+  spawnProtectionTimer = 0;
   debugIntent = 'HOLD';
   debugTargetId: string | null = null;
 
@@ -42,6 +46,10 @@ export class Formation {
     this.volleysFired = 0;
     this.mode = 'line';
     this.chargeTarget = null;
+    this.bannerTargetTeam = null;
+    this.bannerAttackTimer = 0;
+    this.weapon = 'musket';
+    this.spawnProtectionTimer = GAME_CONFIG.army.spawnProtectionSeconds;
     this.debugIntent = this.isPlayerControlled ? 'PLAYER' : 'HOLD';
     this.debugTargetId = null;
     this.layoutCount = this.soldiers.length;
@@ -58,8 +66,10 @@ export class Formation {
     const dy = target.y - this.center.y;
     const distance = Math.hypot(dx, dy);
     if (distance < GAME_CONFIG.charge.arrowMinDistance) return false;
+    this.weapon = 'bayonet';
     this.direction = Math.atan2(dy, dx);
     this.chargeTarget = { ...target };
+    this.bannerTargetTeam = null;
     this.mode = 'charging';
     return true;
   }
@@ -81,9 +91,29 @@ export class Formation {
   }
 
   enterMelee(): void {
+    this.weapon = 'bayonet';
     this.mode = 'melee';
     this.chargeTarget = null;
+    this.bannerTargetTeam = null;
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
+  }
+
+  beginBannerAttack(targetTeam: Team, targetPosition: Vec2): boolean {
+    if (this.aliveCount() === 0 || targetTeam === this.team) return false;
+    this.weapon = 'axe';
+    this.mode = 'bannerAttack';
+    this.bannerTargetTeam = targetTeam;
+    this.bannerAttackTimer = 0;
+    this.chargeTarget = null;
+    this.direction = Math.atan2(targetPosition.y - this.center.y, targetPosition.x - this.center.x);
+    return true;
+  }
+
+  cancelBannerAttack(direction = this.direction): void {
+    if (this.mode !== 'bannerAttack') return;
+    this.bannerTargetTeam = null;
+    this.bannerAttackTimer = 0;
+    this.beginReform(direction, this.averageAlivePosition(), GAME_CONFIG.reform.reloadPenalty);
   }
 
   beginReform(
@@ -99,12 +129,15 @@ export class Formation {
     this.assignCompactSlots(alive);
     this.mode = 'reforming';
     this.chargeTarget = null;
+    this.bannerTargetTeam = null;
+    this.bannerAttackTimer = 0;
     this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
     return true;
   }
 
   update(dt: number): void {
     this.reloadTimer = Math.max(0, this.reloadTimer - dt);
+    this.spawnProtectionTimer = Math.max(0, this.spawnProtectionTimer - dt);
     for (const soldier of this.soldiers) soldier.update(dt);
 
     if (this.mode === 'melee') {
@@ -146,7 +179,7 @@ export class Formation {
   }
 
   canVolley(): boolean {
-    return this.mode === 'line' && this.reloadTimer <= 0 && this.aliveCount() > 0;
+    return this.mode === 'line' && this.weapon === 'musket' && this.reloadTimer <= 0 && this.aliveCount() > 0;
   }
 
   beginReload(seconds: number): void {

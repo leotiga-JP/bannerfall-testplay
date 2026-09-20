@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 2 - 20 squads vs 20 squads battlefield simulation" />
-    <title>Bannerfall - Phase 2 Battlefield Simulation</title>
+    <meta name="description" content="Bannerfall Phase 3 - Objective Warfare prototype" />
+    <title>Bannerfall - Phase 3 Objective Warfare</title>
   </head>
   <body>
     <main id="app">
@@ -12,23 +12,50 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p>Phase 2 — 20 Squads vs 20 Squads Battlefield Simulation</p>
+            <p>Phase 3 — Objective Warfare</p>
           </div>
-          <div class="scoreboard">
-            <span id="blue-count" class="blue">BLUE 20 SQUADS</span>
+          <div class="top-status">
             <span id="status">BATTLE</span>
-            <span id="red-count" class="red">RED 20 SQUADS</span>
+            <span id="camera-status">CAM FOLLOW · 0.58x</span>
           </div>
         </header>
 
-        <div class="battle-info">
-          <span>40部隊が独立AIで戦闘。金色の部隊がプレイヤー操作部隊です。</span>
-          <strong id="reload" class="ready">READY — FIRE!</strong>
-          <span id="camera-status">CAM FOLLOW · 0.58x</span>
-        </div>
-
         <div class="canvas-wrap">
-          <canvas id="game" width="1280" height="720" aria-label="Bannerfall Phase 2 battlefield"></canvas>
+          <canvas id="game" width="1280" height="720" aria-label="Bannerfall Phase 3 battlefield"></canvas>
+
+          <div class="banner-hud" aria-label="Banner health">
+            <div id="blue-banner-card" class="banner-card blue">
+              <div class="banner-card-head"><span>BLUE BANNER</span><strong id="blue-banner-hp">100%</strong></div>
+              <div class="hp-track"><div id="blue-banner-bar" class="hp-fill"></div></div>
+            </div>
+            <div id="red-banner-card" class="banner-card red">
+              <div class="banner-card-head"><span>RED BANNER</span><strong id="red-banner-hp">100%</strong></div>
+              <div class="hp-track"><div id="red-banner-bar" class="hp-fill"></div></div>
+            </div>
+          </div>
+
+          <div id="notice" class="notice hidden">NOTICE</div>
+          <div id="objective-progress" class="objective-progress hidden">DESTROYING BANNER</div>
+
+          <div id="player-panel" class="player-panel">
+            <strong id="player-state">B10 · 20/20 · LINE</strong>
+            <span id="player-detail">MUSKET · READY</span>
+          </div>
+
+          <div id="context-hint" class="context-hint hidden"></div>
+
+          <div id="hotbar" class="hotbar" aria-label="Equipment hotbar">
+            <div class="slot selected" data-weapon="musket"><span class="key">1</span><span class="icon musket-icon">━</span><small>MUSKET</small></div>
+            <div class="slot" data-weapon="bayonet"><span class="key">2</span><span class="icon bayonet-icon">†</span><small>BAYONET</small></div>
+            <div class="slot" data-weapon="axe"><span class="key">3</span><span class="icon axe-icon">⌁</span><small>AXE</small></div>
+            <div class="slot empty"><span class="key">4</span></div>
+            <div class="slot empty"><span class="key">5</span></div>
+            <div class="slot empty"><span class="key">6</span></div>
+            <div class="slot empty"><span class="key">7</span></div>
+            <div class="slot empty"><span class="key">8</span></div>
+            <div class="slot empty"><span class="key">9</span></div>
+          </div>
+
           <div class="overlay hidden" id="pause-overlay">
             <div class="overlay-card">
               <h2>PAUSED</h2>
@@ -38,18 +65,19 @@
         </div>
 
         <footer class="controls">
-          <span><kbd>WASD</kbd> 自部隊移動</span>
-          <span><kbd>Mouse</kbd> 戦列方向</span>
-          <span><kbd>Left Click</kbd> 一斉射撃</span>
-          <span><kbd>Hold Right / Space</kbd> 突撃方向</span>
-          <span><kbd>Right Click</kbd> 白兵戦離脱</span>
+          <span><kbd>WASD</kbd> 部隊移動</span>
+          <span><kbd>1</kbd> Musket</span>
+          <span><kbd>2</kbd> Bayonet</span>
+          <span><kbd>3</kbd> Axe</span>
+          <span><kbd>Left Click</kbd> 射撃</span>
+          <span><kbd>Hold Right / Space</kbd> 銃剣突撃</span>
+          <span><kbd>Axe + Right Click Banner</kbd> 旗破壊</span>
           <span><kbd>F</kbd> 再整列</span>
           <span><kbd>Wheel</kbd> ズーム</span>
-          <span><kbd>Middle Drag</kbd> 自由カメラ</span>
+          <span><kbd>Minimap Click</kbd> カメラ移動</span>
           <span><kbd>C</kbd> 自部隊へ戻る</span>
           <span><kbd>F3</kbd> AIデバッグ</span>
-          <span><kbd>1 / 2 / 3</kbd> 0.5x / 1x / 2x</span>
-          <span><kbd>Esc / P</kbd> 一時停止</span>
+          <span><kbd>Z / X / V</kbd> 0.5x / 1x / 2x</span>
           <span><kbd>R</kbd> 再戦</span>
         </footer>
       </section>
