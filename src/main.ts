@@ -1,90 +1,208 @@
 import './styles.css';
-import { GAME_CONFIG } from './game/config';
-import { Game } from './game/game';
-import { InputManager } from './input/inputManager';
-import { Renderer } from './rendering/renderer';
-import { Hud } from './ui/hud';
-import type { SquadClass } from './game/types';
+import { NetworkClient } from './network/networkClient';
+import { MultiplayerBattle } from './network/multiplayerBattle';
+import type { MatchStartPayload, RoomState } from './network/protocol';
 
+const menuShell = document.querySelector<HTMLElement>('#menu-shell');
+const battleShell = document.querySelector<HTMLElement>('#battle-shell');
+const titleScreen = document.querySelector<HTMLElement>('#title-screen');
+const createScreen = document.querySelector<HTMLElement>('#create-screen');
+const joinScreen = document.querySelector<HTMLElement>('#join-screen');
+const lobbyScreen = document.querySelector<HTMLElement>('#lobby-screen');
+const playerNameInput = document.querySelector<HTMLInputElement>('#player-name');
+const serverUrlInput = document.querySelector<HTMLInputElement>('#server-url');
+const connectionStatus = document.querySelector<HTMLElement>('#connection-status');
+const connectionDot = document.querySelector<HTMLElement>('#connection-dot');
+const menuError = document.querySelector<HTMLElement>('#menu-error');
 const canvas = document.querySelector<HTMLCanvasElement>('#game');
-const statusElement = document.querySelector<HTMLElement>('#status');
-const pauseOverlay = document.querySelector<HTMLElement>('#pause-overlay');
-const cameraElement = document.querySelector<HTMLElement>('#camera-status');
-const blueBannerCard = document.querySelector<HTMLElement>('#blue-banner-card');
-const redBannerCard = document.querySelector<HTMLElement>('#red-banner-card');
-const blueBannerHp = document.querySelector<HTMLElement>('#blue-banner-hp');
-const redBannerHp = document.querySelector<HTMLElement>('#red-banner-hp');
-const blueBannerBar = document.querySelector<HTMLElement>('#blue-banner-bar');
-const redBannerBar = document.querySelector<HTMLElement>('#red-banner-bar');
-const playerState = document.querySelector<HTMLElement>('#player-state');
-const playerDetail = document.querySelector<HTMLElement>('#player-detail');
-const notice = document.querySelector<HTMLElement>('#notice');
-const objectiveProgress = document.querySelector<HTMLElement>('#objective-progress');
-const contextHint = document.querySelector<HTMLElement>('#context-hint');
-const hotbar = document.querySelector<HTMLElement>('#hotbar');
-const classSelector = document.querySelector<HTMLElement>('#class-selector');
-const respawnCountdown = document.querySelector<HTMLElement>('#respawn-countdown');
-const armyComposition = document.querySelector<HTMLElement>('#army-composition');
-const classRecommendation = document.querySelector<HTMLElement>('#class-recommendation');
+const networkStatus = document.querySelector<HTMLElement>('#network-status');
 
 const required = [
-  canvas, statusElement, pauseOverlay, cameraElement,
-  blueBannerCard, redBannerCard, blueBannerHp, redBannerHp,
-  blueBannerBar, redBannerBar, playerState, playerDetail,
-  notice, objectiveProgress, contextHint, hotbar,
-  classSelector, respawnCountdown, armyComposition, classRecommendation,
+  menuShell, battleShell, titleScreen, createScreen, joinScreen, lobbyScreen,
+  playerNameInput, serverUrlInput, connectionStatus, connectionDot, menuError, canvas, networkStatus,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall DOM initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.7 UI initialization failed.');
 
-const ctx = canvas!.getContext('2d');
-if (!ctx) throw new Error('Canvas 2D context is not available.');
+const network = new NetworkClient();
+let currentRoom: RoomState | null = null;
+let currentBattle: MultiplayerBattle | null = null;
 
-ctx.imageSmoothingEnabled = false;
-canvas!.width = GAME_CONFIG.viewport.width;
-canvas!.height = GAME_CONFIG.viewport.height;
+const params = new URLSearchParams(window.location.search);
+playerNameInput!.value = localStorage.getItem('bannerfall.playerName') ?? '';
+serverUrlInput!.value = params.get('server') ?? localStorage.getItem('bannerfall.serverUrl') ?? '';
+const invitedRoom = params.get('room');
+if (invitedRoom) {
+  const code = document.querySelector<HTMLInputElement>('#join-code');
+  if (code) code.value = invitedRoom.toUpperCase();
+}
 
-const input = new InputManager(canvas!);
-for (const card of classSelector!.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
-  card.addEventListener('click', () => {
-    const value = card.dataset.class as SquadClass | undefined;
-    if (value === 'infantry' || value === 'cavalry' || value === 'artillery') {
-      input.queueClassSelection(value);
+function showScreen(target: 'title' | 'create' | 'join' | 'lobby'): void {
+  titleScreen!.classList.toggle('hidden', target !== 'title');
+  createScreen!.classList.toggle('hidden', target !== 'create');
+  joinScreen!.classList.toggle('hidden', target !== 'join');
+  lobbyScreen!.classList.toggle('hidden', target !== 'lobby');
+}
+
+function showError(message: string): void {
+  menuError!.textContent = message;
+  menuError!.classList.remove('hidden');
+  window.setTimeout(() => menuError!.classList.add('hidden'), 5000);
+}
+
+function cleanPlayerName(): string {
+  const value = playerNameInput!.value.trim().slice(0, 24);
+  if (!value) throw new Error('プレイヤー名を入力してください。');
+  localStorage.setItem('bannerfall.playerName', value);
+  return value;
+}
+
+async function ensureConnected(): Promise<void> {
+  const rawUrl = serverUrlInput!.value.trim();
+  if (!rawUrl) throw new Error('Cloudflare Tunnel URLを入力してください。');
+  localStorage.setItem('bannerfall.serverUrl', rawUrl);
+  if (network.connected) return;
+  await network.connect(rawUrl);
+}
+
+function numberInput(id: string, min: number, max: number, fallback: number): number {
+  const input = document.querySelector<HTMLInputElement>(`#${id}`);
+  const value = Number(input?.value ?? fallback);
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.floor(value))) : fallback;
+}
+
+function renderLobby(room: RoomState): void {
+  currentRoom = room;
+  const code = document.querySelector<HTMLElement>('#lobby-code');
+  const settings = document.querySelector<HTMLElement>('#lobby-settings');
+  const bluePlayers = document.querySelector<HTMLElement>('#blue-players');
+  const redPlayers = document.querySelector<HTMLElement>('#red-players');
+  const startButton = document.querySelector<HTMLButtonElement>('#start-match');
+  if (!code || !settings || !bluePlayers || !redPlayers || !startButton) return;
+
+  code.textContent = room.code;
+  settings.textContent = `${room.settings.blueSquads} vs ${room.settings.redSquads} squads · RESPAWN ${room.settings.respawnSeconds}s · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'}`;
+  bluePlayers.innerHTML = '';
+  redPlayers.innerHTML = '';
+  for (const player of room.players) {
+    const row = document.createElement('div');
+    row.className = 'player-row';
+    const name = document.createElement('span');
+    name.textContent = player.name;
+    if (player.owner) name.classList.add('host');
+    const role = document.createElement('span');
+    role.textContent = player.owner ? 'HOST' : 'PLAYER';
+    row.append(name, role);
+    (player.team === 'blue' ? bluePlayers : redPlayers).appendChild(row);
+  }
+  const local = room.players.find((player) => player.id === network.clientId);
+  startButton.disabled = !local?.owner || room.phase !== 'lobby';
+  startButton.textContent = local?.owner ? 'START BATTLE' : 'WAITING FOR HOST';
+  showScreen('lobby');
+}
+
+function startBattle(payload: MatchStartPayload): void {
+  currentRoom = payload.room;
+  menuShell!.classList.add('hidden');
+  battleShell!.classList.remove('hidden');
+  currentBattle?.stop();
+  currentBattle = new MultiplayerBattle(network, payload, canvas!);
+  networkStatus!.textContent = network.isAuthority ? 'NET HOST' : 'NET CLIENT';
+  const subtitle = document.querySelector<HTMLElement>('#battle-subtitle');
+  if (subtitle) subtitle.textContent = `Room ${payload.room.code} · ${payload.room.settings.blueSquads}v${payload.room.settings.redSquads}`;
+}
+
+network.onConnection = (connected, text) => {
+  connectionStatus!.textContent = text;
+  connectionDot!.classList.toggle('online', connected);
+};
+network.onError = (message) => showError(message);
+network.onNotice = (message) => showError(message);
+network.onRoomState = (room) => {
+  currentRoom = room;
+  const inBattle = !battleShell!.classList.contains('hidden');
+  if (inBattle && room.phase === 'battle') {
+    currentBattle?.updateRoom(room);
+    return;
+  }
+  if (inBattle && room.phase === 'lobby') {
+    currentBattle?.stop();
+    currentBattle = null;
+    battleShell!.classList.add('hidden');
+    menuShell!.classList.remove('hidden');
+  }
+  renderLobby(room);
+};
+network.onMatchStart = (payload) => startBattle(payload);
+
+for (const button of document.querySelectorAll<HTMLButtonElement>('[data-back="title"]')) {
+  button.addEventListener('click', () => showScreen('title'));
+}
+
+document.querySelector('#show-create')?.addEventListener('click', () => {
+  try { cleanPlayerName(); showScreen('create'); } catch (error) { showError(String(error instanceof Error ? error.message : error)); }
+});
+document.querySelector('#show-join')?.addEventListener('click', () => {
+  try { cleanPlayerName(); showScreen('join'); } catch (error) { showError(String(error instanceof Error ? error.message : error)); }
+});
+
+document.querySelector('#create-room')?.addEventListener('click', async () => {
+  try {
+    const name = cleanPlayerName();
+    await ensureConnected();
+    const password = document.querySelector<HTMLInputElement>('#create-password')?.value ?? '';
+    network.createRoom(
+      name,
+      password,
+      numberInput('blue-squads', 1, 50, 20),
+      numberInput('red-squads', 1, 50, 20),
+      numberInput('respawn-seconds', 5, 60, 20),
+    );
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  }
+});
+
+document.querySelector('#join-room')?.addEventListener('click', async () => {
+  try {
+    const name = cleanPlayerName();
+    await ensureConnected();
+    const code = document.querySelector<HTMLInputElement>('#join-code')?.value ?? '';
+    const password = document.querySelector<HTMLInputElement>('#join-password')?.value ?? '';
+    if (code.trim().length !== 6) throw new Error('6文字のRoom Codeを入力してください。');
+    network.joinRoom(name, code, password);
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  }
+});
+
+document.querySelector('#join-blue')?.addEventListener('click', () => network.changeTeam('blue'));
+document.querySelector('#join-red')?.addEventListener('click', () => network.changeTeam('red'));
+document.querySelector('#start-match')?.addEventListener('click', () => network.startMatch());
+document.querySelector('#leave-room')?.addEventListener('click', () => {
+  network.leaveRoom();
+  currentRoom = null;
+  showScreen('title');
+});
+
+document.querySelector('#copy-invite')?.addEventListener('click', async () => {
+  if (!currentRoom) return;
+  const server = serverUrlInput!.value.trim();
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('server', server);
+  url.searchParams.set('room', currentRoom.code);
+  try {
+    await navigator.clipboard.writeText(url.toString());
+    const button = document.querySelector<HTMLButtonElement>('#copy-invite');
+    if (button) {
+      const old = button.textContent;
+      button.textContent = 'COPIED';
+      window.setTimeout(() => { button.textContent = old; }, 1400);
     }
-  });
-}
-const game = new Game(input);
-const renderer = new Renderer(ctx);
-const hud = new Hud(
-  statusElement!, pauseOverlay!, cameraElement!,
-  blueBannerCard!, redBannerCard!, blueBannerHp!, redBannerHp!,
-  blueBannerBar!, redBannerBar!, playerState!, playerDetail!,
-  notice!, objectiveProgress!, contextHint!, hotbar!,
-  classSelector!, respawnCountdown!, armyComposition!, classRecommendation!,
-);
+  } catch {
+    showError('Invite URLのコピーに失敗しました。');
+  }
+});
 
-let previousTime = performance.now();
-
-function frame(now: number): void {
-  const rawDt = Math.min((now - previousTime) / 1000, 0.04);
-  previousTime = now;
-  game.update(rawDt);
-  const snapshot = game.snapshot();
-  renderer.render(
-    game.formations,
-    game.banners,
-    game.projectiles,
-    game.artilleryShells,
-    game.artilleryExplosions,
-    game.smoke,
-    game.muzzleFlashes,
-    game.corpses,
-    game.meleeStrikes,
-    game.axeStrikes,
-    snapshot,
-    game.camera,
-  );
-  hud.update(snapshot);
-  requestAnimationFrame(frame);
-}
-
-requestAnimationFrame(frame);
+if (invitedRoom) showScreen('join');
+else showScreen('title');

@@ -407,3 +407,78 @@ kbd {
   .class-card { min-height: 76px; }
   .class-intel { flex-direction: column; }
 }
+
+/* Phase 3.7 multiplayer shell */
+.hidden { display: none !important; }
+.menu-shell {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 28px;
+  border: 1px solid #77694d;
+  background:
+    linear-gradient(rgba(28, 24, 18, 0.94), rgba(28, 24, 18, 0.94)),
+    repeating-linear-gradient(90deg, transparent 0 24px, rgba(255,255,255,0.02) 24px 25px);
+  box-shadow: 0 24px 70px rgba(0,0,0,0.48);
+}
+.menu-panel { max-width: 760px; margin: 0 auto; }
+.brand-block { margin-bottom: 26px; text-align: center; }
+.brand-block h1 { margin: 4px 0 8px; font-size: clamp(42px, 8vw, 74px); letter-spacing: 0.12em; }
+.brand-block p { margin: 0; color: #c7bca6; }
+.eyebrow { color: #c9b578; font: 800 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.18em; }
+.menu-panel h2 { margin: 10px 0 20px; font-size: 28px; letter-spacing: 0.08em; }
+.field { display: grid; gap: 7px; margin-bottom: 14px; }
+.field > span { color: #c9bda7; font: 800 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; }
+.field input {
+  width: 100%;
+  padding: 12px 13px;
+  color: #f0e7d5;
+  border: 1px solid #6e6044;
+  background: #16130f;
+  outline: none;
+  font: 14px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.field input:focus { border-color: #d5bd72; box-shadow: 0 0 0 2px rgba(213,189,114,0.12); }
+.advanced { margin: 18px 0; padding: 12px; border: 1px solid #514833; background: rgba(0,0,0,0.12); }
+.advanced summary { cursor: pointer; color: #cbbb91; font: 800 10px ui-monospace, monospace; letter-spacing: 0.12em; }
+.connection-line { display: flex; align-items: center; gap: 8px; color: #aaa08d; font: 800 10px ui-monospace, monospace; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: #7c5a51; box-shadow: 0 0 10px rgba(140,60,50,0.3); }
+.dot.online { background: #83b56e; box-shadow: 0 0 10px rgba(131,181,110,0.45); }
+.menu-actions, .lobby-buttons { display: flex; gap: 10px; }
+button {
+  padding: 11px 16px;
+  color: #e9dfca;
+  border: 1px solid #756846;
+  background: #2a241a;
+  cursor: pointer;
+  font: 800 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.06em;
+}
+button:hover { border-color: #c8ae66; background: #342c1f; }
+button:disabled { cursor: not-allowed; opacity: 0.42; }
+button.primary { color: #1c170d; border-color: #e3ca78; background: #d7bd6a; }
+button.primary:hover { background: #ecd589; }
+button.wide { width: 100%; margin-top: 10px; }
+.back-button { padding-left: 0; border: 0; background: transparent; color: #baa987; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 18px; }
+.muted { color: #a99f8d; font-size: 12px; line-height: 1.6; }
+.menu-error { padding: 10px 12px; color: #ffb0a6; border: 1px solid rgba(225,93,93,0.45); background: rgba(100,30,25,0.16); font: 12px ui-monospace, monospace; }
+.lobby-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.lobby-head h2 { margin: 2px 0 0; font: 800 34px ui-monospace, monospace; letter-spacing: 0.18em; color: #f0d77d; }
+.lobby-settings { margin: 16px 0; padding: 10px 12px; border: 1px solid #514833; color: #cabd9d; font: 11px ui-monospace, monospace; }
+.team-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.team-card { min-height: 250px; padding: 14px; border: 1px solid #5b503b; background: rgba(10,9,7,0.25); }
+.blue-team { border-top: 4px solid #659de0; }
+.red-team { border-top: 4px solid #d65f5f; }
+.team-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.team-title h3 { margin: 0; letter-spacing: 0.12em; }
+.player-list { display: grid; gap: 7px; margin-top: 14px; }
+.player-row { display: flex; justify-content: space-between; gap: 10px; padding: 8px 9px; border: 1px solid rgba(210,194,153,0.18); background: rgba(255,255,255,0.025); font: 11px ui-monospace, monospace; }
+.player-row .host { color: #e8cd78; }
+#network-status { color: #8fc47d; }
+
+@media (max-width: 720px) {
+  body { padding: 0; }
+  .menu-shell { min-height: 100vh; padding: 18px; border: 0; }
+  .settings-grid, .team-columns { grid-template-columns: 1fr; }
+  .lobby-head { align-items: flex-start; flex-direction: column; }
+}

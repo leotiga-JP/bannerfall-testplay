@@ -3,25 +3,97 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.6 - Long Range Artillery prototype" />
-    <title>Bannerfall - Phase 3.6 Long Range Artillery</title>
+    <meta name="description" content="Bannerfall Phase 3.7 - Multiplayer Foundation" />
+    <title>Bannerfall - Phase 3.7 Multiplayer Foundation</title>
   </head>
   <body>
     <main id="app">
-      <section class="game-shell">
+      <section id="menu-shell" class="menu-shell">
+        <div class="menu-panel" id="title-screen">
+          <div class="brand-block">
+            <span class="eyebrow">PHASE 3.7 · MULTIPLAYER FOUNDATION</span>
+            <h1>BANNERFALL</h1>
+            <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
+          </div>
+
+          <label class="field">
+            <span>PLAYER NAME</span>
+            <input id="player-name" maxlength="24" autocomplete="nickname" placeholder="Your name" />
+          </label>
+
+          <details class="advanced" open>
+            <summary>SERVER</summary>
+            <label class="field">
+              <span>QUICK TUNNEL URL</span>
+              <input id="server-url" spellcheck="false" placeholder="https://xxxxx.trycloudflare.com" />
+            </label>
+            <div class="connection-line"><span id="connection-dot" class="dot"></span><strong id="connection-status">OFFLINE</strong></div>
+          </details>
+
+          <div class="menu-actions">
+            <button id="show-create" class="primary">CREATE ROOM</button>
+            <button id="show-join">JOIN ROOM</button>
+          </div>
+          <p id="menu-error" class="menu-error hidden"></p>
+        </div>
+
+        <div class="menu-panel hidden" id="create-screen">
+          <button class="back-button" data-back="title">← BACK</button>
+          <h2>CREATE BATTLE</h2>
+          <div class="settings-grid">
+            <label class="field"><span>BLUE SQUADS</span><input id="blue-squads" type="number" min="1" max="50" value="20" /></label>
+            <label class="field"><span>RED SQUADS</span><input id="red-squads" type="number" min="1" max="50" value="20" /></label>
+            <label class="field"><span>RESPAWN</span><input id="respawn-seconds" type="number" min="5" max="60" value="20" /></label>
+            <label class="field"><span>PASSWORD · OPTIONAL</span><input id="create-password" maxlength="32" type="password" placeholder="No password" /></label>
+          </div>
+          <p class="muted">総部隊数です。人間プレイヤーが入った分だけAI部隊が置き換わります。1 vs 1〜50 vs 50。</p>
+          <button id="create-room" class="primary wide">CREATE ROOM</button>
+        </div>
+
+        <div class="menu-panel hidden" id="join-screen">
+          <button class="back-button" data-back="title">← BACK</button>
+          <h2>JOIN BATTLE</h2>
+          <label class="field"><span>ROOM CODE</span><input id="join-code" maxlength="6" spellcheck="false" placeholder="K7PX4D" /></label>
+          <label class="field"><span>PASSWORD · IF REQUIRED</span><input id="join-password" maxlength="32" type="password" /></label>
+          <button id="join-room" class="primary wide">JOIN ROOM</button>
+        </div>
+
+        <div class="menu-panel lobby-panel hidden" id="lobby-screen">
+          <div class="lobby-head">
+            <div><span class="eyebrow">ROOM</span><h2 id="lobby-code">------</h2></div>
+            <div class="lobby-buttons"><button id="copy-invite">COPY INVITE</button><button id="leave-room">LEAVE</button></div>
+          </div>
+          <div id="lobby-settings" class="lobby-settings"></div>
+          <div class="team-columns">
+            <section class="team-card blue-team">
+              <div class="team-title"><h3>BLUE</h3><button id="join-blue">JOIN BLUE</button></div>
+              <div id="blue-players" class="player-list"></div>
+            </section>
+            <section class="team-card red-team">
+              <div class="team-title"><h3>RED</h3><button id="join-red">JOIN RED</button></div>
+              <div id="red-players" class="player-list"></div>
+            </section>
+          </div>
+          <p class="muted">空いている部隊はAIが担当します。ホストがSTARTすると全員同時に戦場へ入ります。</p>
+          <button id="start-match" class="primary wide">START BATTLE</button>
+        </div>
+      </section>
+
+      <section id="battle-shell" class="game-shell hidden">
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p>Phase 3.6 — Long Range Artillery</p>
+            <p id="battle-subtitle">Phase 3.7 — Multiplayer</p>
           </div>
           <div class="top-status">
+            <span id="network-status">NET</span>
             <span id="status">BATTLE</span>
             <span id="camera-status">CAM FOLLOW · 0.55x</span>
           </div>
         </header>
 
         <div class="canvas-wrap">
-          <canvas id="game" width="1280" height="720" aria-label="Bannerfall Phase 3.5 battlefield"></canvas>
+          <canvas id="game" width="1280" height="720" aria-label="Bannerfall multiplayer battlefield"></canvas>
 
           <div class="banner-hud" aria-label="Banner health">
             <div id="blue-banner-card" class="banner-card blue">
@@ -38,8 +110,8 @@
           <div id="objective-progress" class="objective-progress hidden">DESTROYING BANNER</div>
 
           <div id="player-panel" class="player-panel">
-            <strong id="player-state">B10 · LINE INFANTRY · 20/20</strong>
-            <span id="player-detail">MUSKET · READY</span>
+            <strong id="player-state">PLAYER</strong>
+            <span id="player-detail">READY</span>
           </div>
 
           <div id="context-hint" class="context-hint hidden"></div>
@@ -59,51 +131,29 @@
           <div id="class-selector" class="class-selector hidden" aria-label="Respawn class selection">
             <div class="class-selector-header">
               <h2>CHOOSE NEXT FORMATION</h2>
-              <p>Respawn in <strong id="respawn-countdown">18.0</strong>s · カードをクリック、または1/2/3で選択。未選択なら現在の兵科を維持</p>
+              <p>Respawn in <strong id="respawn-countdown">20.0</strong>s · カードをクリック、または1/2/3</p>
             </div>
             <div class="class-cards">
-              <div class="class-card" data-class="infantry">
-                <span class="class-key">1</span><strong>LINE INFANTRY</strong>
-                <small>20兵 · 射撃 / 銃剣 / 斧</small>
-                <em>旗を破壊できる唯一の兵科</em>
-              </div>
-              <div class="class-card" data-class="cavalry">
-                <span class="class-key">2</span><strong>CAVALRY</strong>
-                <small>12騎 · 高速 / 長距離突撃</small>
-                <em>砲兵狩り・側面突破</em>
-              </div>
-              <div class="class-card" data-class="artillery">
-                <span class="class-key">3</span><strong>ARTILLERY</strong>
-                <small>6兵 · 超長射程 / 範囲攻撃</small>
-                <em>停止して展開。接近戦に弱い</em>
-              </div>
+              <div class="class-card" data-class="infantry"><span class="class-key">1</span><strong>LINE INFANTRY</strong><small>20兵 · 射撃 / 銃剣 / 斧</small><em>旗を破壊できる唯一の兵科</em></div>
+              <div class="class-card" data-class="cavalry"><span class="class-key">2</span><strong>CAVALRY</strong><small>12騎 · 高速 / 長距離突撃</small><em>砲兵狩り・側面突破</em></div>
+              <div class="class-card" data-class="artillery"><span class="class-key">3</span><strong>ARTILLERY</strong><small>6兵 · 超長射程 / 範囲攻撃</small><em>停止して展開。接近戦に弱い</em></div>
             </div>
-            <div class="class-intel">
-              <span id="army-composition">BLUE · INF 14 / CAV 4 / ART 2</span>
-              <span id="class-recommendation">RECOMMENDED · LINE INFANTRY</span>
-            </div>
+            <div class="class-intel"><span id="army-composition"></span><span id="class-recommendation"></span></div>
           </div>
 
-          <div class="overlay hidden" id="pause-overlay">
-            <div class="overlay-card">
-              <h2>PAUSED</h2>
-              <p>Esc / P で再開。停止中もカメラ操作できます。</p>
-            </div>
-          </div>
+          <div class="overlay hidden" id="pause-overlay"><div class="overlay-card"><h2>PAUSED</h2><p>Esc / P で再開。</p></div></div>
         </div>
 
         <footer class="controls">
           <span><kbd>WASD</kbd> 部隊移動</span>
-          <span><kbd>Infantry 1/2/3</kbd> Musket / Bayonet / Axe</span>
-          <span><kbd>Cavalry RMB / Space</kbd> 長距離突撃</span>
-          <span><kbd>Artillery LMB</kbd> 展開後に砲撃</span>
+          <span><kbd>1/2/3</kbd> 装備 / リスポーン兵科</span>
+          <span><kbd>RMB / Space</kbd> 突撃</span>
+          <span><kbd>LMB</kbd> 射撃 / 砲撃</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>
           <span><kbd>Wheel</kbd> ズーム</span>
           <span><kbd>Minimap Click</kbd> カメラ移動</span>
           <span><kbd>C</kbd> 自部隊へ戻る</span>
           <span><kbd>F3</kbd> AIデバッグ</span>
-          <span><kbd>Z / X / V</kbd> 0.5x / 1x / 2x</span>
-          <span><kbd>R</kbd> 再戦</span>
         </footer>
       </section>
     </main>

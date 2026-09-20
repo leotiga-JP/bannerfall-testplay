@@ -16,7 +16,7 @@ export class Formation {
   readonly id: string;
   readonly team: Team;
   soldiers: Unit[] = [];
-  readonly isPlayerControlled: boolean;
+  isPlayerControlled: boolean;
   center: Vec2;
   direction: number;
   squadClass: SquadClass;

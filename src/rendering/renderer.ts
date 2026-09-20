@@ -26,6 +26,8 @@ export class Renderer {
     axeStrikes: AxeStrike[],
     snapshot: GameSnapshot,
     camera: Camera,
+    formationLabels: ReadonlyMap<string, string> = new Map(),
+    localFormationId: string | null = null,
   ): void {
     const { ctx } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -47,7 +49,7 @@ export class Renderer {
     this.drawProjectiles(projectiles, camera);
     this.drawArtilleryShells(artilleryShells, camera);
     this.drawArtilleryExplosions(artilleryExplosions, camera);
-    this.drawFormations(formations, camera);
+    this.drawFormations(formations, camera, formationLabels, localFormationId);
     this.drawMuzzleFlashes(flashes, camera);
     this.drawMeleeStrikes(strikes, camera);
     this.drawAxeStrikes(axeStrikes, camera);
@@ -211,10 +213,15 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawFormations(formations: Formation[], camera: Camera): void {
+  private drawFormations(
+    formations: Formation[],
+    camera: Camera,
+    formationLabels: ReadonlyMap<string, string>,
+    localFormationId: string | null,
+  ): void {
     for (const formation of formations) {
       if (formation.aliveCount() === 0 || !this.pointVisible(formation.center, camera, 300)) continue;
-      if (formation.isPlayerControlled) this.drawPlayerSelection(formation, camera);
+      if (formation.id === localFormationId) this.drawPlayerSelection(formation, camera);
       if (formation.spawnProtectionTimer > 0) this.drawSpawnProtection(formation, camera);
       if (formation.squadClass === 'artillery') this.drawCannon(formation, camera);
       for (const soldier of formation.soldiers) {
@@ -232,7 +239,7 @@ export class Renderer {
           );
         }
       }
-      this.drawFormationLabel(formation, camera);
+      this.drawFormationLabel(formation, camera, formationLabels, localFormationId);
     }
   }
 
@@ -384,19 +391,27 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawFormationLabel(formation: Formation, camera: Camera): void {
+  private drawFormationLabel(
+    formation: Formation,
+    camera: Camera,
+    formationLabels: ReadonlyMap<string, string>,
+    localFormationId: string | null,
+  ): void {
     const { ctx } = this;
     const size = Math.max(11, 14 / camera.zoom);
     ctx.textAlign = 'center';
     ctx.font = `bold ${size}px ui-monospace, monospace`;
-    ctx.fillStyle = formation.isPlayerControlled
-      ? '#ffe18a'
+    const customLabel = formationLabels.get(formation.id);
+    const isLocal = formation.id === localFormationId;
+    ctx.fillStyle = customLabel
+      ? (isLocal ? '#ffe18a' : '#fff0b8')
       : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
-    const suffix = formation.isPlayerControlled ? ' · YOU' : '';
+    const suffix = isLocal ? ' · YOU' : '';
     const objective = formation.mode === 'bannerAttack' ? ' · AXE' : '';
     const classTag = formation.squadClass === 'infantry' ? 'INF' : formation.squadClass === 'cavalry' ? 'CAV' : 'ART';
     const deploy = formation.squadClass === 'artillery' && formation.artilleryDeployed ? ' · DEPLOYED' : '';
-    ctx.fillText(`${formation.id} [${classTag}]${suffix}${objective}${deploy}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 54);
+    const name = customLabel ?? formation.id;
+    ctx.fillText(`${name} [${classTag}]${suffix}${objective}${deploy}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 54);
   }
 
   private drawProjectiles(projectiles: Projectile[], camera: Camera): void {

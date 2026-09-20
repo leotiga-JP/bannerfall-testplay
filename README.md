@@ -1,70 +1,170 @@
-# Bannerfall — Phase 3.6 Long Range Artillery
+# Bannerfall Phase 3.7 — Multiplayer Foundation
 
-Phase 3.5 Combined Arms をベースに、砲兵を本当の後方支援兵科として機能させるリワーク版です。
+Phase 3.6の戦場を、Cloudflare Tunnel + 自宅PCのNode.jsサーバーで複数人共有できるようにした版です。
 
-## この版の主な変更
+## 今回の主な実装
 
-- Artillery の最大射程を `1750 → 5250` に約3倍化
-- Artillery の理想交戦距離を `3900` に変更
-- 砲弾速度を上げ、遠距離射撃の待ち時間を調整
-- AI砲兵は最寄りの敵ではなく、戦場全体から「歩兵密集・複数部隊の集中・旗攻撃中の敵」を優先して照準
-- Musket の再装填進捗を Hotbar のアイテム下部バーで表示
-- Artillery は未展開時に展開進捗、展開後は再装填進捗を同じ Hotbar バーで表示
-- リスポーン時の兵科カードをマウスクリックで選択可能
-- `1 / 2 / 3` のキーボード選択も維持
+- タイトル画面
+- プレイヤー名入力
+- CREATE ROOM / JOIN ROOM
+- 6文字Room Code
+- 任意パスワード
+- BLUE / RED チーム選択
+- 1〜50部隊 / 陣営
+- リスポーン時間 5〜60秒
+- 最大20プレイヤー
+- 空き部隊はAIが担当
+- シングルプレイ = 1人だけRoomに入ってSTART
+- プレイヤー名を戦場上に表示
+- AI部隊はB01 / R01等の部隊名を表示
+- 切断したプレイヤー部隊はAIが引き継ぐ
+- Room作成者が抜けてもサーバー上の戦闘は継続
+- Invite URLコピー機能
 
-## Artillery
+## ネットワーク構成
 
-- 6兵
-- 移動を止めると約2.3秒で展開
-- 展開完了後に左クリック地点へ砲撃
-- 最大射程: 5250
-- 最小射程: 300
-- プレイヤー再装填: 約6.7秒
-- AIは遠距離の密集歩兵を優先して砲撃
-- 騎兵が接近すると退避を試みる
-- 近接戦闘には非常に弱い
+```text
+GitHub Pages Client
+        ↕ WSS
+Cloudflare Tunnel
+        ↕ HTTP/WebSocket
+自宅PC Node.js Server
+        ├ Room / Password / Lobby
+        ├ AI
+        ├ Combat
+        ├ Banner
+        ├ Respawn
+        └ Authoritative Simulation
+```
 
-通常カメラの外も射程に入ります。ミニマップをクリックしてFREE CAMERAへ移動し、遠方の地点を左クリックすることで、プレイヤー砲兵も画面外の戦場へ砲撃できます。`C`で自部隊へ戻れます。
+ゲームシミュレーションは **自宅PCのサーバー側が正解を持つ方式** です。
+サーバーは20Hzでシミュレーションし、10Hzで戦場スナップショットをクライアントへ配信します。クライアント側では操作感を良くするため短時間の予測表示を行い、サーバースナップショットで補正します。
 
-## Hotbar の進捗バー
+## GitHub Pages側
 
-### Line Infantry
+既存の `.github/workflows/deploy.yml` は **変更不要** です。
 
-Musketスロット下部のバーが再装填進捗を示します。満タンで射撃可能です。
+このPhase3.7のルート側ファイルを既存リポジトリへ上書きしてください。`server/`フォルダをGitHubに置いてもPagesビルドには影響しません。
 
-### Artillery
+```text
+index.html
+package.json
+README.md
+src/
+server/
+tsconfig.json
+vite.config.ts
+```
 
-Cannonスロット下部のバーは状態に応じて変化します。
+`vite.config.ts` は従来どおり `/bannerfall-testplay/` を使用しています。
 
-1. 移動停止後: 展開進捗
-2. 展開完了: READY
-3. 砲撃後: 再装填進捗
-4. 満タン: 再射撃可能
+## 自宅PCサーバーの起動
 
-## リスポーン時兵科選択
+サーバーは `server/` 単体ではなく、同じプロジェクトの `src/` を共有して使用します。GitHubリポジトリを自宅PCへcloneするか、このZIPを展開した状態で実行してください。
 
-プレイヤー部隊全滅時に中央へ兵科選択画面が表示されます。
+PowerShellまたはコマンドプロンプトで：
 
-- Line Infantry
-- Cavalry
-- Artillery
+```powershell
+cd <Bannerfallのフォルダ>\server
+npm install
+npm run start
+```
 
-カードをクリックして選択できます。従来通り `1 / 2 / 3` でも選択可能です。現在の軍構成と `RECOMMENDED` 兵科も表示されます。
+成功すると：
 
-## 既存仕様
+```text
+Bannerfall server running at http://127.0.0.1:8787
+Health: http://127.0.0.1:8787/health
+WebSocket: ws://127.0.0.1:8787/ws
+Simulation: 20 Hz / snapshots 10 Hz
+```
 
-- 20部隊 vs 20部隊
-- Line Infantry / Cavalry / Artillery
-- 敵Banner破壊で勝利
-- 後方Reinforcement Campから部隊単位リスポーン
-- InfantryのみAxeでBanner破壊可能
-- Cavalryの長距離Charge / Roadkill
-- Minimapクリックによるカメラ移動
-- `C` でプレイヤー追尾へ復帰
-- `F3` AIデバッグ
-- `Z / X / V` で0.5x / 1x / 2x
+Windowsでは `server\start-server.cmd` をダブルクリックしても起動できます。ただし最初の1回は `npm install` が必要です。
 
-## GitHub Pages
+## Cloudflare Quick Tunnel
 
-既存の `.github/workflows/deploy.yml` は変更不要です。今回のZIPには `.github` を含めていません。リポジトリ本体を上書きしてpushしてください。
+別のPowerShellで：
+
+```powershell
+cloudflared tunnel --url http://127.0.0.1:8787
+```
+
+例：
+
+```text
+https://example-random-name.trycloudflare.com
+```
+
+ブラウザで次を開いて健康状態を確認できます。
+
+```text
+https://example-random-name.trycloudflare.com/health
+```
+
+`/health` には `rooms / players / soldiers / tickAvgMs / tickMaxMs` も表示されます。20Hz運用では1tickの持ち時間は約50msなので、`tickAvgMs` が50msへ近づくほどサーバー負荷が高いと判断できます。
+
+Quick Tunnelは再起動するたびURLが変わります。
+
+## ゲーム開始
+
+1. GitHub PagesのBannerfallを開く
+2. PLAYER NAMEを入力
+3. SERVERに今回の `https://xxxxx.trycloudflare.com` を入力
+4. CREATE ROOM
+5. 部隊数・Respawn・Passwordを設定
+6. Roomを作る
+7. `COPY INVITE` で友人にURLを送る
+8. Passwordを設定した場合は別途友人へ伝える
+9. BLUE / REDを選択
+10. HostがSTART BATTLE
+
+Invite URLにはServer URLとRoom Codeが含まれます。PasswordはURLへ含めません。
+
+## シングルプレイ
+
+CREATE ROOM後、他プレイヤーを待たずにSTARTしてください。
+人間1部隊 + 残りAIで、マルチプレイと同じサーバールールを使って開始します。
+
+## Room設定
+
+- BLUE SQUADS: 1〜50
+- RED SQUADS: 1〜50
+- RESPAWN: 5〜60秒
+- PASSWORD: 任意
+- Player: 最大20人
+
+人間プレイヤーは総部隊数に含まれます。例えば20 vs 20でBLUEに3人いれば、BLUEはPlayer 3部隊 + AI 17部隊です。
+
+## 現段階の制限
+
+- 試合開始後の途中参加は未対応
+- サーバー再起動でRoomは消滅
+- アカウント / DB / ランキングなし
+- Quick Tunnel URLは固定されない
+- 50 vs 50 + 多人数は負荷試験用途。まず20 vs 20・2〜4人から確認推奨
+- ネットワーク補間・帯域最適化は今後改善余地あり
+
+## 切断時
+
+プレイヤーが切断すると、その人が操作していた部隊はAIへ戻ります。Room Hostが切断した場合は残っているプレイヤーへHost権限だけ移ります。ゲームシミュレーション自体は自宅PCサーバーが管理しているため継続します。
+
+## 開発確認
+
+クライアントTypeScriptは以下で型チェックできます。
+
+```powershell
+npm install
+npm run build
+```
+
+サーバー：
+
+```powershell
+cd server
+npm install
+npm run start
+```
+
+## deploy.yml
+
+今回も変更不要です。GitHub上に現在ある `.github/workflows/deploy.yml` をそのまま残してください。

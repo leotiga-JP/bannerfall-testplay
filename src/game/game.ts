@@ -1,8 +1,6 @@
-import { ArtilleryShell } from '../entities/artilleryShell';
 import { Banner } from '../entities/banner';
 import { Formation, type FormationMode } from '../entities/formation';
-import { Projectile } from '../entities/projectile';
-import { InputManager } from '../input/inputManager';
+import type { InputManager } from '../input/inputManager';
 import { BattleAiSystem } from '../systems/aiSystem';
 import {
   type CorpseParticle,
@@ -16,6 +14,20 @@ import { MeleeSystem, type MeleeStrike } from '../systems/meleeSystem';
 import { Camera } from './camera';
 import { GAME_CONFIG } from './config';
 import type { SquadClass, Team, Vec2, WeaponType } from './types';
+import { ArtilleryShell } from '../entities/artilleryShell';
+import { Projectile } from '../entities/projectile';
+import type { BattleNetSnapshot, ContinuousControl, PlayerAction } from '../network/protocol';
+
+
+export interface GameOptions {
+  squadsPerTeam?: number;
+  blueSquads?: number;
+  redSquads?: number;
+  respawnSeconds?: number;
+  localFormationId?: string;
+  humanFormationIds?: string[];
+  introEnabled?: boolean;
+}
 
 export interface AxeStrike {
   start: Vec2;
@@ -82,6 +94,10 @@ export interface GameSnapshot {
 export class Game {
   readonly formations: Formation[];
   readonly playerFormation: Formation;
+  readonly blueSquads: number;
+  readonly redSquads: number;
+  readonly respawnSeconds: number;
+  readonly humanFormationIds: Set<string>;
   readonly banners: Banner[];
   readonly camera: Camera;
   readonly projectiles: Projectile[] = [];
@@ -98,6 +114,9 @@ export class Game {
   private readonly meleeQuietTimers = new Map<string, number>();
   private readonly respawnTimers = new Map<string, number>();
   private readonly plannedRespawnClasses = new Map<string, SquadClass>();
+  private readonly remoteControls = new Map<string, ContinuousControl>();
+  private readonly humanWeapons = new Map<string, WeaponType>();
+  private networkSnapshotSeq = 0;
   private time = 0;
   private paused = false;
   private winner: Team | null = null;
@@ -118,9 +137,17 @@ export class Game {
   private contextualHint = '';
   private hintTimer = 0;
 
-  constructor(private readonly input: InputManager) {
+  constructor(private readonly input: InputManager, options: GameOptions = {}) {
+    const legacyCount = options.squadsPerTeam ?? GAME_CONFIG.army.squadsPerTeam;
+    this.blueSquads = Math.max(1, Math.min(50, Math.floor(options.blueSquads ?? legacyCount)));
+    this.redSquads = Math.max(1, Math.min(50, Math.floor(options.redSquads ?? legacyCount)));
+    this.respawnSeconds = Math.max(5, Math.min(60, options.respawnSeconds ?? GAME_CONFIG.army.respawnSeconds));
+    const defaultLocal = `B${String(Math.min(this.blueSquads, GAME_CONFIG.army.playerSquadIndex + 1)).padStart(2, '0')}`;
+    const localFormationId = options.localFormationId ?? defaultLocal;
+    this.humanFormationIds = new Set(options.humanFormationIds ?? [localFormationId]);
+    this.humanFormationIds.add(localFormationId);
     this.formations = this.createArmies();
-    const player = this.formations.find((formation) => formation.isPlayerControlled);
+    const player = this.formations.find((formation) => formation.id === localFormationId) ?? this.formations[0];
     if (!player) throw new Error('Player formation was not created.');
     this.playerFormation = player;
     this.banners = [
@@ -128,7 +155,13 @@ export class Game {
       new Banner('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.y }),
     ];
     this.camera = new Camera(this.blueBanner.position);
-    this.camera.setCinematic(this.blueBanner.position, 0.76);
+    this.introActive = options.introEnabled ?? true;
+    if (this.introActive) this.camera.setCinematic(this.blueBanner.position, 0.76);
+    else { this.introStage = 'done'; this.introProgress = 1; this.camera.centerOn(this.playerFormation.center); }
+    for (const formation of this.formations) {
+      formation.isPlayerControlled = this.humanFormationIds.has(formation.id);
+      if (formation.isPlayerControlled) this.humanWeapons.set(formation.id, formation.weapon);
+    }
     this.aiSystem.reset(this.formations);
   }
 
@@ -143,8 +176,8 @@ export class Game {
   reset(): void {
     for (let i = 0; i < this.formations.length; i += 1) {
       const formation = this.formations[i];
-      const teamIndex = i % GAME_CONFIG.army.squadsPerTeam;
-      const squadClass = this.initialClassFor(teamIndex);
+      const teamIndex = this.teamIndexOf(formation);
+      const squadClass = this.initialClassFor(teamIndex, this.squadCountFor(formation.team));
       const spawn = this.initialSpawnFor(formation.team, teamIndex);
       formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, squadClass);
       formation.spawnProtectionTimer = 0;
@@ -231,6 +264,7 @@ export class Game {
     }
 
     this.updatePlayerControl(dt, clickConsumedByMap ? null : primaryClick);
+    this.applyRemoteControls(dt);
     this.applyAiCommands(dt);
     this.updateCharges(dt);
     this.updateBannerAttacks(dt);
@@ -337,13 +371,133 @@ export class Game {
     };
   }
 
+  createNetworkSnapshot(): BattleNetSnapshot {
+    const formations = this.formations.map((formation) => ({
+      id: formation.id,
+      team: formation.team,
+      x: formation.center.x,
+      y: formation.center.y,
+      direction: formation.direction,
+      squadClass: formation.squadClass,
+      mode: formation.mode,
+      weapon: formation.weapon,
+      reloadTimer: formation.reloadTimer,
+      reloadDuration: formation.reloadDuration,
+      spawnProtectionTimer: formation.spawnProtectionTimer,
+      artilleryDeployTimer: formation.artilleryDeployTimer,
+      artilleryDeployed: formation.artilleryDeployed,
+      chargeMomentum: formation.chargeMomentum,
+      bannerTargetTeam: formation.bannerTargetTeam,
+      respawnRemaining: this.respawnTimers.get(formation.id) ?? null,
+      plannedClass: this.plannedRespawnClasses.get(formation.id) ?? null,
+      soldiers: formation.soldiers.map((soldier) => ({
+        x: soldier.position.x,
+        y: soldier.position.y,
+        hp: soldier.hp,
+        dead: soldier.dead,
+        direction: soldier.direction,
+        hit: soldier.hitFlashTimer,
+        stab: soldier.meleeStabTimer,
+      })),
+    }));
+    return {
+      seq: ++this.networkSnapshotSeq,
+      time: this.time,
+      winner: this.winner,
+      blueBannerHp: this.blueBanner.hp,
+      redBannerHp: this.redBanner.hp,
+      blueBannerUnderAttack: this.blueBanner.underAttackTimer,
+      redBannerUnderAttack: this.redBanner.underAttackTimer,
+      formations,
+      projectiles: this.projectiles.map((projectile) => ({
+        team: projectile.team,
+        x: projectile.position.x,
+        y: projectile.position.y,
+        vx: projectile.velocity.x,
+        vy: projectile.velocity.y,
+        life: projectile.life,
+        damage: projectile.damage,
+      })),
+      shells: this.artilleryShells.map((shell) => ({
+        team: shell.team,
+        x: shell.position.x,
+        y: shell.position.y,
+        targetX: shell.target.x,
+        targetY: shell.target.y,
+        vx: shell.velocity.x,
+        vy: shell.velocity.y,
+        active: shell.active,
+      })),
+    };
+  }
+
+  applyNetworkSnapshot(snapshot: BattleNetSnapshot): void {
+    if (snapshot.seq < this.networkSnapshotSeq) return;
+    this.networkSnapshotSeq = snapshot.seq;
+    this.time = snapshot.time;
+    this.winner = snapshot.winner;
+    this.blueBanner.hp = snapshot.blueBannerHp;
+    this.redBanner.hp = snapshot.redBannerHp;
+    this.blueBanner.underAttackTimer = snapshot.blueBannerUnderAttack;
+    this.redBanner.underAttackTimer = snapshot.redBannerUnderAttack;
+
+    for (const net of snapshot.formations) {
+      const formation = this.formations.find((candidate) => candidate.id === net.id);
+      if (!formation) continue;
+      if (formation.squadClass !== net.squadClass || formation.soldiers.length !== net.soldiers.length) {
+        formation.setClass(net.squadClass);
+      }
+      formation.center.x = net.x;
+      formation.center.y = net.y;
+      formation.direction = net.direction;
+      formation.mode = net.mode;
+      formation.weapon = net.weapon;
+      formation.reloadTimer = net.reloadTimer;
+      formation.reloadDuration = net.reloadDuration;
+      formation.spawnProtectionTimer = net.spawnProtectionTimer;
+      formation.artilleryDeployTimer = net.artilleryDeployTimer;
+      formation.artilleryDeployed = net.artilleryDeployed;
+      formation.chargeMomentum = net.chargeMomentum;
+      formation.bannerTargetTeam = net.bannerTargetTeam;
+      if (net.respawnRemaining === null) this.respawnTimers.delete(formation.id);
+      else this.respawnTimers.set(formation.id, net.respawnRemaining);
+      if (net.plannedClass === null) this.plannedRespawnClasses.delete(formation.id);
+      else this.plannedRespawnClasses.set(formation.id, net.plannedClass);
+      for (let i = 0; i < formation.soldiers.length; i += 1) {
+        const soldier = formation.soldiers[i];
+        const state = net.soldiers[i];
+        if (!state) continue;
+        soldier.position.x = state.x;
+        soldier.position.y = state.y;
+        soldier.hp = state.hp;
+        soldier.dead = state.dead;
+        soldier.direction = state.direction;
+        soldier.hitFlashTimer = state.hit;
+        soldier.meleeStabTimer = state.stab;
+      }
+    }
+
+    this.projectiles.length = 0;
+    for (const net of snapshot.projectiles) {
+      this.projectiles.push(new Projectile(net.team, { x: net.x, y: net.y }, { x: net.vx, y: net.vy }, net.life, net.damage));
+    }
+    this.artilleryShells.length = 0;
+    for (const net of snapshot.shells) {
+      const speed = Math.hypot(net.vx, net.vy);
+      const shell = new ArtilleryShell(net.team, { x: net.x, y: net.y }, { x: net.targetX, y: net.targetY }, speed);
+      shell.active = net.active;
+      this.artilleryShells.push(shell);
+    }
+  }
+
   private createArmies(): Formation[] {
     const formations: Formation[] = [];
     for (const team of ['blue', 'red'] as const) {
-      for (let i = 0; i < GAME_CONFIG.army.squadsPerTeam; i += 1) {
+      const count = this.squadCountFor(team);
+      for (let i = 0; i < count; i += 1) {
         const id = `${team === 'blue' ? 'B' : 'R'}${String(i + 1).padStart(2, '0')}`;
-        const isPlayer = team === 'blue' && i === GAME_CONFIG.army.playerSquadIndex;
-        const squadClass = this.initialClassFor(i);
+        const isPlayer = this.humanFormationIds.has(id);
+        const squadClass = this.initialClassFor(i, count);
         formations.push(new Formation(
           id,
           team,
@@ -357,30 +511,34 @@ export class Game {
     return formations;
   }
 
-  private initialClassFor(index: number): SquadClass {
-    if (index < GAME_CONFIG.army.initialInfantry) return 'infantry';
-    if (index < GAME_CONFIG.army.initialInfantry + GAME_CONFIG.army.initialCavalry) return 'cavalry';
+  private initialClassFor(index: number, count: number): SquadClass {
+    const ratio = (index + 0.5) / count;
+    if (ratio < 0.70) return 'infantry';
+    if (ratio < 0.90) return 'cavalry';
     return 'artillery';
   }
 
+  private formationGrid(index: number, count: number, rear: boolean): Vec2 {
+    const columns = count <= 20 ? Math.min(4, count) : count <= 35 ? 5 : 6;
+    const rows = Math.ceil(count / columns);
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const yMin = rear ? 500 : 520;
+    const yMax = rear ? GAME_CONFIG.world.height - 500 : GAME_CONFIG.world.height - 520;
+    const y = rows <= 1 ? GAME_CONFIG.world.height / 2 : yMin + (row / (rows - 1)) * (yMax - yMin);
+    const xBase = rear ? GAME_CONFIG.army.respawnX : GAME_CONFIG.army.initialSpawnX;
+    const gap = rear ? GAME_CONFIG.army.respawnColumnGap : GAME_CONFIG.army.initialColumnGap;
+    return { x: xBase + column * gap, y };
+  }
+
   private initialSpawnFor(team: Team, index: number): Vec2 {
-    const row = Math.floor(index / GAME_CONFIG.army.spawnColumns);
-    const column = index % GAME_CONFIG.army.spawnColumns;
-    const xOffset = GAME_CONFIG.army.initialSpawnX + column * GAME_CONFIG.army.initialColumnGap;
-    return {
-      x: team === 'blue' ? xOffset : GAME_CONFIG.world.width - xOffset,
-      y: GAME_CONFIG.army.initialSpawnY + row * GAME_CONFIG.army.initialRowGap,
-    };
+    const point = this.formationGrid(index, this.squadCountFor(team), false);
+    return { x: team === 'blue' ? point.x : GAME_CONFIG.world.width - point.x, y: point.y };
   }
 
   private respawnFor(team: Team, index: number): Vec2 {
-    const row = Math.floor(index / GAME_CONFIG.army.spawnColumns);
-    const column = index % GAME_CONFIG.army.spawnColumns;
-    const xOffset = GAME_CONFIG.army.respawnX + column * GAME_CONFIG.army.respawnColumnGap;
-    return {
-      x: team === 'blue' ? xOffset : GAME_CONFIG.world.width - xOffset,
-      y: GAME_CONFIG.army.respawnY + row * GAME_CONFIG.army.respawnRowGap,
-    };
+    const point = this.formationGrid(index, this.squadCountFor(team), true);
+    return { x: team === 'blue' ? point.x : GAME_CONFIG.world.width - point.x, y: point.y };
   }
 
   private updateIntro(rawDt: number): void {
@@ -569,9 +727,107 @@ export class Game {
     }
   }
 
+  releaseHumanFormation(formationId: string): void {
+    this.humanFormationIds.delete(formationId);
+    this.remoteControls.delete(formationId);
+    this.humanWeapons.delete(formationId);
+    const formation = this.formations.find((candidate) => candidate.id === formationId);
+    if (formation) formation.isPlayerControlled = false;
+    this.aiSystem.reset(this.formations);
+  }
+
+  setRemoteControl(control: ContinuousControl): void {
+    if (!this.humanFormationIds.has(control.formationId)) return;
+    this.remoteControls.set(control.formationId, control);
+    this.humanWeapons.set(control.formationId, control.weapon);
+  }
+
+  clearRemoteControl(formationId: string): void {
+    this.remoteControls.delete(formationId);
+  }
+
+  applyRemoteAction(action: PlayerAction): void {
+    const formation = this.formations.find((candidate) => candidate.id === action.formationId);
+    if (!formation || !formation.isPlayerControlled) return;
+
+    if (action.type === 'class') {
+      this.plannedRespawnClasses.set(formation.id, action.squadClass);
+      return;
+    }
+    if (formation.aliveCount() === 0 || this.winner) return;
+
+    if (action.type === 'weapon') {
+      if (formation.squadClass !== 'infantry') return;
+      this.humanWeapons.set(formation.id, action.weapon);
+      if (formation.mode === 'bannerAttack' && action.weapon !== 'axe') formation.cancelBannerAttack();
+      if (formation.mode === 'line' || formation.mode === 'reforming') formation.weapon = action.weapon;
+      return;
+    }
+    if (action.type === 'reform') {
+      if (formation.mode === 'charging' || formation.mode === 'melee') {
+        const target = this.nearestEnemyFormation(formation);
+        if (target) this.orderBreakOff(formation, target);
+        return;
+      }
+      if (formation.mode === 'bannerAttack') formation.cancelBannerAttack();
+      const target = this.nearestEnemyFormation(formation);
+      const direction = target
+        ? Math.atan2(target.center.y - formation.center.y, target.center.x - formation.center.x)
+        : formation.direction;
+      formation.beginReform(direction, undefined, GAME_CONFIG.reform.reloadPenalty);
+      return;
+    }
+    if (formation.mode !== 'line') return;
+
+    if (action.type === 'fire') {
+      if (formation.squadClass === 'artillery') {
+        this.performArtilleryShot(formation, action.target, GAME_CONFIG.artillery.playerReloadSeconds);
+      } else if (formation.squadClass === 'infantry' && this.weaponForFormation(formation) === 'musket' && formation.canVolley()) {
+        this.performVolley(formation, GAME_CONFIG.musket.playerReloadSeconds);
+      }
+      return;
+    }
+    if (action.type === 'charge') {
+      if (formation.squadClass === 'artillery') return;
+      if (formation.squadClass === 'infantry' && this.weaponForFormation(formation) !== 'bayonet') return;
+      const target = this.clampChargeTarget(formation, action.target);
+      formation.beginCharge(target);
+      return;
+    }
+    if (action.type === 'banner-attack') {
+      if (formation.squadClass !== 'infantry' || this.weaponForFormation(formation) !== 'axe') return;
+      const banner = this.bannerFor(action.targetTeam);
+      formation.beginBannerAttack(banner.team, banner.position);
+    }
+  }
+
+  private applyRemoteControls(dt: number): void {
+    for (const [formationId, control] of this.remoteControls) {
+      const formation = this.formations.find((candidate) => candidate.id === formationId);
+      if (!formation || !formation.isPlayerControlled || formation.aliveCount() === 0) continue;
+      if (formation.mode !== 'line') continue;
+      formation.direction = Math.atan2(control.aim.y - formation.center.y, control.aim.x - formation.center.x);
+      if (formation.squadClass === 'infantry') formation.weapon = this.weaponForFormation(formation);
+      else formation.weapon = 'bayonet';
+      const length = Math.hypot(control.moveX, control.moveY);
+      if (length > 0.001) {
+        const speed = formation.movementSpeed(true) * dt;
+        formation.center.x += (control.moveX / length) * speed;
+        formation.center.y += (control.moveY / length) * speed;
+        formation.markMoved();
+        this.clampFormationCenter(formation);
+      }
+    }
+  }
+
+  private weaponForFormation(formation: Formation): WeaponType {
+    return this.humanWeapons.get(formation.id) ?? (formation === this.playerFormation ? this.selectedWeapon : formation.weapon);
+  }
+
   private selectPlayerWeapon(weapon: WeaponType): void {
     if (this.playerFormation.squadClass !== 'infantry') return;
     this.selectedWeapon = weapon;
+    this.humanWeapons.set(this.playerFormation.id, weapon);
     if (this.playerFormation.aliveCount() === 0) return;
     if (this.playerFormation.mode === 'bannerAttack' && weapon !== 'axe') this.playerFormation.cancelBannerAttack();
     if (this.playerFormation.mode === 'line' || this.playerFormation.mode === 'reforming') this.playerFormation.weapon = weapon;
@@ -733,7 +989,7 @@ export class Game {
       if (formation.mode !== 'bannerAttack' || formation.aliveCount() === 0 || !formation.bannerTargetTeam) continue;
       const banner = this.bannerFor(formation.bannerTargetTeam);
       if (banner.destroyed) {
-        formation.weapon = formation.isPlayerControlled ? this.selectedWeapon : 'musket';
+        formation.weapon = formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket';
         formation.cancelBannerAttack(this.angleTo(formation.center, this.enemyDirectionPoint(formation.team)));
         continue;
       }
@@ -808,13 +1064,16 @@ export class Game {
 
       let remaining = this.respawnTimers.get(formation.id);
       if (remaining === undefined) {
-        remaining = GAME_CONFIG.army.respawnSeconds;
+        remaining = this.respawnSeconds;
         this.respawnTimers.set(formation.id, remaining);
         if (formation.isPlayerControlled) {
-          this.cancelChargeAim();
-          this.nextPlayerClass = formation.squadClass;
-          this.plannedRespawnClasses.set(formation.id, this.nextPlayerClass);
-          this.setNotice('YOUR SQUAD WAS WIPED — CHOOSE NEXT CLASS', 'warning', 4);
+          const planned = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
+          this.plannedRespawnClasses.set(formation.id, planned);
+          if (formation === this.playerFormation) {
+            this.cancelChargeAim();
+            this.nextPlayerClass = planned;
+            this.setNotice('YOUR SQUAD WAS WIPED — CHOOSE NEXT CLASS', 'warning', 4);
+          }
         } else {
           const chosen = this.aiSystem.chooseRespawnClass(formation, this.formations, this.banners, this.plannedRespawnClasses);
           this.plannedRespawnClasses.set(formation.id, chosen);
@@ -837,11 +1096,15 @@ export class Game {
       this.respawnTimers.delete(formation.id);
       this.plannedRespawnClasses.delete(formation.id);
       if (formation.isPlayerControlled) {
-        this.nextPlayerClass = chosenClass;
-        this.selectedWeapon = 'musket';
-        formation.weapon = chosenClass === 'infantry' ? 'musket' : 'bayonet';
-        this.camera.centerOn(formation.center);
-        this.setNotice(`${this.classLabel(chosenClass)} REDEPLOYED — REINFORCEMENT MARCH`, 'success', 3.2);
+        const nextWeapon: WeaponType = chosenClass === 'infantry' ? 'musket' : 'bayonet';
+        this.humanWeapons.set(formation.id, nextWeapon);
+        formation.weapon = nextWeapon;
+        if (formation === this.playerFormation) {
+          this.nextPlayerClass = chosenClass;
+          this.selectedWeapon = nextWeapon;
+          this.camera.centerOn(formation.center);
+          this.setNotice(`${this.classLabel(chosenClass)} REDEPLOYED — REINFORCEMENT MARCH`, 'success', 3.2);
+        }
       }
     }
   }
@@ -864,7 +1127,7 @@ export class Game {
           ? Math.atan2(target.center.y - formation.center.y, target.center.x - formation.center.x)
           : formation.direction;
         formation.weapon = formation.squadClass === 'infantry'
-          ? (formation.isPlayerControlled ? this.selectedWeapon : 'musket')
+          ? (formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket')
           : 'bayonet';
         formation.beginReform(direction, undefined, GAME_CONFIG.charge.postChargeReloadPenalty);
         this.meleeQuietTimers.delete(formation.id);
@@ -891,7 +1154,7 @@ export class Game {
     });
     const facing = Math.atan2(enemy.y - target.y, enemy.x - target.x);
     formation.weapon = formation.squadClass === 'infantry'
-      ? (formation.isPlayerControlled ? this.selectedWeapon : 'musket')
+      ? (formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket')
       : 'bayonet';
     formation.beginReform(facing, target, GAME_CONFIG.reform.breakOffReloadPenalty);
     if (formation.isPlayerControlled) this.screenShake = Math.max(this.screenShake, 1.4);
@@ -990,11 +1253,11 @@ export class Game {
     const dy = desiredTarget.y - formation.center.y;
     const distance = Math.hypot(dx, dy) || 1;
     if (distance > GAME_CONFIG.artillery.range) {
-      if (formation.isPlayerControlled) this.setHint('TARGET OUT OF ARTILLERY RANGE', 1.8);
+      if (formation === this.playerFormation) this.setHint('TARGET OUT OF ARTILLERY RANGE', 1.8);
       return;
     }
     if (distance < GAME_CONFIG.artillery.minRange) {
-      if (formation.isPlayerControlled) this.setHint('TARGET TOO CLOSE FOR CANNON', 1.8);
+      if (formation === this.playerFormation) this.setHint('TARGET TOO CLOSE FOR CANNON', 1.8);
       return;
     }
     formation.direction = Math.atan2(dy, dx);
@@ -1152,6 +1415,10 @@ export class Game {
     return team === 'blue' ? this.blueBanner : this.redBanner;
   }
 
+  private squadCountFor(team: Team): number {
+    return team === 'blue' ? this.blueSquads : this.redSquads;
+  }
+
   private teamIndexOf(formation: Formation): number {
     const prefix = formation.team === 'blue' ? 'B' : 'R';
     return Math.max(0, Number.parseInt(formation.id.replace(prefix, ''), 10) - 1);
@@ -1159,7 +1426,7 @@ export class Game {
 
   private playerCameraTarget(): Vec2 {
     if (this.playerFormation.aliveCount() > 0) return this.playerFormation.center;
-    return this.respawnFor('blue', GAME_CONFIG.army.playerSquadIndex);
+    return this.respawnFor(this.playerFormation.team, this.teamIndexOf(this.playerFormation));
   }
 
   private distanceToPlayer(point: Vec2): number {

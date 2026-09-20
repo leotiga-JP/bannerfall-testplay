@@ -1,0 +1,374 @@
+import http from 'node:http';
+import crypto from 'node:crypto';
+import { WebSocketServer, WebSocket, type RawData } from 'ws';
+import { Game } from '../src/game/game.ts';
+import type { InputManager } from '../src/input/inputManager.ts';
+import type { Team, Vec2, WeaponType } from '../src/game/types.ts';
+import type { PlayerAction, ContinuousControl, RoomState } from '../src/network/protocol.ts';
+
+const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || '127.0.0.1';
+const MAX_PLAYERS = 20;
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const TICK_SECONDS = 1 / 20;
+const SNAPSHOT_SECONDS = 1 / 10;
+
+interface ServerPlayer {
+  id: string;
+  name: string;
+  team: Team;
+  formationId: string | null;
+  ws: WebSocket;
+}
+
+interface PasswordRecord {
+  salt: string;
+  hash: string;
+}
+
+interface Room {
+  code: string;
+  phase: 'lobby' | 'battle';
+  ownerId: string;
+  password: PasswordRecord | null;
+  settings: { blueSquads: number; redSquads: number; respawnSeconds: number };
+  players: Map<string, ServerPlayer>;
+  game: Game | null;
+  snapshotClock: number;
+}
+
+interface Session {
+  id: string;
+  name: string;
+  roomCode: string | null;
+  ws: WebSocket;
+}
+
+class HeadlessInput {
+  isDown(_key: string): boolean { return false; }
+  consumePressed(_key: string): boolean { return false; }
+  consumePause(): boolean { return false; }
+  consumeRestart(): boolean { return false; }
+  consumeReform(): boolean { return false; }
+  consumeCenterCamera(): boolean { return false; }
+  consumeDebugToggle(): boolean { return false; }
+  consumeTimeScale(): number | null { return null; }
+  consumeWeaponSelection(): WeaponType | null { return null; }
+  consumeClassSelection(): null { return null; }
+  queueClassSelection(): void {}
+  consumePrimaryClick(): null { return null; }
+  consumeChargeStart(): boolean { return false; }
+  consumeRightPress(): boolean { return false; }
+  consumeBreakOff(): boolean { return false; }
+  consumeChargeRelease(): boolean { return false; }
+  isChargeHeld(): boolean { return false; }
+  getPointer(): Vec2 { return { x: 640, y: 360 }; }
+  consumePanDelta(): Vec2 { return { x: 0, y: 0 }; }
+  consumeWheelDelta(): number { return 0; }
+  clearActionInputs(): void {}
+  endFrame(): void {}
+}
+
+const rooms = new Map<string, Room>();
+const sessions = new Map<string, Session>();
+const tickSamples: number[] = [];
+let tickMaxMs = 0;
+
+function send(ws: WebSocket, payload: unknown): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+function cleanName(value: unknown): string {
+  const text = String(value ?? '').trim().replace(/[<>\u0000-\u001f]/g, '');
+  return text.slice(0, 24) || 'Player';
+}
+
+function randomCode(): string {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    let code = '';
+    for (let i = 0; i < 6; i += 1) code += CODE_ALPHABET[crypto.randomInt(0, CODE_ALPHABET.length)];
+    if (!rooms.has(code)) return code;
+  }
+  throw new Error('Could not allocate room code.');
+}
+
+function hashPassword(password: string): PasswordRecord | null {
+  if (!password) return null;
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(password, salt, 32);
+  return { salt: salt.toString('hex'), hash: hash.toString('hex') };
+}
+
+function verifyPassword(password: string, record: PasswordRecord | null): boolean {
+  if (!record) return !password;
+  const salt = Buffer.from(record.salt, 'hex');
+  const expected = Buffer.from(record.hash, 'hex');
+  const actual = crypto.scryptSync(password, salt, 32);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function publicRoom(room: Room): RoomState {
+  return {
+    code: room.code,
+    phase: room.phase,
+    settings: {
+      blueSquads: room.settings.blueSquads,
+      redSquads: room.settings.redSquads,
+      respawnSeconds: room.settings.respawnSeconds,
+      passwordProtected: !!room.password,
+    },
+    players: [...room.players.values()].map((player) => ({
+      id: player.id,
+      name: player.name,
+      team: player.team,
+      formationId: player.formationId,
+      owner: player.id === room.ownerId,
+      connected: true,
+    })),
+    ownerId: room.ownerId,
+  };
+}
+
+function broadcast(room: Room, payload: unknown): void {
+  const raw = JSON.stringify(payload);
+  for (const player of room.players.values()) {
+    if (player.ws.readyState === WebSocket.OPEN) player.ws.send(raw);
+  }
+}
+
+function broadcastRoom(room: Room): void {
+  broadcast(room, { type: 'room_state', room: publicRoom(room) });
+}
+
+function teamCount(room: Room, team: Team): number {
+  let count = 0;
+  for (const player of room.players.values()) if (player.team === team) count += 1;
+  return count;
+}
+
+function chooseTeam(room: Room): Team {
+  const blue = teamCount(room, 'blue');
+  const red = teamCount(room, 'red');
+  if (blue >= room.settings.blueSquads) return 'red';
+  if (red >= room.settings.redSquads) return 'blue';
+  return blue <= red ? 'blue' : 'red';
+}
+
+function removeFromRoom(session: Session, reason = 'left'): void {
+  if (!session.roomCode) return;
+  const room = rooms.get(session.roomCode);
+  session.roomCode = null;
+  if (!room) return;
+  const player = room.players.get(session.id);
+  room.players.delete(session.id);
+
+  if (room.game && player?.formationId) {
+    room.game.releaseHumanFormation(player.formationId);
+    broadcast(room, { type: 'notice', message: `${player.name} disconnected. AI has taken over ${player.formationId}.` });
+  }
+
+  if (room.players.size === 0) {
+    rooms.delete(room.code);
+    console.log(`[room ${room.code}] closed`);
+    return;
+  }
+  if (room.ownerId === session.id) room.ownerId = room.players.keys().next().value as string;
+  broadcastRoom(room);
+  console.log(`[room ${room.code}] ${session.name} ${reason}`);
+}
+
+function createRoom(session: Session, message: Record<string, unknown>): void {
+  removeFromRoom(session);
+  const settings = (message.settings ?? {}) as Record<string, unknown>;
+  const blueSquads = clampInt(settings.blueSquads, 1, 50, 20);
+  const redSquads = clampInt(settings.redSquads, 1, 50, 20);
+  const respawnSeconds = clampInt(settings.respawnSeconds, 5, 60, 20);
+  const code = randomCode();
+  const room: Room = {
+    code,
+    phase: 'lobby',
+    ownerId: session.id,
+    password: hashPassword(String(message.password ?? '')),
+    settings: { blueSquads, redSquads, respawnSeconds },
+    players: new Map(),
+    game: null,
+    snapshotClock: 0,
+  };
+  session.name = cleanName(message.name);
+  session.roomCode = code;
+  room.players.set(session.id, { id: session.id, name: session.name, team: 'blue', formationId: null, ws: session.ws });
+  rooms.set(code, room);
+  broadcastRoom(room);
+  console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s)`);
+}
+
+function joinRoom(session: Session, message: Record<string, unknown>): void {
+  const code = String(message.code ?? '').trim().toUpperCase();
+  const room = rooms.get(code);
+  if (!room) return send(session.ws, { type: 'error', message: 'Room not found.' });
+  if (room.phase !== 'lobby') return send(session.ws, { type: 'error', message: 'Match already started.' });
+  const totalSlots = room.settings.blueSquads + room.settings.redSquads;
+  if (room.players.size >= Math.min(MAX_PLAYERS, totalSlots)) return send(session.ws, { type: 'error', message: 'Room is full.' });
+  if (!verifyPassword(String(message.password ?? ''), room.password)) return send(session.ws, { type: 'error', message: 'Incorrect password.' });
+  removeFromRoom(session);
+  session.name = cleanName(message.name);
+  session.roomCode = code;
+  room.players.set(session.id, {
+    id: session.id,
+    name: session.name,
+    team: chooseTeam(room),
+    formationId: null,
+    ws: session.ws,
+  });
+  broadcastRoom(room);
+  console.log(`[room ${code}] ${session.name} joined`);
+}
+
+function changeTeam(session: Session, team: unknown): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room || room.phase !== 'lobby' || (team !== 'blue' && team !== 'red')) return;
+  const player = room.players.get(session.id);
+  if (!player) return;
+  const capacity = team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
+  const occupied = teamCount(room, team) - (player.team === team ? 1 : 0);
+  if (occupied >= capacity) return send(session.ws, { type: 'error', message: `${team.toUpperCase()} has no free squad slots.` });
+  player.team = team;
+  broadcastRoom(room);
+}
+
+function startMatch(session: Session): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room || room.phase !== 'lobby') return;
+  if (room.ownerId !== session.id) return send(session.ws, { type: 'error', message: 'Only the room host can start.' });
+  if (teamCount(room, 'blue') > room.settings.blueSquads || teamCount(room, 'red') > room.settings.redSquads) {
+    return send(session.ws, { type: 'error', message: 'Too many players for the selected army size.' });
+  }
+
+  const counters: Record<Team, number> = { blue: 0, red: 0 };
+  for (const player of room.players.values()) {
+    const index = counters[player.team]++;
+    player.formationId = `${player.team === 'blue' ? 'B' : 'R'}${String(index + 1).padStart(2, '0')}`;
+  }
+  const humanFormationIds = [...room.players.values()].flatMap((player) => player.formationId ? [player.formationId] : []);
+  const firstFormationId = humanFormationIds[0] ?? 'B01';
+  room.game = new Game(new HeadlessInput() as unknown as InputManager, {
+    blueSquads: room.settings.blueSquads,
+    redSquads: room.settings.redSquads,
+    respawnSeconds: room.settings.respawnSeconds,
+    localFormationId: firstFormationId,
+    humanFormationIds,
+    introEnabled: false,
+  });
+  room.phase = 'battle';
+  room.snapshotClock = 0;
+  broadcast(room, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server' } });
+  console.log(`[room ${room.code}] authoritative match started (${humanFormationIds.length} players)`);
+}
+
+function applyControl(session: Session, control: ContinuousControl): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  const player = room?.players.get(session.id);
+  if (!room?.game || room.phase !== 'battle' || !player?.formationId) return;
+  if (control?.formationId !== player.formationId) return;
+  room.game.setRemoteControl(control);
+}
+
+function applyAction(session: Session, action: PlayerAction): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  const player = room?.players.get(session.id);
+  if (!room?.game || room.phase !== 'battle' || !player?.formationId) return;
+  if (action?.formationId !== player.formationId) return;
+  room.game.applyRemoteAction(action);
+}
+
+function handleMessage(session: Session, raw: RawData): void {
+  let message: Record<string, unknown>;
+  try { message = JSON.parse(String(raw)) as Record<string, unknown>; }
+  catch { return send(session.ws, { type: 'error', message: 'Invalid JSON.' }); }
+  switch (message.type) {
+    case 'hello': session.name = cleanName(message.name); break;
+    case 'create_room': createRoom(session, message); break;
+    case 'join_room': joinRoom(session, message); break;
+    case 'change_team': changeTeam(session, message.team); break;
+    case 'start_match': startMatch(session); break;
+    case 'control': applyControl(session, message.control as ContinuousControl); break;
+    case 'action': applyAction(session, message.action as PlayerAction); break;
+    case 'leave_room': removeFromRoom(session); break;
+    case 'ping': send(session.ws, { type: 'pong', at: Number(message.at) || Date.now() }); break;
+    default: send(session.ws, { type: 'error', message: 'Unknown message type.' });
+  }
+}
+
+setInterval(() => {
+  const started = performance.now();
+  for (const room of rooms.values()) {
+    if (room.phase !== 'battle' || !room.game) continue;
+    room.game.update(TICK_SECONDS);
+    room.snapshotClock += TICK_SECONDS;
+    if (room.snapshotClock >= SNAPSHOT_SECONDS) {
+      room.snapshotClock = 0;
+      broadcast(room, { type: 'battle_snapshot', snapshot: room.game.createNetworkSnapshot() });
+    }
+  }
+  const elapsed = performance.now() - started;
+  tickSamples.push(elapsed);
+  if (tickSamples.length > 200) tickSamples.shift();
+  tickMaxMs = Math.max(tickMaxMs, elapsed);
+}, TICK_SECONDS * 1000);
+
+const server = http.createServer((req, res) => {
+  if (req.url === '/health') {
+    const battles = [...rooms.values()].filter((room) => room.phase === 'battle').length;
+    const soldiers = [...rooms.values()].reduce((sum, room) => {
+      if (!room.game) return sum;
+      return sum + room.game.formations.reduce((formationSum, formation) => formationSum + formation.soldiers.length, 0);
+    }, 0);
+    const tickAvgMs = tickSamples.length > 0 ? tickSamples.reduce((sum, value) => sum + value, 0) / tickSamples.length : 0;
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      ok: true,
+      service: 'bannerfall-server',
+      rooms: rooms.size,
+      battles,
+      players: sessions.size,
+      soldiers,
+      simulationHz: Math.round(1 / TICK_SECONDS),
+      snapshotHz: Math.round(1 / SNAPSHOT_SECONDS),
+      tickAvgMs: Number(tickAvgMs.toFixed(2)),
+      tickMaxMs: Number(tickMaxMs.toFixed(2)),
+    }));
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('Bannerfall Phase 3.7 Multiplayer Server');
+});
+
+const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: { threshold: 1024 }, maxPayload: 8 * 1024 * 1024 });
+
+wss.on('connection', (ws) => {
+  const id = crypto.randomUUID();
+  const session: Session = { id, name: 'Player', roomCode: null, ws };
+  sessions.set(id, session);
+  send(ws, { type: 'welcome', clientId: id });
+  console.log(`[connect] ${id}`);
+  ws.on('message', (raw) => handleMessage(session, raw));
+  ws.on('close', () => {
+    removeFromRoom(session, 'disconnected');
+    sessions.delete(id);
+    console.log(`[disconnect] ${id}`);
+  });
+  ws.on('error', (error) => console.error(`[socket ${id}]`, error.message));
+});
+
+server.listen(PORT, HOST, () => {
+  console.log(`Bannerfall server running at http://${HOST}:${PORT}`);
+  console.log(`Health: http://${HOST}:${PORT}/health`);
+  console.log(`WebSocket: ws://${HOST}:${PORT}/ws`);
+  console.log(`Simulation: ${Math.round(1 / TICK_SECONDS)} Hz / snapshots ${Math.round(1 / SNAPSHOT_SECONDS)} Hz`);
+});
