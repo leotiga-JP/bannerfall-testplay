@@ -1,4 +1,3 @@
-import { GAME_CONFIG } from '../game/config';
 import type { Team, Vec2 } from '../game/types';
 
 export class Unit {
@@ -9,26 +8,30 @@ export class Unit {
   formationSlotIndex: number;
   position: Vec2;
   direction = 0;
-  hp: number = GAME_CONFIG.soldier.maxHp;
+  maxHp: number;
+  hp: number;
   dead = false;
   hitFlashTimer = 0;
   meleeCooldown = 0;
   meleeStabTimer = 0;
   knockback: Vec2 = { x: 0, y: 0 };
 
-  constructor(id: string, team: Team, slotIndex: number, position: Vec2) {
+  constructor(id: string, team: Team, slotIndex: number, position: Vec2, maxHp: number) {
     this.id = id;
     this.team = team;
     this.slotIndex = slotIndex;
     this.formationSlotIndex = slotIndex;
     this.position = { ...position };
+    this.maxHp = maxHp;
+    this.hp = maxHp;
   }
 
-  reset(position: Vec2): void {
+  reset(position: Vec2, maxHp = this.maxHp): void {
     this.formationSlotIndex = this.slotIndex;
     this.position = { ...position };
     this.direction = 0;
-    this.hp = GAME_CONFIG.soldier.maxHp;
+    this.maxHp = maxHp;
+    this.hp = maxHp;
     this.dead = false;
     this.hitFlashTimer = 0;
     this.meleeCooldown = 0;

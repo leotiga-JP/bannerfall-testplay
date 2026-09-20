@@ -1,8 +1,9 @@
 import type { GameSnapshot } from '../game/game';
-import type { WeaponType } from '../game/types';
+import type { SquadClass } from '../game/types';
 
 export class Hud {
   private readonly slots: HTMLElement[];
+  private readonly classCards: HTMLElement[];
 
   constructor(
     private readonly statusElement: HTMLElement,
@@ -20,8 +21,13 @@ export class Hud {
     private readonly objectiveProgress: HTMLElement,
     private readonly contextHint: HTMLElement,
     hotbar: HTMLElement,
+    private readonly classSelector: HTMLElement,
+    private readonly respawnCountdown: HTMLElement,
+    private readonly armyComposition: HTMLElement,
+    private readonly classRecommendation: HTMLElement,
   ) {
-    this.slots = Array.from(hotbar.querySelectorAll<HTMLElement>('.slot[data-weapon]'));
+    this.slots = Array.from(hotbar.querySelectorAll<HTMLElement>('.slot[data-slot]'));
+    this.classCards = Array.from(classSelector.querySelectorAll<HTMLElement>('.class-card[data-class]'));
   }
 
   update(snapshot: GameSnapshot): void {
@@ -31,7 +37,7 @@ export class Hud {
       : snapshot.winner
         ? snapshot.winner === 'blue' ? 'BLUE VICTORY' : 'RED VICTORY'
         : snapshot.playerRespawn !== null
-          ? 'RESPAWNING'
+          ? 'CHOOSE CLASS'
           : snapshot.playerMode === 'bannerAttack'
             ? snapshot.playerBannerInRange ? 'AXE ATTACK' : 'OBJECTIVE MOVE'
             : snapshot.chargeAiming
@@ -42,7 +48,9 @@ export class Hud {
                   ? 'MELEE'
                   : snapshot.playerMode === 'reforming'
                     ? 'REFORMING'
-                    : ready ? 'READY' : 'RELOADING';
+                    : snapshot.playerClass === 'artillery' && !snapshot.playerArtilleryDeployed
+                      ? 'DEPLOYING'
+                      : ready ? 'READY' : 'RELOADING';
 
     this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
     this.cameraElement.textContent = `CAM ${snapshot.cameraFollow ? 'FOLLOW' : 'FREE'} · ${snapshot.cameraZoom.toFixed(2)}x · TIME ${snapshot.timeScale.toFixed(1)}x${snapshot.debugAi ? ' · AI DEBUG' : ''}`;
@@ -57,7 +65,8 @@ export class Hud {
     this.redBannerCard.classList.toggle('under-attack', snapshot.redBannerUnderAttack);
 
     this.updatePlayerPanel(snapshot, ready);
-    this.updateHotbar(snapshot.selectedWeapon);
+    this.updateHotbar(snapshot);
+    this.updateClassSelector(snapshot);
 
     this.notice.textContent = snapshot.noticeText;
     this.notice.className = `notice ${snapshot.noticeKind}${snapshot.noticeVisible ? '' : ' hidden'}`;
@@ -75,12 +84,13 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall P3 — Blue ${bluePercent}% | Red ${redPercent}%`;
+    document.title = `Bannerfall P3.5 — Blue ${bluePercent}% | Red ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
+    const className = this.classLabel(snapshot.playerClass);
     if (snapshot.playerRespawn !== null) {
-      this.playerState.textContent = `B10 · SQUAD WIPED`;
+      this.playerState.textContent = `B10 · SQUAD WIPED · NEXT ${this.classLabel(snapshot.playerNextClass)}`;
       this.playerDetail.textContent = `RESPAWN ${snapshot.playerRespawn.toFixed(1)}s`;
       return;
     }
@@ -88,7 +98,20 @@ export class Hud {
     const mode = snapshot.playerMode === 'bannerAttack'
       ? snapshot.playerBannerInRange ? 'DESTROYING BANNER' : 'TO BANNER'
       : snapshot.playerMode.toUpperCase();
-    this.playerState.textContent = `B10 · ${snapshot.playerAlive}/20 · ${mode}`;
+    this.playerState.textContent = `B10 · ${className} · ${snapshot.playerAlive}/${snapshot.playerMaxSoldiers} · ${mode}`;
+
+    if (snapshot.playerClass === 'cavalry') {
+      this.playerDetail.textContent = snapshot.playerMode === 'charging' ? 'MOMENTUM CHARGE' : 'SABRE · RMB / SPACE TO CHARGE';
+      return;
+    }
+    if (snapshot.playerClass === 'artillery') {
+      if (!snapshot.playerArtilleryDeployed) {
+        this.playerDetail.textContent = `CANNON · DEPLOY ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}%`;
+      } else {
+        this.playerDetail.textContent = ready ? 'CANNON · READY' : `CANNON · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
+      }
+      return;
+    }
 
     if (snapshot.selectedWeapon === 'musket') {
       this.playerDetail.textContent = ready ? 'MUSKET · READY' : `MUSKET · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
@@ -99,9 +122,64 @@ export class Hud {
     }
   }
 
-  private updateHotbar(selected: WeaponType): void {
-    for (const slot of this.slots) {
-      slot.classList.toggle('selected', slot.dataset.weapon === selected);
+  private updateHotbar(snapshot: GameSnapshot): void {
+    for (const slot of this.slots) this.clearSlot(slot);
+    if (snapshot.playerClass === 'infantry') {
+      this.configureSlot(0, '1', '━', 'MUSKET', snapshot.selectedWeapon === 'musket');
+      this.configureSlot(1, '2', '†', 'BAYONET', snapshot.selectedWeapon === 'bayonet');
+      this.configureSlot(2, '3', '⌁', 'AXE', snapshot.selectedWeapon === 'axe');
+    } else if (snapshot.playerClass === 'cavalry') {
+      this.configureSlot(0, 'RMB', '➤', 'CHARGE', snapshot.chargeAiming || snapshot.playerMode === 'charging');
+      this.configureSlot(1, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
+      this.configureSlot(2, '—', '†', 'SABRE', snapshot.playerMode === 'melee');
+    } else {
+      this.configureSlot(0, 'LMB', '●', 'CANNON', snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0);
+      this.configureSlot(1, 'AUTO', '⌛', snapshot.playerArtilleryDeployed ? 'DEPLOYED' : 'DEPLOY', !snapshot.playerArtilleryDeployed);
+      this.configureSlot(2, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
     }
+  }
+
+  private updateClassSelector(snapshot: GameSnapshot): void {
+    const active = snapshot.playerRespawn !== null && !snapshot.winner;
+    this.classSelector.classList.toggle('hidden', !active);
+    if (!active || snapshot.playerRespawn === null) return;
+    this.respawnCountdown.textContent = snapshot.playerRespawn.toFixed(1);
+    this.armyComposition.textContent = `BLUE · INF ${snapshot.blueClasses.infantry} / CAV ${snapshot.blueClasses.cavalry} / ART ${snapshot.blueClasses.artillery}`;
+    this.classRecommendation.textContent = `RECOMMENDED · ${this.classLabel(snapshot.playerRecommendedClass)}`;
+    for (const card of this.classCards) {
+      const value = card.dataset.class as SquadClass | undefined;
+      card.classList.toggle('selected', value === snapshot.playerNextClass);
+      card.classList.toggle('recommended', value === snapshot.playerRecommendedClass);
+    }
+  }
+
+  private configureSlot(index: number, key: string, icon: string, label: string, selected: boolean): void {
+    const slot = this.slots[index];
+    if (!slot) return;
+    slot.classList.remove('empty');
+    slot.classList.toggle('selected', selected);
+    const keyElement = slot.querySelector<HTMLElement>('.key');
+    const iconElement = slot.querySelector<HTMLElement>('.icon');
+    const labelElement = slot.querySelector<HTMLElement>('small');
+    if (keyElement) keyElement.textContent = key;
+    if (iconElement) iconElement.textContent = icon;
+    if (labelElement) labelElement.textContent = label;
+  }
+
+  private clearSlot(slot: HTMLElement): void {
+    slot.classList.add('empty');
+    slot.classList.remove('selected');
+    const keyElement = slot.querySelector<HTMLElement>('.key');
+    const iconElement = slot.querySelector<HTMLElement>('.icon');
+    const labelElement = slot.querySelector<HTMLElement>('small');
+    if (keyElement) keyElement.textContent = '';
+    if (iconElement) iconElement.textContent = '';
+    if (labelElement) labelElement.textContent = '';
+  }
+
+  private classLabel(squadClass: SquadClass): string {
+    if (squadClass === 'cavalry') return 'CAVALRY';
+    if (squadClass === 'artillery') return 'ARTILLERY';
+    return 'LINE INFANTRY';
   }
 }

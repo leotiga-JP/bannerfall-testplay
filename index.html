@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3 - Objective Warfare prototype" />
-    <title>Bannerfall - Phase 3 Objective Warfare</title>
+    <meta name="description" content="Bannerfall Phase 3.5 - Combined Arms prototype" />
+    <title>Bannerfall - Phase 3.5 Combined Arms</title>
   </head>
   <body>
     <main id="app">
@@ -12,16 +12,16 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p>Phase 3 — Objective Warfare</p>
+            <p>Phase 3.5 — Combined Arms</p>
           </div>
           <div class="top-status">
             <span id="status">BATTLE</span>
-            <span id="camera-status">CAM FOLLOW · 0.58x</span>
+            <span id="camera-status">CAM FOLLOW · 0.55x</span>
           </div>
         </header>
 
         <div class="canvas-wrap">
-          <canvas id="game" width="1280" height="720" aria-label="Bannerfall Phase 3 battlefield"></canvas>
+          <canvas id="game" width="1280" height="720" aria-label="Bannerfall Phase 3.5 battlefield"></canvas>
 
           <div class="banner-hud" aria-label="Banner health">
             <div id="blue-banner-card" class="banner-card blue">
@@ -38,22 +38,50 @@
           <div id="objective-progress" class="objective-progress hidden">DESTROYING BANNER</div>
 
           <div id="player-panel" class="player-panel">
-            <strong id="player-state">B10 · 20/20 · LINE</strong>
+            <strong id="player-state">B10 · LINE INFANTRY · 20/20</strong>
             <span id="player-detail">MUSKET · READY</span>
           </div>
 
           <div id="context-hint" class="context-hint hidden"></div>
 
-          <div id="hotbar" class="hotbar" aria-label="Equipment hotbar">
-            <div class="slot selected" data-weapon="musket"><span class="key">1</span><span class="icon musket-icon">━</span><small>MUSKET</small></div>
-            <div class="slot" data-weapon="bayonet"><span class="key">2</span><span class="icon bayonet-icon">†</span><small>BAYONET</small></div>
-            <div class="slot" data-weapon="axe"><span class="key">3</span><span class="icon axe-icon">⌁</span><small>AXE</small></div>
-            <div class="slot empty"><span class="key">4</span></div>
-            <div class="slot empty"><span class="key">5</span></div>
-            <div class="slot empty"><span class="key">6</span></div>
-            <div class="slot empty"><span class="key">7</span></div>
-            <div class="slot empty"><span class="key">8</span></div>
-            <div class="slot empty"><span class="key">9</span></div>
+          <div id="hotbar" class="hotbar" aria-label="Action hotbar">
+            <div class="slot" data-slot="1"><span class="key">1</span><span class="icon">━</span><small>MUSKET</small></div>
+            <div class="slot" data-slot="2"><span class="key">2</span><span class="icon">†</span><small>BAYONET</small></div>
+            <div class="slot" data-slot="3"><span class="key">3</span><span class="icon">⌁</span><small>AXE</small></div>
+            <div class="slot empty" data-slot="4"><span class="key">4</span><span class="icon"></span><small></small></div>
+            <div class="slot empty" data-slot="5"><span class="key">5</span><span class="icon"></span><small></small></div>
+            <div class="slot empty" data-slot="6"><span class="key">6</span><span class="icon"></span><small></small></div>
+            <div class="slot empty" data-slot="7"><span class="key">7</span><span class="icon"></span><small></small></div>
+            <div class="slot empty" data-slot="8"><span class="key">8</span><span class="icon"></span><small></small></div>
+            <div class="slot empty" data-slot="9"><span class="key">9</span><span class="icon"></span><small></small></div>
+          </div>
+
+          <div id="class-selector" class="class-selector hidden" aria-label="Respawn class selection">
+            <div class="class-selector-header">
+              <h2>CHOOSE NEXT FORMATION</h2>
+              <p>Respawn in <strong id="respawn-countdown">18.0</strong>s · 選択しなければ現在の兵科を維持</p>
+            </div>
+            <div class="class-cards">
+              <div class="class-card" data-class="infantry">
+                <span class="class-key">1</span><strong>LINE INFANTRY</strong>
+                <small>20兵 · 射撃 / 銃剣 / 斧</small>
+                <em>旗を破壊できる唯一の兵科</em>
+              </div>
+              <div class="class-card" data-class="cavalry">
+                <span class="class-key">2</span><strong>CAVALRY</strong>
+                <small>12騎 · 高速 / 長距離突撃</small>
+                <em>砲兵狩り・側面突破</em>
+              </div>
+              <div class="class-card" data-class="artillery">
+                <span class="class-key">3</span><strong>ARTILLERY</strong>
+                <small>6兵 · 超長射程 / 範囲攻撃</small>
+                <em>停止して展開。接近戦に弱い</em>
+              </div>
+            </div>
+            <div class="class-intel">
+              <span id="army-composition">BLUE · INF 14 / CAV 4 / ART 2</span>
+              <span id="class-recommendation">RECOMMENDED · LINE INFANTRY</span>
+            </div>
           </div>
 
           <div class="overlay hidden" id="pause-overlay">
@@ -66,13 +94,10 @@
 
         <footer class="controls">
           <span><kbd>WASD</kbd> 部隊移動</span>
-          <span><kbd>1</kbd> Musket</span>
-          <span><kbd>2</kbd> Bayonet</span>
-          <span><kbd>3</kbd> Axe</span>
-          <span><kbd>Left Click</kbd> 射撃</span>
-          <span><kbd>Hold Right / Space</kbd> 銃剣突撃</span>
-          <span><kbd>Axe + Right Click Banner</kbd> 旗破壊</span>
-          <span><kbd>F</kbd> 再整列</span>
+          <span><kbd>Infantry 1/2/3</kbd> Musket / Bayonet / Axe</span>
+          <span><kbd>Cavalry RMB / Space</kbd> 長距離突撃</span>
+          <span><kbd>Artillery LMB</kbd> 展開後に砲撃</span>
+          <span><kbd>F</kbd> 再整列 / 離脱</span>
           <span><kbd>Wheel</kbd> ズーム</span>
           <span><kbd>Minimap Click</kbd> カメラ移動</span>
           <span><kbd>C</kbd> 自部隊へ戻る</span>

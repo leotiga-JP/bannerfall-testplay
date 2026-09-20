@@ -1,4 +1,4 @@
-import type { Vec2, WeaponType } from '../game/types';
+import type { SquadClass, Vec2, WeaponType } from '../game/types';
 
 export class InputManager {
   private readonly keys = new Set<string>();
@@ -111,6 +111,13 @@ export class InputManager {
     if (this.consumePressed('1')) return 'musket';
     if (this.consumePressed('2')) return 'bayonet';
     if (this.consumePressed('3')) return 'axe';
+    return null;
+  }
+
+  consumeClassSelection(): SquadClass | null {
+    if (this.consumePressed('1')) return 'infantry';
+    if (this.consumePressed('2')) return 'cavalry';
+    if (this.consumePressed('3')) return 'artillery';
     return null;
   }
 

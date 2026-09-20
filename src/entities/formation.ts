@@ -1,16 +1,25 @@
 import { GAME_CONFIG } from '../game/config';
-import type { Team, Vec2, WeaponType } from '../game/types';
+import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
 import { Unit } from './unit';
 
 export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming' | 'bannerAttack';
 
+interface ClassSpec {
+  soldiers: number;
+  maxHp: number;
+  rows: number;
+  lateralSpacing: number;
+  rankSpacing: number;
+}
+
 export class Formation {
   readonly id: string;
   readonly team: Team;
-  readonly soldiers: Unit[];
+  soldiers: Unit[] = [];
   readonly isPlayerControlled: boolean;
   center: Vec2;
   direction: number;
+  squadClass: SquadClass;
   reloadTimer = 0;
   volleysFired = 0;
   mode: FormationMode = 'line';
@@ -21,47 +30,77 @@ export class Formation {
   spawnProtectionTimer = 0;
   debugIntent = 'HOLD';
   debugTargetId: string | null = null;
+  artilleryDeployTimer = 0;
+  artilleryDeployed = false;
+  chargeMomentum = 0;
+  readonly chargeVictims = new Set<string>();
 
-  private layoutCount: number;
+  private layoutCount = 0;
+  private movedThisFrame = false;
 
-  constructor(id: string, team: Team, center: Vec2, direction: number, isPlayerControlled = false) {
+  constructor(
+    id: string,
+    team: Team,
+    center: Vec2,
+    direction: number,
+    isPlayerControlled = false,
+    squadClass: SquadClass = 'infantry',
+  ) {
     this.id = id;
     this.team = team;
     this.center = { ...center };
     this.direction = direction;
     this.isPlayerControlled = isPlayerControlled;
-    const count = GAME_CONFIG.formation.rows * GAME_CONFIG.formation.columns;
-    this.layoutCount = count;
-    this.soldiers = Array.from({ length: count }, (_, index) => {
-      const unit = new Unit(`${id}-${index}`, team, index, this.slotPosition(index, count));
-      unit.direction = direction;
-      return unit;
-    });
+    this.squadClass = squadClass;
+    this.rebuildSoldiers();
   }
 
-  reset(center: Vec2, direction: number): void {
+  reset(center: Vec2, direction: number, squadClass: SquadClass = this.squadClass): void {
     this.center = { ...center };
     this.direction = direction;
+    if (squadClass !== this.squadClass || this.soldiers.length !== this.classSpec(squadClass).soldiers) {
+      this.squadClass = squadClass;
+      this.rebuildSoldiers();
+    }
     this.reloadTimer = 0;
     this.volleysFired = 0;
     this.mode = 'line';
     this.chargeTarget = null;
     this.bannerTargetTeam = null;
     this.bannerAttackTimer = 0;
-    this.weapon = 'musket';
+    this.weapon = squadClass === 'infantry' ? 'musket' : 'bayonet';
     this.spawnProtectionTimer = GAME_CONFIG.army.spawnProtectionSeconds;
     this.debugIntent = this.isPlayerControlled ? 'PLAYER' : 'HOLD';
     this.debugTargetId = null;
     this.layoutCount = this.soldiers.length;
+    this.artilleryDeployTimer = 0;
+    this.artilleryDeployed = false;
+    this.chargeMomentum = 0;
+    this.chargeVictims.clear();
+    this.movedThisFrame = false;
+    const spec = this.classSpec();
     for (const soldier of this.soldiers) {
       soldier.formationSlotIndex = soldier.slotIndex;
-      soldier.reset(this.slotPosition(soldier.slotIndex, this.layoutCount));
+      soldier.reset(this.slotPosition(soldier.slotIndex, this.layoutCount), spec.maxHp);
       soldier.direction = direction;
     }
   }
 
+  setClass(squadClass: SquadClass): void {
+    this.squadClass = squadClass;
+    this.rebuildSoldiers();
+  }
+
+  markMoved(): void {
+    this.movedThisFrame = true;
+    if (this.squadClass === 'artillery') {
+      this.artilleryDeployed = false;
+      this.artilleryDeployTimer = 0;
+    }
+  }
+
   beginCharge(target: Vec2): boolean {
-    if (this.mode !== 'line' || this.aliveCount() === 0) return false;
+    if (this.mode !== 'line' || this.aliveCount() === 0 || this.squadClass === 'artillery') return false;
     const dx = target.x - this.center.x;
     const dy = target.y - this.center.y;
     const distance = Math.hypot(dx, dy);
@@ -71,6 +110,8 @@ export class Formation {
     this.chargeTarget = { ...target };
     this.bannerTargetTeam = null;
     this.mode = 'charging';
+    this.chargeMomentum = this.squadClass === 'cavalry' ? 1 : 0;
+    this.chargeVictims.clear();
     return true;
   }
 
@@ -83,10 +124,13 @@ export class Formation {
       this.center = { ...this.chargeTarget };
       return true;
     }
-    const step = Math.min(distance, GAME_CONFIG.charge.moveSpeed * dt);
+    const baseSpeed = this.squadClass === 'cavalry' ? GAME_CONFIG.cavalry.chargeSpeed : GAME_CONFIG.charge.moveSpeed;
+    const speed = this.squadClass === 'cavalry' ? baseSpeed * Math.max(0.45, this.chargeMomentum) : baseSpeed;
+    const step = Math.min(distance, speed * dt);
     this.center.x += (dx / distance) * step;
     this.center.y += (dy / distance) * step;
     this.direction = Math.atan2(dy, dx);
+    this.markMoved();
     return distance - step <= GAME_CONFIG.charge.stopDistance;
   }
 
@@ -96,10 +140,12 @@ export class Formation {
     this.chargeTarget = null;
     this.bannerTargetTeam = null;
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
+    this.artilleryDeployed = false;
+    this.artilleryDeployTimer = 0;
   }
 
   beginBannerAttack(targetTeam: Team, targetPosition: Vec2): boolean {
-    if (this.aliveCount() === 0 || targetTeam === this.team) return false;
+    if (this.aliveCount() === 0 || targetTeam === this.team || this.squadClass !== 'infantry') return false;
     this.weapon = 'axe';
     this.mode = 'bannerAttack';
     this.bannerTargetTeam = targetTeam;
@@ -132,6 +178,8 @@ export class Formation {
     this.bannerTargetTeam = null;
     this.bannerAttackTimer = 0;
     this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
+    this.artilleryDeployed = false;
+    this.artilleryDeployTimer = 0;
     return true;
   }
 
@@ -139,6 +187,14 @@ export class Formation {
     this.reloadTimer = Math.max(0, this.reloadTimer - dt);
     this.spawnProtectionTimer = Math.max(0, this.spawnProtectionTimer - dt);
     for (const soldier of this.soldiers) soldier.update(dt);
+
+    if (this.squadClass === 'artillery' && this.mode === 'line') {
+      if (!this.movedThisFrame) {
+        this.artilleryDeployTimer = Math.min(GAME_CONFIG.artillery.deploySeconds, this.artilleryDeployTimer + dt);
+        this.artilleryDeployed = this.artilleryDeployTimer >= GAME_CONFIG.artillery.deploySeconds;
+      }
+    }
+    this.movedThisFrame = false;
 
     if (this.mode === 'melee') {
       this.center = this.averageAlivePosition();
@@ -178,8 +234,24 @@ export class Formation {
     return count;
   }
 
+  maxSoldiers(): number {
+    return this.soldiers.length;
+  }
+
   canVolley(): boolean {
-    return this.mode === 'line' && this.weapon === 'musket' && this.reloadTimer <= 0 && this.aliveCount() > 0;
+    return this.squadClass === 'infantry'
+      && this.mode === 'line'
+      && this.weapon === 'musket'
+      && this.reloadTimer <= 0
+      && this.aliveCount() > 0;
+  }
+
+  canArtilleryFire(): boolean {
+    return this.squadClass === 'artillery'
+      && this.mode === 'line'
+      && this.artilleryDeployed
+      && this.reloadTimer <= 0
+      && this.aliveCount() > 0;
   }
 
   beginReload(seconds: number): void {
@@ -203,10 +275,28 @@ export class Formation {
     return { x: x / alive.length, y: y / alive.length };
   }
 
+  maxChargeDistance(): number {
+    return this.squadClass === 'cavalry' ? GAME_CONFIG.cavalry.chargeMaxDistance : GAME_CONFIG.charge.maxDistance;
+  }
+
+  movementSpeed(player: boolean, retreat = false): number {
+    if (this.squadClass === 'cavalry') {
+      if (retreat) return GAME_CONFIG.cavalry.aiRetreatSpeed;
+      return player ? GAME_CONFIG.cavalry.playerMoveSpeed : GAME_CONFIG.cavalry.aiMoveSpeed;
+    }
+    if (this.squadClass === 'artillery') {
+      if (retreat) return GAME_CONFIG.artillery.aiRetreatSpeed;
+      return player ? GAME_CONFIG.artillery.playerMoveSpeed : GAME_CONFIG.artillery.aiMoveSpeed;
+    }
+    if (retreat) return GAME_CONFIG.infantry.aiRetreatSpeed;
+    return player ? GAME_CONFIG.infantry.playerMoveSpeed : GAME_CONFIG.infantry.aiMoveSpeed;
+  }
+
   slotPosition(index: number, count = this.layoutCount): Vec2 {
     const layout = this.layoutFor(index, count);
-    const lateral = (layout.column - (layout.rowCount - 1) / 2) * GAME_CONFIG.formation.lateralSpacing;
-    const depth = layout.row * GAME_CONFIG.formation.rankSpacing;
+    const spec = this.classSpec();
+    const lateral = (layout.column - (layout.rowCount - 1) / 2) * spec.lateralSpacing;
+    const depth = layout.row * spec.rankSpacing;
     const forwardX = Math.cos(this.direction);
     const forwardY = Math.sin(this.direction);
     const rightX = -forwardY;
@@ -217,12 +307,28 @@ export class Formation {
     };
   }
 
+  private classSpec(squadClass: SquadClass = this.squadClass): ClassSpec {
+    return GAME_CONFIG[squadClass];
+  }
+
+  private rebuildSoldiers(): void {
+    const spec = this.classSpec();
+    this.layoutCount = spec.soldiers;
+    this.soldiers = Array.from({ length: spec.soldiers }, (_, index) => {
+      const unit = new Unit(`${this.id}-${index}`, this.team, index, this.slotPosition(index, spec.soldiers), spec.maxHp);
+      unit.direction = this.direction;
+      return unit;
+    });
+  }
+
   private layoutFor(index: number, count: number): { row: number; column: number; rowCount: number } {
     if (count <= 1) return { row: 0, column: 0, rowCount: 1 };
-    const frontCount = Math.ceil(count / 2);
-    const rearCount = Math.floor(count / 2);
-    if (index < frontCount) return { row: 0, column: index, rowCount: frontCount };
-    return { row: 1, column: index - frontCount, rowCount: Math.max(1, rearCount) };
+    const rows = Math.max(1, Math.min(this.classSpec().rows, count));
+    const perRow = Math.ceil(count / rows);
+    const row = Math.min(rows - 1, Math.floor(index / perRow));
+    const rowStart = row * perRow;
+    const rowCount = Math.min(perRow, count - rowStart);
+    return { row, column: index - rowStart, rowCount: Math.max(1, rowCount) };
   }
 
   private assignCompactSlots(alive: Unit[]): void {

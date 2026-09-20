@@ -76,13 +76,19 @@ export class MeleeSystem {
       const enemyUnits = this.nearbyEnemyUnits(formation, formations);
       if (enemyUnits.length === 0) continue;
       const own = formation.aliveSoldiers();
-      this.moveSide(own, enemyUnits, dt);
+      this.moveSide(formation, own, enemyUnits, dt);
       this.collectAttacks(own, enemyUnits, pendingHits);
     }
 
     for (const hit of pendingHits) {
       if (hit.attacker.dead || hit.target.dead) continue;
-      hit.attacker.meleeCooldown = GAME_CONFIG.melee.attackCooldown * (0.88 + Math.random() * 0.24);
+      const attackerFormationForCooldown = formations.find((formation) => formation.team === hit.attacker.team && formation.soldiers.includes(hit.attacker));
+      const baseCooldown = attackerFormationForCooldown?.squadClass === 'cavalry'
+        ? GAME_CONFIG.cavalry.meleeCooldown
+        : attackerFormationForCooldown?.squadClass === 'artillery'
+          ? GAME_CONFIG.melee.artilleryCooldown
+          : GAME_CONFIG.melee.attackCooldown;
+      hit.attacker.meleeCooldown = baseCooldown * (0.88 + Math.random() * 0.24);
       hit.attacker.meleeStabTimer = GAME_CONFIG.melee.attackWindup;
       hit.attacker.direction = Math.atan2(hit.direction.y, hit.direction.x);
       strikes.push({
@@ -94,7 +100,13 @@ export class MeleeSystem {
         team: hit.attacker.team,
         life: GAME_CONFIG.effects.meleeStrikeLifetime,
       });
-      const damage = GAME_CONFIG.melee.attackDamage * (0.85 + Math.random() * 0.3);
+      const attackerFormation = formations.find((formation) => formation.team === hit.attacker.team && formation.soldiers.includes(hit.attacker));
+      const baseDamage = attackerFormation?.squadClass === 'cavalry'
+        ? GAME_CONFIG.cavalry.meleeDamage
+        : attackerFormation?.squadClass === 'artillery'
+          ? GAME_CONFIG.melee.artilleryDamage
+          : GAME_CONFIG.melee.attackDamage;
+      const damage = baseDamage * (0.85 + Math.random() * 0.3);
       const killed = hit.target.takeDamage(damage);
       hit.target.knockback.x += hit.direction.x * GAME_CONFIG.melee.knockbackSpeed;
       hit.target.knockback.y += hit.direction.y * GAME_CONFIG.melee.knockbackSpeed;
@@ -118,7 +130,7 @@ export class MeleeSystem {
     return result;
   }
 
-  private moveSide(units: Unit[], enemies: Unit[], dt: number): void {
+  private moveSide(formation: Formation, units: Unit[], enemies: Unit[], dt: number): void {
     for (const unit of units) {
       if (unit.dead) continue;
       const target = this.nearestWithin(unit, enemies, GAME_CONFIG.melee.acquireRange);
@@ -133,8 +145,13 @@ export class MeleeSystem {
         const ny = dy / distance;
         unit.direction = Math.atan2(dy, dx);
         if (distance > GAME_CONFIG.melee.attackRange * 0.82) {
-          moveX += nx * GAME_CONFIG.melee.moveSpeed;
-          moveY += ny * GAME_CONFIG.melee.moveSpeed;
+          const meleeSpeed = formation.squadClass === 'cavalry'
+            ? GAME_CONFIG.cavalry.meleeMoveSpeed
+            : formation.squadClass === 'artillery'
+              ? GAME_CONFIG.melee.artilleryMoveSpeed
+              : GAME_CONFIG.melee.moveSpeed;
+          moveX += nx * meleeSpeed;
+          moveY += ny * meleeSpeed;
         }
       }
 

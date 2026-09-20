@@ -21,12 +21,17 @@ const notice = document.querySelector<HTMLElement>('#notice');
 const objectiveProgress = document.querySelector<HTMLElement>('#objective-progress');
 const contextHint = document.querySelector<HTMLElement>('#context-hint');
 const hotbar = document.querySelector<HTMLElement>('#hotbar');
+const classSelector = document.querySelector<HTMLElement>('#class-selector');
+const respawnCountdown = document.querySelector<HTMLElement>('#respawn-countdown');
+const armyComposition = document.querySelector<HTMLElement>('#army-composition');
+const classRecommendation = document.querySelector<HTMLElement>('#class-recommendation');
 
 const required = [
   canvas, statusElement, pauseOverlay, cameraElement,
   blueBannerCard, redBannerCard, blueBannerHp, redBannerHp,
   blueBannerBar, redBannerBar, playerState, playerDetail,
   notice, objectiveProgress, contextHint, hotbar,
+  classSelector, respawnCountdown, armyComposition, classRecommendation,
 ];
 if (required.some((element) => !element)) throw new Error('Bannerfall DOM initialization failed.');
 
@@ -45,6 +50,7 @@ const hud = new Hud(
   blueBannerCard!, redBannerCard!, blueBannerHp!, redBannerHp!,
   blueBannerBar!, redBannerBar!, playerState!, playerDetail!,
   notice!, objectiveProgress!, contextHint!, hotbar!,
+  classSelector!, respawnCountdown!, armyComposition!, classRecommendation!,
 );
 
 let previousTime = performance.now();
@@ -58,6 +64,8 @@ function frame(now: number): void {
     game.formations,
     game.banners,
     game.projectiles,
+    game.artilleryShells,
+    game.artilleryExplosions,
     game.smoke,
     game.muzzleFlashes,
     game.corpses,

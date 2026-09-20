@@ -1,10 +1,12 @@
+import { ArtilleryShell } from '../entities/artilleryShell';
 import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
 import type { AxeStrike, GameSnapshot } from '../game/game';
-import type { Vec2, WeaponType } from '../game/types';
+import type { SquadClass, Vec2, WeaponType } from '../game/types';
+import type { ArtilleryExplosion } from '../systems/artillerySystem';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
 import type { MeleeStrike } from '../systems/meleeSystem';
 
@@ -15,6 +17,8 @@ export class Renderer {
     formations: Formation[],
     banners: Banner[],
     projectiles: Projectile[],
+    artilleryShells: ArtilleryShell[],
+    artilleryExplosions: ArtilleryExplosion[],
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
     corpses: CorpseParticle[],
@@ -41,6 +45,8 @@ export class Renderer {
     this.drawCorpses(corpses, camera);
     this.drawSmoke(smoke, camera);
     this.drawProjectiles(projectiles, camera);
+    this.drawArtilleryShells(artilleryShells, camera);
+    this.drawArtilleryExplosions(artilleryExplosions, camera);
     this.drawFormations(formations, camera);
     this.drawMuzzleFlashes(flashes, camera);
     this.drawMeleeStrikes(strikes, camera);
@@ -90,6 +96,9 @@ export class Renderer {
     this.drawHomeGround('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.y }, camera);
     this.drawHomeGround('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.y }, camera);
 
+    this.drawSpawnCamp('blue', { x: GAME_CONFIG.army.respawnX + 170, y: GAME_CONFIG.banner.y }, camera);
+    this.drawSpawnCamp('red', { x: GAME_CONFIG.world.width - GAME_CONFIG.army.respawnX - 170, y: GAME_CONFIG.banner.y }, camera);
+
     ctx.fillStyle = 'rgba(35, 48, 29, 0.28)';
     ctx.font = `${32 / camera.zoom}px Georgia, serif`;
     ctx.textAlign = 'center';
@@ -104,6 +113,23 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(point.x, point.y, 360, 0, Math.PI * 2);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawSpawnCamp(team: 'blue' | 'red', point: Vec2, camera: Camera): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = team === 'blue' ? 'rgba(122, 176, 238, 0.34)' : 'rgba(238, 122, 122, 0.34)';
+    ctx.fillStyle = team === 'blue' ? 'rgba(49, 88, 133, 0.10)' : 'rgba(140, 54, 54, 0.10)';
+    ctx.lineWidth = 4 / camera.zoom;
+    ctx.setLineDash([18 / camera.zoom, 12 / camera.zoom]);
+    ctx.fillRect(point.x - 330, point.y - 1650, 660, 3300);
+    ctx.strokeRect(point.x - 330, point.y - 1650, 660, 3300);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(235, 226, 198, 0.5)';
+    ctx.font = `${18 / camera.zoom}px ui-monospace, monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('REINFORCEMENT CAMP', point.x, point.y - 1700);
     ctx.restore();
   }
 
@@ -187,9 +213,10 @@ export class Renderer {
 
   private drawFormations(formations: Formation[], camera: Camera): void {
     for (const formation of formations) {
-      if (formation.aliveCount() === 0 || !this.pointVisible(formation.center, camera, 260)) continue;
+      if (formation.aliveCount() === 0 || !this.pointVisible(formation.center, camera, 300)) continue;
       if (formation.isPlayerControlled) this.drawPlayerSelection(formation, camera);
       if (formation.spawnProtectionTimer > 0) this.drawSpawnProtection(formation, camera);
+      if (formation.squadClass === 'artillery') this.drawCannon(formation, camera);
       for (const soldier of formation.soldiers) {
         if (!soldier.dead) {
           this.drawSoldier(
@@ -198,6 +225,7 @@ export class Renderer {
             soldier.team,
             soldier.hitFlashTimer,
             soldier.meleeStabTimer,
+            formation.squadClass,
             formation.weapon,
             formation.mode === 'bannerAttack',
             camera,
@@ -214,6 +242,7 @@ export class Renderer {
     team: 'blue' | 'red',
     hitFlashTimer: number,
     stabTimer: number,
+    squadClass: SquadClass,
     weapon: WeaponType,
     objectiveAttack: boolean,
     camera: Camera,
@@ -222,6 +251,38 @@ export class Renderer {
     ctx.save();
     ctx.translate(position.x, position.y);
     ctx.rotate(direction);
+
+    const teamBody = team === 'blue' ? '#315f99' : '#a43d3d';
+    if (squadClass === 'cavalry') {
+      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : '#5a4633';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 15, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : teamBody;
+      ctx.fillRect(-3, -7, 10, 8);
+      ctx.fillStyle = '#e4d2aa';
+      ctx.beginPath();
+      ctx.arc(6, -5, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#d8d7ca';
+      ctx.lineWidth = 2 / Math.max(0.72, camera.zoom);
+      ctx.beginPath();
+      ctx.moveTo(5, -2);
+      ctx.lineTo(24 + (stabTimer > 0 ? 7 : 0), -2);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    if (squadClass === 'artillery') {
+      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : teamBody;
+      ctx.fillRect(-7, -5, 14, 10);
+      ctx.fillStyle = '#e4d2aa';
+      ctx.beginPath();
+      ctx.arc(4, 0, 3.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
 
     const body = hitFlashTimer > 0
       ? '#fff1c6'
@@ -274,6 +335,32 @@ export class Renderer {
     ctx.restore();
   }
 
+  private drawCannon(formation: Formation, camera: Camera): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.translate(formation.center.x, formation.center.y);
+    ctx.rotate(formation.direction);
+    ctx.strokeStyle = '#2c2923';
+    ctx.lineWidth = 7 / Math.max(0.7, camera.zoom);
+    ctx.beginPath();
+    ctx.moveTo(-10, 0);
+    ctx.lineTo(43, 0);
+    ctx.stroke();
+    ctx.fillStyle = '#4b4032';
+    ctx.beginPath();
+    ctx.arc(-5, -10, 10, 0, Math.PI * 2);
+    ctx.arc(-5, 10, 10, 0, Math.PI * 2);
+    ctx.fill();
+    if (formation.artilleryDeployed) {
+      ctx.strokeStyle = 'rgba(255, 219, 115, 0.75)';
+      ctx.lineWidth = 2 / camera.zoom;
+      ctx.beginPath();
+      ctx.arc(0, 0, 28, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   private drawPlayerSelection(formation: Formation, camera: Camera): void {
     const { ctx } = this;
     ctx.save();
@@ -307,7 +394,9 @@ export class Renderer {
       : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
     const suffix = formation.isPlayerControlled ? ' · YOU' : '';
     const objective = formation.mode === 'bannerAttack' ? ' · AXE' : '';
-    ctx.fillText(`${formation.id}${suffix}${objective}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 48);
+    const classTag = formation.squadClass === 'infantry' ? 'INF' : formation.squadClass === 'cavalry' ? 'CAV' : 'ART';
+    const deploy = formation.squadClass === 'artillery' && formation.artilleryDeployed ? ' · DEPLOYED' : '';
+    ctx.fillText(`${formation.id} [${classTag}]${suffix}${objective}${deploy}  ${formation.aliveCount()}`, formation.center.x, formation.center.y - 54);
   }
 
   private drawProjectiles(projectiles: Projectile[], camera: Camera): void {
@@ -320,6 +409,35 @@ export class Renderer {
       const tail = projectile.trail[projectile.trail.length - 1] ?? projectile.position;
       ctx.moveTo(tail.x, tail.y);
       ctx.lineTo(projectile.position.x, projectile.position.y);
+      ctx.stroke();
+    }
+  }
+
+  private drawArtilleryShells(shells: ArtilleryShell[], camera: Camera): void {
+    const { ctx } = this;
+    for (const shell of shells) {
+      if (!this.pointVisible(shell.position, camera, 80)) continue;
+      ctx.fillStyle = '#211d18';
+      ctx.beginPath();
+      ctx.arc(shell.position.x, shell.position.y, 5 / Math.max(0.7, camera.zoom), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  private drawArtilleryExplosions(explosions: ArtilleryExplosion[], camera: Camera): void {
+    const { ctx } = this;
+    for (const explosion of explosions) {
+      if (!this.pointVisible(explosion.position, camera, 180)) continue;
+      const t = 1 - explosion.life / explosion.maxLife;
+      const radius = GAME_CONFIG.artillery.blastRadius * (0.3 + t * 0.9);
+      ctx.fillStyle = `rgba(255, 194, 72, ${0.34 * (1 - t)})`;
+      ctx.beginPath();
+      ctx.arc(explosion.position.x, explosion.position.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255, 231, 172, ${0.65 * (1 - t)})`;
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.beginPath();
+      ctx.arc(explosion.position.x, explosion.position.y, radius * 0.78, 0, Math.PI * 2);
       ctx.stroke();
     }
   }
@@ -457,7 +575,7 @@ export class Renderer {
       ctx.font = `${11 / camera.zoom}px ui-monospace, monospace`;
       ctx.textAlign = 'center';
       ctx.fillText(
-        `${formation.debugIntent} → ${formation.debugTargetId ?? '-'}`,
+        `${formation.squadClass.toUpperCase()} · ${formation.debugIntent} → ${formation.debugTargetId ?? '-'}`,
         formation.center.x,
         formation.center.y + 73 / camera.zoom,
       );
@@ -487,8 +605,21 @@ export class Renderer {
         : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
       const px = x + formation.center.x * sx;
       const py = y + formation.center.y * sy;
-      const size = formation.isPlayerControlled ? 6 : formation.mode === 'bannerAttack' ? 5 : 3;
-      ctx.fillRect(px - size / 2, py - size / 2, size, size);
+      const size = formation.isPlayerControlled ? 7 : formation.mode === 'bannerAttack' ? 6 : 4;
+      if (formation.squadClass === 'cavalry') {
+        ctx.beginPath();
+        ctx.moveTo(px + size, py);
+        ctx.lineTo(px - size, py - size * 0.8);
+        ctx.lineTo(px - size, py + size * 0.8);
+        ctx.closePath();
+        ctx.fill();
+      } else if (formation.squadClass === 'artillery') {
+        ctx.beginPath();
+        ctx.arc(px, py, size * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillRect(px - size / 2, py - size / 2, size, size);
+      }
     }
 
     for (const banner of banners) {
@@ -522,8 +653,9 @@ export class Renderer {
 
   private drawPlayerMode(snapshot: GameSnapshot): void {
     let text = '';
-    if (snapshot.chargeAiming) text = 'CHARGE VECTOR — RELEASE TO COMMIT';
-    else if (snapshot.playerMode === 'charging') text = 'PLAYER SQUAD — CHARGING';
+    if (snapshot.chargeAiming) text = snapshot.playerClass === 'cavalry' ? 'CAVALRY CHARGE — RELEASE TO COMMIT' : 'CHARGE VECTOR — RELEASE TO COMMIT';
+    else if (snapshot.playerClass === 'artillery' && snapshot.playerMode === 'line' && !snapshot.playerArtilleryDeployed) text = `ARTILLERY DEPLOYING — ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}%`;
+    else if (snapshot.playerMode === 'charging') text = snapshot.playerClass === 'cavalry' ? 'CAVALRY — FULL CHARGE' : 'PLAYER SQUAD — CHARGING';
     else if (snapshot.playerMode === 'melee') text = 'PLAYER SQUAD — BAYONET MELEE';
     else if (snapshot.playerMode === 'reforming') text = 'PLAYER SQUAD — REFORMING';
     else if (snapshot.playerMode === 'bannerAttack') {
