@@ -2,13 +2,16 @@ import './styles.css';
 import { classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
 import { NetworkClient } from './network/networkClient';
 import { MultiplayerBattle } from './network/multiplayerBattle';
-import type { ChatMessage, MatchStartPayload, RoomState } from './network/protocol';
+import type { ChatMessage, MatchStartPayload, RoomBrowserEntry, RoomState, RoomVisibility } from './network/protocol';
 
 const menuShell = document.querySelector<HTMLElement>('#menu-shell');
 const battleShell = document.querySelector<HTMLElement>('#battle-shell');
 const titleScreen = document.querySelector<HTMLElement>('#title-screen');
 const createScreen = document.querySelector<HTMLElement>('#create-screen');
 const joinScreen = document.querySelector<HTMLElement>('#join-screen');
+const browserScreen = document.querySelector<HTMLElement>('#browser-screen');
+const roomBrowserList = document.querySelector<HTMLElement>('#room-browser-list');
+const roomBrowserSummary = document.querySelector<HTMLElement>('#room-browser-summary');
 const lobbyScreen = document.querySelector<HTMLElement>('#lobby-screen');
 const playerNameInput = document.querySelector<HTMLInputElement>('#player-name');
 const serverUrlInput = document.querySelector<HTMLInputElement>('#server-url');
@@ -28,12 +31,12 @@ const lobbyCountdown = document.querySelector<HTMLElement>('#lobby-countdown');
 const lobbyCountdownNumber = document.querySelector<HTMLElement>('#lobby-countdown-number');
 
 const required = [
-  menuShell, battleShell, titleScreen, createScreen, joinScreen, lobbyScreen,
+  menuShell, battleShell, titleScreen, createScreen, joinScreen, browserScreen, roomBrowserList, roomBrowserSummary, lobbyScreen,
   playerNameInput, serverUrlInput, connectionStatus, connectionDot, menuError, canvas, networkStatus,
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.9.1 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.9.3 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
@@ -50,10 +53,11 @@ if (invitedRoom) {
   if (code) code.value = invitedRoom.toUpperCase();
 }
 
-function showScreen(target: 'title' | 'create' | 'join' | 'lobby'): void {
+function showScreen(target: 'title' | 'create' | 'join' | 'browser' | 'lobby'): void {
   titleScreen!.classList.toggle('hidden', target !== 'title');
   createScreen!.classList.toggle('hidden', target !== 'create');
   joinScreen!.classList.toggle('hidden', target !== 'join');
+  browserScreen!.classList.toggle('hidden', target !== 'browser');
   lobbyScreen!.classList.toggle('hidden', target !== 'lobby');
 }
 
@@ -91,6 +95,84 @@ function classLabel(squadClass: SquadClass): string {
 function spawnLabel(team: Team, index: number | null): string {
   if (index === null) return 'NO SPAWN';
   return `${team === 'blue' ? 'B' : 'R'}${String(index + 1).padStart(2, '0')}`;
+}
+
+function roomPhaseLabel(phase: RoomBrowserEntry['phase']): string {
+  if (phase === 'lobby') return 'LOBBY';
+  if (phase === 'countdown') return 'STARTING';
+  return 'PLAYING';
+}
+
+function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
+  roomBrowserList!.innerHTML = '';
+  const lobbyCount = entries.filter((entry) => entry.phase === 'lobby').length;
+  roomBrowserSummary!.textContent = `${entries.length} PUBLIC ROOMS · ${lobbyCount} JOINABLE`;
+
+  if (entries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'room-browser-empty';
+    empty.innerHTML = '<strong>NO PUBLIC ROOMS</strong><span>CREATE ROOMで新しい戦場を立てるか、Room Codeから参加してください。</span>';
+    roomBrowserList!.appendChild(empty);
+    return;
+  }
+
+  for (const entry of entries) {
+    const row = document.createElement('article');
+    row.className = `room-browser-row phase-${entry.phase}`;
+
+    const code = document.createElement('div');
+    code.className = 'room-browser-code';
+    code.innerHTML = `<strong>${entry.code}</strong><span>${entry.passwordProtected ? 'LOCKED' : 'OPEN'}</span>`;
+
+    const host = document.createElement('div');
+    host.className = 'room-browser-cell';
+    host.innerHTML = `<span>HOST</span><strong></strong>`;
+    const hostStrong = host.querySelector('strong');
+    if (hostStrong) hostStrong.textContent = entry.hostName;
+
+    const players = document.createElement('div');
+    players.className = 'room-browser-cell';
+    players.innerHTML = `<span>PLAYERS</span><strong>${entry.players} / ${entry.maxPlayers}</strong>`;
+
+    const battle = document.createElement('div');
+    battle.className = 'room-browser-cell';
+    battle.innerHTML = `<span>BATTLE</span><strong>${entry.blueSquads} vs ${entry.redSquads}</strong>`;
+
+    const respawn = document.createElement('div');
+    respawn.className = 'room-browser-cell';
+    respawn.innerHTML = `<span>RESPAWN</span><strong>${entry.respawnSeconds}s</strong>`;
+
+    const status = document.createElement('div');
+    status.className = `room-browser-status ${entry.phase}`;
+    status.textContent = roomPhaseLabel(entry.phase);
+
+    const join = document.createElement('button');
+    join.className = 'room-browser-join';
+    const full = entry.players >= entry.maxPlayers;
+    join.disabled = entry.phase !== 'lobby' || full;
+    join.textContent = entry.phase !== 'lobby' ? 'IN BATTLE' : full ? 'FULL' : entry.passwordProtected ? 'PASSWORD' : 'JOIN';
+    join.addEventListener('click', async () => {
+      try {
+        const name = cleanPlayerName();
+        await ensureConnected();
+        if (entry.passwordProtected) {
+          const codeInput = document.querySelector<HTMLInputElement>('#join-code');
+          const passwordInput = document.querySelector<HTMLInputElement>('#join-password');
+          if (codeInput) codeInput.value = entry.code;
+          if (passwordInput) passwordInput.value = '';
+          showScreen('join');
+          window.setTimeout(() => passwordInput?.focus(), 0);
+          return;
+        }
+        network.joinRoom(name, entry.code, '');
+      } catch (error) {
+        showError(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    row.append(code, host, players, battle, respawn, status, join);
+    roomBrowserList!.appendChild(row);
+  }
 }
 
 function renderPlayers(room: RoomState): void {
@@ -203,7 +285,7 @@ function renderLobby(room: RoomState): void {
   const settings = document.querySelector<HTMLElement>('#lobby-settings');
   if (!code || !settings) return;
   code.textContent = room.code;
-  settings.textContent = `${room.settings.blueSquads} vs ${room.settings.redSquads} squads · RESPAWN ${room.settings.respawnSeconds}s · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'}`;
+  settings.textContent = `${room.settings.blueSquads} vs ${room.settings.redSquads} squads · RESPAWN ${room.settings.respawnSeconds}s · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
   renderPlayers(room);
   renderDeploymentMap(room);
   renderClassCards(room);
@@ -286,7 +368,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Phase 3.9.1';
+  document.title = 'Bannerfall — Phase 3.9.3';
 }
 
 network.onConnection = (connected, text) => {
@@ -303,6 +385,9 @@ network.onChatMessage = (message) => {
   chatMessages.push(message);
   if (chatMessages.length > 50) chatMessages.splice(0, chatMessages.length - 50);
   renderChat();
+};
+network.onRoomList = (rooms) => {
+  renderRoomBrowser(rooms);
 };
 network.onRoomState = (room) => {
   currentRoom = room;
@@ -334,17 +419,41 @@ document.querySelector('#show-join')?.addEventListener('click', () => {
   try { cleanPlayerName(); showScreen('join'); } catch (error) { showError(String(error instanceof Error ? error.message : error)); }
 });
 
+document.querySelector('#show-browser')?.addEventListener('click', async () => {
+  try {
+    cleanPlayerName();
+    await ensureConnected();
+    showScreen('browser');
+    roomBrowserSummary!.textContent = 'LOADING ROOMS...';
+    network.requestRoomList();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  }
+});
+
+document.querySelector('#refresh-room-list')?.addEventListener('click', async () => {
+  try {
+    await ensureConnected();
+    network.requestRoomList();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  }
+});
+
 document.querySelector('#create-room')?.addEventListener('click', async () => {
   try {
     const name = cleanPlayerName();
     await ensureConnected();
     const password = document.querySelector<HTMLInputElement>('#create-password')?.value ?? '';
+    const visibilitySelect = document.querySelector<HTMLSelectElement>('#create-visibility');
+    const visibility: RoomVisibility = visibilitySelect?.value === 'unlisted' ? 'unlisted' : 'public';
     network.createRoom(
       name,
       password,
       numberInput('blue-squads', 1, 50, 20),
       numberInput('red-squads', 1, 50, 20),
       numberInput('respawn-seconds', 5, 60, 20),
+      visibility,
     );
   } catch (error) {
     showError(error instanceof Error ? error.message : String(error));

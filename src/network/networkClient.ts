@@ -5,7 +5,9 @@ import type {
   ContinuousControl,
   MatchStartPayload,
   PlayerAction,
+  RoomBrowserEntry,
   RoomState,
+  RoomVisibility,
   ServerMessage,
 } from './protocol';
 import type { SquadClass, Team } from '../game/types';
@@ -17,6 +19,7 @@ export class NetworkClient {
 
   onConnection?: (connected: boolean, text: string) => void;
   onRoomState?: (room: RoomState) => void;
+  onRoomList?: (rooms: RoomBrowserEntry[]) => void;
   onMatchCountdown?: (seconds: number) => void;
   onMatchStart?: (payload: MatchStartPayload) => void;
   onChatHistory?: (messages: ChatMessage[]) => void;
@@ -66,13 +69,17 @@ export class NetworkClient {
     });
   }
 
-  createRoom(name: string, password: string, blueSquads: number, redSquads: number, respawnSeconds: number): void {
+  createRoom(name: string, password: string, blueSquads: number, redSquads: number, respawnSeconds: number, visibility: RoomVisibility): void {
     this.send({
       type: 'create_room',
       name,
       password,
-      settings: { blueSquads, redSquads, respawnSeconds },
+      settings: { blueSquads, redSquads, respawnSeconds, visibility },
     });
+  }
+
+  requestRoomList(): void {
+    this.send({ type: 'request_room_list' });
   }
 
   joinRoom(name: string, code: string, password: string): void {
@@ -149,6 +156,9 @@ export class NetworkClient {
       case 'room_state':
         this.room = message.room;
         this.onRoomState?.(message.room);
+        break;
+      case 'room_list':
+        this.onRoomList?.(message.rooms);
         break;
       case 'match_countdown':
         this.onMatchCountdown?.(message.seconds);

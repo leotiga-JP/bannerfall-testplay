@@ -8,7 +8,9 @@ import type {
   ChatMessage,
   ContinuousControl,
   PlayerAction,
+  RoomBrowserEntry,
   RoomState,
+  RoomVisibility,
 } from '../src/network/protocol.ts';
 
 const PORT = Number(process.env.PORT || 8787);
@@ -41,7 +43,7 @@ interface Room {
   phase: 'lobby' | 'countdown' | 'battle';
   ownerId: string;
   password: PasswordRecord | null;
-  settings: { blueSquads: number; redSquads: number; respawnSeconds: number };
+  settings: { blueSquads: number; redSquads: number; respawnSeconds: number; visibility: RoomVisibility };
   players: Map<string, ServerPlayer>;
   chat: ChatMessage[];
   game: Game | null;
@@ -142,6 +144,7 @@ function publicRoom(room: Room): RoomState {
       redSquads: room.settings.redSquads,
       respawnSeconds: room.settings.respawnSeconds,
       passwordProtected: !!room.password,
+      visibility: room.settings.visibility,
     },
     players: [...room.players.values()].map((player) => ({
       id: player.id,
@@ -162,6 +165,40 @@ function broadcast(room: Room, payload: unknown): void {
   const raw = JSON.stringify(payload);
   for (const player of room.players.values()) {
     if (player.ws.readyState === WebSocket.OPEN) player.ws.send(raw);
+  }
+}
+
+function roomBrowserEntry(room: Room): RoomBrowserEntry {
+  const owner = room.players.get(room.ownerId);
+  return {
+    code: room.code,
+    hostName: owner?.name ?? 'Host',
+    phase: room.phase,
+    players: room.players.size,
+    maxPlayers: Math.min(MAX_PLAYERS, room.settings.blueSquads + room.settings.redSquads),
+    blueSquads: room.settings.blueSquads,
+    redSquads: room.settings.redSquads,
+    respawnSeconds: room.settings.respawnSeconds,
+    passwordProtected: !!room.password,
+  };
+}
+
+function publicRoomList(): RoomBrowserEntry[] {
+  const phaseOrder: Record<Room['phase'], number> = { lobby: 0, countdown: 1, battle: 2 };
+  return [...rooms.values()]
+    .filter((room) => room.settings.visibility === 'public')
+    .map(roomBrowserEntry)
+    .sort((a, b) => phaseOrder[a.phase] - phaseOrder[b.phase] || b.players - a.players || a.code.localeCompare(b.code));
+}
+
+function sendRoomList(ws: WebSocket): void {
+  send(ws, { type: 'room_list', rooms: publicRoomList() });
+}
+
+function broadcastRoomList(): void {
+  const raw = JSON.stringify({ type: 'room_list', rooms: publicRoomList() });
+  for (const session of sessions.values()) {
+    if (session.ws.readyState === WebSocket.OPEN) session.ws.send(raw);
   }
 }
 
@@ -197,6 +234,7 @@ function cancelCountdown(room: Room, message?: string): void {
   if (room.phase === 'countdown') room.phase = 'lobby';
   for (const player of room.players.values()) player.ready = false;
   if (message) broadcast(room, { type: 'notice', message });
+  broadcastRoomList();
 }
 
 function removeFromRoom(session: Session, reason = 'left'): void {
@@ -215,6 +253,7 @@ function removeFromRoom(session: Session, reason = 'left'): void {
   if (room.players.size === 0) {
     if (room.countdownTimer) clearTimeout(room.countdownTimer);
     rooms.delete(room.code);
+    broadcastRoomList();
     console.log(`[room ${room.code}] closed`);
     return;
   }
@@ -222,6 +261,7 @@ function removeFromRoom(session: Session, reason = 'left'): void {
   if (room.phase === 'countdown') cancelCountdown(room, 'Player left. Start countdown cancelled.');
   if (room.ownerId === session.id) room.ownerId = room.players.keys().next().value as string;
   broadcastRoom(room);
+  broadcastRoomList();
   console.log(`[room ${room.code}] ${session.name} ${reason}`);
 }
 
@@ -244,13 +284,14 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
   const blueSquads = clampInt(settings.blueSquads, 1, 50, 20);
   const redSquads = clampInt(settings.redSquads, 1, 50, 20);
   const respawnSeconds = clampInt(settings.respawnSeconds, 5, 60, 20);
+  const visibility: RoomVisibility = settings.visibility === 'unlisted' ? 'unlisted' : 'public';
   const code = randomCode();
   const room: Room = {
     code,
     phase: 'lobby',
     ownerId: session.id,
     password: hashPassword(String(message.password ?? '')),
-    settings: { blueSquads, redSquads, respawnSeconds },
+    settings: { blueSquads, redSquads, respawnSeconds, visibility },
     players: new Map(),
     chat: [],
     game: null,
@@ -263,7 +304,8 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
   rooms.set(code, room);
   send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
-  console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s)`);
+  broadcastRoomList();
+  console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s, ${visibility})`);
 }
 
 function joinRoom(session: Session, message: Record<string, unknown>): void {
@@ -280,6 +322,7 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
   room.players.set(session.id, makePlayer(session, session.name, chooseTeam(room)));
   send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
+  broadcastRoomList();
   console.log(`[room ${code}] ${session.name} joined`);
 }
 
@@ -385,6 +428,7 @@ function launchMatch(room: Room): void {
   room.snapshotClock = 0;
   room.countdownTimer = null;
   broadcast(room, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server' } });
+  broadcastRoomList();
   console.log(`[room ${room.code}] authoritative match started (${humanFormationIds.length} players)`);
 }
 
@@ -400,6 +444,7 @@ function startMatch(session: Session): void {
   room.phase = 'countdown';
   broadcastRoom(room);
   broadcast(room, { type: 'match_countdown', seconds: MATCH_COUNTDOWN_SECONDS });
+  broadcastRoomList();
   room.countdownTimer = setTimeout(() => launchMatch(room), MATCH_COUNTDOWN_SECONDS * 1000);
 }
 
@@ -426,6 +471,7 @@ function handleMessage(session: Session, raw: RawData): void {
   switch (message.type) {
     case 'hello': session.name = cleanName(message.name); break;
     case 'create_room': createRoom(session, message); break;
+    case 'request_room_list': sendRoomList(session.ws); break;
     case 'join_room': joinRoom(session, message); break;
     case 'change_team': changeTeam(session, message.team); break;
     case 'select_class': selectClass(session, message.squadClass); break;
@@ -470,7 +516,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'bannerfall-server',
-      version: '3.9.2',
+      version: '3.9.3',
       rooms: rooms.size,
       battles,
       players: sessions.size,
@@ -483,7 +529,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Bannerfall Phase 3.9.2 Multiplayer Server');
+  res.end('Bannerfall Phase 3.9.3 Multiplayer Server');
 });
 
 const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: { threshold: 1024 }, maxPayload: 8 * 1024 * 1024 });
@@ -493,6 +539,7 @@ wss.on('connection', (ws) => {
   const session: Session = { id, name: 'Player', roomCode: null, ws };
   sessions.set(id, session);
   send(ws, { type: 'welcome', clientId: id });
+  sendRoomList(ws);
   console.log(`[connect] ${id}`);
   ws.on('message', (raw) => handleMessage(session, raw));
   ws.on('close', () => {

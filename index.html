@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.9.1 - Rout Movement Fix" />
-    <title>Bannerfall - Phase 3.9.1 Rout Movement Fix</title>
+    <meta name="description" content="Bannerfall Phase 3.9.3 - Room Browser" />
+    <title>Bannerfall - Phase 3.9.3 Room Browser</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">PHASE 3.9.1 · ROUT MOVEMENT FIX</span>
+            <span class="eyebrow">PHASE 3.9.3 · ROOM BROWSER</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
@@ -30,9 +30,10 @@
             <div class="connection-line"><span id="connection-dot" class="dot"></span><strong id="connection-status">OFFLINE</strong></div>
           </details>
 
-          <div class="menu-actions">
+          <div class="menu-actions title-actions">
             <button id="show-create" class="primary">CREATE ROOM</button>
-            <button id="show-join">JOIN ROOM</button>
+            <button id="show-browser">ROOM LIST</button>
+            <button id="show-join">JOIN BY CODE</button>
           </div>
         </div>
 
@@ -46,6 +47,7 @@
             <label class="field"><span>RED SQUADS</span><input id="red-squads" type="number" min="1" max="50" value="20" /></label>
             <label class="field"><span>RESPAWN</span><input id="respawn-seconds" type="number" min="5" max="60" value="20" /></label>
             <label class="field"><span>PASSWORD · OPTIONAL</span><input id="create-password" maxlength="32" type="password" placeholder="No password" /></label>
+            <label class="field"><span>VISIBILITY</span><select id="create-visibility"><option value="public" selected>PUBLIC · Room Listに表示</option><option value="unlisted">UNLISTED · Code参加のみ</option></select></label>
           </div>
           <p class="muted">総部隊数です。人間プレイヤーが入った分だけAI部隊が置き換わります。1 vs 1〜50 vs 50。</p>
           <button id="create-room" class="primary wide">CREATE ROOM</button>
@@ -57,6 +59,19 @@
           <label class="field"><span>ROOM CODE</span><input id="join-code" maxlength="6" spellcheck="false" placeholder="K7PX4D" /></label>
           <label class="field"><span>PASSWORD · IF REQUIRED</span><input id="join-password" maxlength="32" type="password" /></label>
           <button id="join-room" class="primary wide">JOIN ROOM</button>
+        </div>
+
+        <div class="menu-panel room-browser-panel hidden" id="browser-screen">
+          <div class="room-browser-head">
+            <div>
+              <button class="back-button" data-back="title">← BACK</button>
+              <h2>ROOM LIST</h2>
+            </div>
+            <button id="refresh-room-list">REFRESH</button>
+          </div>
+          <p class="muted">PUBLIC Roomのみ表示されます。UNLISTED RoomはRoom Codeから参加してください。</p>
+          <div id="room-browser-summary" class="room-browser-summary">CONNECTING...</div>
+          <div id="room-browser-list" class="room-browser-list"></div>
         </div>
 
         <div class="menu-panel lobby-panel deployment-lobby hidden" id="lobby-screen">
@@ -142,7 +157,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Phase 3.9.1 — Rout Movement Fix</p>
+            <p id="battle-subtitle">Phase 3.9.3 — Room Browser</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>

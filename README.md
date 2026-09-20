@@ -1,4 +1,24 @@
-# Bannerfall Phase 3.9.2 — Battle Statistics
+# Bannerfall Phase 3.9.3 — Room Browser
+
+Phase 3.9.2 の戦績機能を維持したまま、マルチプレイ用の **Room Browser** を追加した版です。
+
+## Phase 3.9.3 追加内容
+
+- タイトル画面に `ROOM LIST` を追加
+- `PUBLIC` / `UNLISTED` Room を作成時に選択可能
+- PUBLIC Room は Host / Players / Army Size / Respawn / Password / Status を一覧表示
+- LOBBY の PUBLIC Room は一覧から直接参加可能
+- Password Room は一覧から選ぶと Password 入力画面へ遷移
+- `PLAYING` / `STARTING` Room は一覧には見えるが途中参加不可
+- Room 作成・削除・参加・退出・試合開始時に一覧を WebSocket で自動更新
+- UNLISTED Room は一覧に出ず、従来どおり Room Code で参加可能
+- 一覧には Password 本文・IP・内部 Player ID などを送らない
+
+`deploy.yml` の変更はありません。`server/` は変更されているため、更新後は Bannerfall Server を再起動してください。
+
+---
+
+# Bannerfall Phase 3.9.3 — Battle Statistics
 
 Phase 3.9.1をベースに、マルチプレイ戦績のサーバー権威集計を追加した版です。
 

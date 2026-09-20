@@ -2,12 +2,14 @@ import type { FormationMode } from '../entities/formation';
 import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
 
 export type RoomPhase = 'lobby' | 'countdown' | 'battle';
+export type RoomVisibility = 'public' | 'unlisted';
 
 export interface RoomSettings {
   blueSquads: number;
   redSquads: number;
   respawnSeconds: number;
   passwordProtected: boolean;
+  visibility: RoomVisibility;
 }
 
 export interface LobbyPlayer {
@@ -28,6 +30,19 @@ export interface RoomState {
   settings: RoomSettings;
   players: LobbyPlayer[];
   ownerId: string;
+}
+
+
+export interface RoomBrowserEntry {
+  code: string;
+  hostName: string;
+  phase: RoomPhase;
+  players: number;
+  maxPlayers: number;
+  blueSquads: number;
+  redSquads: number;
+  respawnSeconds: number;
+  passwordProtected: boolean;
 }
 
 export interface MatchStartPayload {
@@ -147,6 +162,7 @@ export interface BattleNetSnapshot {
 export type ClientMessage =
   | { type: 'hello'; name: string }
   | { type: 'create_room'; name: string; password: string; settings: Omit<RoomSettings, 'passwordProtected'> }
+  | { type: 'request_room_list' }
   | { type: 'join_room'; name: string; code: string; password: string }
   | { type: 'change_team'; team: Team }
   | { type: 'select_class'; squadClass: SquadClass }
@@ -163,6 +179,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'welcome'; clientId: string }
   | { type: 'room_state'; room: RoomState }
+  | { type: 'room_list'; rooms: RoomBrowserEntry[] }
   | { type: 'match_countdown'; seconds: number }
   | { type: 'match_start'; payload: MatchStartPayload }
   | { type: 'chat_history'; messages: ChatMessage[] }
