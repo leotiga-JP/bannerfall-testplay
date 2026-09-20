@@ -1,6 +1,7 @@
 import { Formation } from '../entities/formation';
 import { Unit } from '../entities/unit';
 import { GAME_CONFIG } from '../game/config';
+import { meleeProfile } from '../game/classProfiles';
 import type { Team, Vec2 } from '../game/types';
 
 export interface MeleeStrike {
@@ -83,12 +84,8 @@ export class MeleeSystem {
     for (const hit of pendingHits) {
       if (hit.attacker.dead || hit.target.dead) continue;
       const attackerFormationForCooldown = formations.find((formation) => formation.team === hit.attacker.team && formation.soldiers.includes(hit.attacker));
-      const baseCooldown = attackerFormationForCooldown?.squadClass === 'cavalry'
-        ? GAME_CONFIG.cavalry.meleeCooldown
-        : attackerFormationForCooldown?.squadClass === 'artillery'
-          ? GAME_CONFIG.melee.artilleryCooldown
-          : GAME_CONFIG.melee.attackCooldown;
-      hit.attacker.meleeCooldown = baseCooldown * (0.88 + Math.random() * 0.24);
+      const attackProfile = meleeProfile(attackerFormationForCooldown?.squadClass ?? 'infantry');
+      hit.attacker.meleeCooldown = attackProfile.cooldown * (0.88 + Math.random() * 0.24);
       hit.attacker.meleeStabTimer = GAME_CONFIG.melee.attackWindup;
       hit.attacker.direction = Math.atan2(hit.direction.y, hit.direction.x);
       strikes.push({
@@ -101,13 +98,11 @@ export class MeleeSystem {
         life: GAME_CONFIG.effects.meleeStrikeLifetime,
       });
       const attackerFormation = formations.find((formation) => formation.team === hit.attacker.team && formation.soldiers.includes(hit.attacker));
-      const baseDamage = attackerFormation?.squadClass === 'cavalry'
-        ? GAME_CONFIG.cavalry.meleeDamage
-        : attackerFormation?.squadClass === 'artillery'
-          ? GAME_CONFIG.melee.artilleryDamage
-          : GAME_CONFIG.melee.attackDamage;
-      const damage = baseDamage * (0.85 + Math.random() * 0.3);
+      const targetFormation = formations.find((formation) => formation.team === hit.target.team && formation.soldiers.includes(hit.target));
+      const profile = meleeProfile(attackerFormation?.squadClass ?? 'infantry');
+      const damage = profile.damage * (0.85 + Math.random() * 0.3);
       const killed = hit.target.takeDamage(damage);
+      targetFormation?.applyMoraleDamage(profile.moraleDamage + (killed ? 2.2 : 0));
       hit.target.knockback.x += hit.direction.x * GAME_CONFIG.melee.knockbackSpeed;
       hit.target.knockback.y += hit.direction.y * GAME_CONFIG.melee.knockbackSpeed;
       anyStrike = true;
@@ -145,11 +140,7 @@ export class MeleeSystem {
         const ny = dy / distance;
         unit.direction = Math.atan2(dy, dx);
         if (distance > GAME_CONFIG.melee.attackRange * 0.82) {
-          const meleeSpeed = formation.squadClass === 'cavalry'
-            ? GAME_CONFIG.cavalry.meleeMoveSpeed
-            : formation.squadClass === 'artillery'
-              ? GAME_CONFIG.melee.artilleryMoveSpeed
-              : GAME_CONFIG.melee.moveSpeed;
+          const meleeSpeed = meleeProfile(formation.squadClass).moveSpeed;
           moveX += nx * meleeSpeed;
           moveY += ny * meleeSpeed;
         }

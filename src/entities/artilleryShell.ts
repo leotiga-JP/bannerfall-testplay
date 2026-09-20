@@ -1,16 +1,36 @@
-import type { Team, Vec2 } from '../game/types';
+import type { SquadClass, Team, Vec2 } from '../game/types';
 
 export class ArtilleryShell {
   readonly team: Team;
+  readonly sourceClass: SquadClass;
   position: Vec2;
   readonly target: Vec2;
   readonly velocity: Vec2;
+  readonly blastRadius: number;
+  readonly blastDamage: number;
+  readonly edgeDamage: number;
+  readonly moraleDamage: number;
   active = true;
 
-  constructor(team: Team, start: Vec2, target: Vec2, speed: number) {
+  constructor(
+    team: Team,
+    start: Vec2,
+    target: Vec2,
+    speed: number,
+    sourceClass: SquadClass = 'artillery',
+    blastRadius = 128,
+    blastDamage = 145,
+    edgeDamage = 48,
+    moraleDamage = 20,
+  ) {
     this.team = team;
     this.position = { ...start };
     this.target = { ...target };
+    this.sourceClass = sourceClass;
+    this.blastRadius = blastRadius;
+    this.blastDamage = blastDamage;
+    this.edgeDamage = edgeDamage;
+    this.moraleDamage = moraleDamage;
     const dx = target.x - start.x;
     const dy = target.y - start.y;
     const distance = Math.hypot(dx, dy) || 1;

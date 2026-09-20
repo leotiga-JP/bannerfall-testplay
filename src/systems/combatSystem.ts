@@ -1,6 +1,7 @@
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
 import { GAME_CONFIG } from '../game/config';
+import { volleyProfile } from '../game/classProfiles';
 import type { Team, Vec2 } from '../game/types';
 
 export interface SmokeParticle {
@@ -33,17 +34,14 @@ export interface VolleyResult {
   flashes: MuzzleFlash[];
 }
 
-function randomSpread(): number {
-  return (Math.random() * 2 - 1) * GAME_CONFIG.musket.spreadRadians;
-}
-
 export function fireVolley(formation: Formation): VolleyResult {
   const projectiles: Projectile[] = [];
   const smoke: SmokeParticle[] = [];
   const flashes: MuzzleFlash[] = [];
+  const profile = volleyProfile(formation.squadClass);
 
   for (const soldier of formation.aliveSoldiers()) {
-    const angle = formation.direction + randomSpread();
+    const angle = formation.direction + (Math.random() * 2 - 1) * profile.spread;
     const muzzle = {
       x: soldier.position.x + Math.cos(formation.direction) * GAME_CONFIG.musket.muzzleOffset,
       y: soldier.position.y + Math.sin(formation.direction) * GAME_CONFIG.musket.muzzleOffset,
@@ -53,24 +51,17 @@ export function fireVolley(formation: Formation): VolleyResult {
       formation.team,
       muzzle,
       {
-        x: Math.cos(angle) * GAME_CONFIG.musket.projectileSpeed,
-        y: Math.sin(angle) * GAME_CONFIG.musket.projectileSpeed,
+        x: Math.cos(angle) * profile.projectileSpeed,
+        y: Math.sin(angle) * profile.projectileSpeed,
       },
-      GAME_CONFIG.musket.projectileLife,
-      GAME_CONFIG.musket.damage,
+      profile.projectileLife,
+      profile.damage,
+      profile.moraleDamage,
     ));
 
-    flashes.push({
-      position: { ...muzzle },
-      direction: formation.direction,
-      life: GAME_CONFIG.effects.flashLifetime,
-    });
-
+    flashes.push({ position: { ...muzzle }, direction: formation.direction, life: GAME_CONFIG.effects.flashLifetime });
     smoke.push({
-      position: {
-        x: muzzle.x + (Math.random() - 0.5) * 6,
-        y: muzzle.y + (Math.random() - 0.5) * 6,
-      },
+      position: { x: muzzle.x + (Math.random() - 0.5) * 6, y: muzzle.y + (Math.random() - 0.5) * 6 },
       velocity: {
         x: Math.cos(formation.direction) * (12 + Math.random() * 16) + (Math.random() - 0.5) * 15,
         y: Math.sin(formation.direction) * (12 + Math.random() * 16) + (Math.random() - 0.5) * 15,
@@ -113,10 +104,7 @@ export function updateProjectiles(
     if (projectile.life <= 0) continue;
     const previous = { ...projectile.position };
     projectile.update(dt);
-    const segmentMid = {
-      x: (previous.x + projectile.position.x) / 2,
-      y: (previous.y + projectile.position.y) / 2,
-    };
+    const segmentMid = { x: (previous.x + projectile.position.x) / 2, y: (previous.y + projectile.position.y) / 2 };
 
     let hit = false;
     for (const formation of formations) {
@@ -130,13 +118,11 @@ export function updateProjectiles(
         const hitRadius = GAME_CONFIG.soldier.radius + bulletRadius;
         if (distanceToSegmentSquared(target.position, previous, projectile.position) > hitRadius * hitRadius) continue;
         const killed = target.takeDamage(projectile.damage);
+        formation.applyMoraleDamage(projectile.moraleDamage + (killed ? 1.8 : 0));
         projectile.life = 0;
         if (killed) {
           const speed = Math.hypot(projectile.velocity.x, projectile.velocity.y) || 1;
-          onDeath(target.position, target.team, {
-            x: projectile.velocity.x / speed,
-            y: projectile.velocity.y / speed,
-          });
+          onDeath(target.position, target.team, { x: projectile.velocity.x / speed, y: projectile.velocity.y / speed });
         }
         hit = true;
         break;

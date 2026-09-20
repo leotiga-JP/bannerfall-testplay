@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.8 - Multiplayer Lobby & Deployment" />
-    <title>Bannerfall - Phase 3.8 Multiplayer Lobby</title>
+    <meta name="description" content="Bannerfall Phase 3.9 - Morale & Combined Arms" />
+    <title>Bannerfall - Phase 3.9 Morale & Combined Arms</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">PHASE 3.8 · MULTIPLAYER LOBBY & DEPLOYMENT</span>
+            <span class="eyebrow">PHASE 3.9 · MORALE & COMBINED ARMS</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
@@ -92,9 +92,15 @@
               <div class="lobby-class-section">
                 <span class="section-label">STARTING FORMATION</span>
                 <div id="lobby-class-cards" class="lobby-class-cards">
-                  <button class="lobby-class-card selected" data-lobby-class="infantry"><strong>LINE INFANTRY</strong><small>20兵 · Musket / Bayonet / Axe</small><em>旗を破壊可能</em></button>
-                  <button class="lobby-class-card" data-lobby-class="cavalry"><strong>CAVALRY</strong><small>12騎 · 高速 / Charge / Sabre</small><em>側面突破・砲兵狩り</em></button>
-                  <button class="lobby-class-card" data-lobby-class="artillery"><strong>ARTILLERY</strong><small>6兵 · 超長射程 / Area damage</small><em>後方火力支援</em></button>
+                  <button class="lobby-class-card selected" data-lobby-class="infantry"><strong>LINE INFANTRY</strong><small>20兵 · Musket / Bayonet / Axe</small><em>標準戦列・旗破壊</em></button>
+                  <button class="lobby-class-card" data-lobby-class="lightInfantry"><strong>LIGHT INFANTRY</strong><small>15兵 · 高機動 / 散開射撃</small><em>側面・牽制・旗破壊</em></button>
+                  <button class="lobby-class-card" data-lobby-class="grenadier"><strong>GRENADIERS</strong><small>16兵 · 高Morale / 強近接</small><em>正面突破・旗破壊</em></button>
+                  <button class="lobby-class-card" data-lobby-class="dragoon"><strong>DRAGOONS</strong><small>14騎 · 高機動 / 射撃</small><em>突撃不可・機動火力</em></button>
+                  <button class="lobby-class-card" data-lobby-class="cavalry"><strong>CAVALRY</strong><small>12騎 · 高速 / Charge</small><em>突破・砲兵狩り</em></button>
+                  <button class="lobby-class-card" data-lobby-class="hussar"><strong>HUSSARS</strong><small>10騎 · Shock Charge</small><em>Morale破壊・追撃</em></button>
+                  <button class="lobby-class-card" data-lobby-class="artillery"><strong>FIELD ARTILLERY</strong><small>6兵 · 2門 · 長射程</small><em>継続的な戦線削り</em></button>
+                  <button class="lobby-class-card" data-lobby-class="heavyArtillery"><strong>HEAVY ARTILLERY</strong><small>7兵 · 1門 · 巨大爆発</small><em>超火力・長Reload</em></button>
+                  <button class="lobby-class-card" data-lobby-class="horseArtillery"><strong>HORSE ARTILLERY</strong><small>6兵 · 3門 · 高速展開</small><em>前線追従砲撃</em></button>
                 </div>
               </div>
 
@@ -136,7 +142,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Phase 3.8 — Multiplayer</p>
+            <p id="battle-subtitle">Phase 3.9 — Morale & Combined Arms</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
@@ -190,12 +196,18 @@
           <div id="class-selector" class="class-selector hidden" aria-label="Respawn class selection">
             <div class="class-selector-header">
               <h2>CHOOSE NEXT FORMATION</h2>
-              <p>Respawn in <strong id="respawn-countdown">20.0</strong>s · カードをクリック、または1/2/3</p>
+              <p>Respawn in <strong id="respawn-countdown">20.0</strong>s · カードをクリック、または1〜9</p>
             </div>
             <div class="class-cards">
-              <div class="class-card" data-class="infantry"><span class="class-key">1</span><strong>LINE INFANTRY</strong><small>20兵 · 射撃 / 銃剣 / 斧</small><em>旗を破壊できる唯一の兵科</em></div>
-              <div class="class-card" data-class="cavalry"><span class="class-key">2</span><strong>CAVALRY</strong><small>12騎 · 高速 / 長距離突撃</small><em>砲兵狩り・側面突破</em></div>
-              <div class="class-card" data-class="artillery"><span class="class-key">3</span><strong>ARTILLERY</strong><small>6兵 · 超長射程 / 範囲攻撃</small><em>停止して展開。接近戦に弱い</em></div>
+              <div class="class-card" data-class="infantry"><span class="class-key">1</span><strong>LINE INFANTRY</strong><small>20兵 · 標準戦列</small><em>Musket / Bayonet / Axe</em></div>
+              <div class="class-card" data-class="lightInfantry"><span class="class-key">2</span><strong>LIGHT INFANTRY</strong><small>15兵 · 高機動</small><em>散開射撃 / Axe</em></div>
+              <div class="class-card" data-class="grenadier"><span class="class-key">3</span><strong>GRENADIERS</strong><small>16兵 · 高Morale</small><em>強近接 / Axe</em></div>
+              <div class="class-card" data-class="dragoon"><span class="class-key">4</span><strong>DRAGOONS</strong><small>14騎 · 機動射撃</small><em>Charge不可</em></div>
+              <div class="class-card" data-class="cavalry"><span class="class-key">5</span><strong>CAVALRY</strong><small>12騎 · 長距離突撃</small><em>Roadkill / Sabre</em></div>
+              <div class="class-card" data-class="hussar"><span class="class-key">6</span><strong>HUSSARS</strong><small>10騎 · Shock Charge</small><em>大Morale damage</em></div>
+              <div class="class-card" data-class="artillery"><span class="class-key">7</span><strong>FIELD ARTILLERY</strong><small>2門 · 長射程</small><em>標準砲撃</em></div>
+              <div class="class-card" data-class="heavyArtillery"><span class="class-key">8</span><strong>HEAVY ARTILLERY</strong><small>1門 · 超火力</small><em>巨大爆発 / 長Reload</em></div>
+              <div class="class-card" data-class="horseArtillery"><span class="class-key">9</span><strong>HORSE ARTILLERY</strong><small>3門 · 高速展開</small><em>軽砲 / 高機動</em></div>
             </div>
             <div class="class-intel"><span id="army-composition"></span><span id="class-recommendation"></span></div>
           </div>
@@ -205,7 +217,7 @@
 
         <footer class="controls">
           <span><kbd>WASD</kbd> 部隊移動</span>
-          <span><kbd>1/2/3</kbd> 装備 / リスポーン兵科</span>
+          <span><kbd>1/2/3</kbd> 歩兵装備</span><span><kbd>1-9</kbd> リスポーン兵科</span>
           <span><kbd>RMB / Space</kbd> 突撃</span>
           <span><kbd>LMB</kbd> 射撃 / 砲撃</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>

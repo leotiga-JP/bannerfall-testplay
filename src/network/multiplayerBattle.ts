@@ -1,6 +1,6 @@
 import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
-import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
+import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { InputManager } from '../input/inputManager';
 import { Renderer } from '../rendering/renderer';
 import { Hud } from '../ui/hud';
@@ -40,7 +40,7 @@ export class MultiplayerBattle {
     for (const card of document.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
       const click = (): void => {
         const value = card.dataset.class;
-        if (value === 'infantry' || value === 'cavalry' || value === 'artillery') this.input.queueClassSelection(value);
+        if (isSquadClass(value)) this.input.queueClassSelection(value);
       };
       card.addEventListener('click', click);
       this.cleanup.push(() => card.removeEventListener('click', click));
@@ -160,7 +160,9 @@ export class MultiplayerBattle {
     if (this.input.isDown('w')) moveY -= 1;
     if (this.input.isDown('s')) moveY += 1;
     const aim = this.game.camera.screenToWorld(this.input.getPointer());
-    const weapon: WeaponType = formation.squadClass === 'infantry' ? formation.weapon : 'bayonet';
+    const weapon: WeaponType = canBannerAttackClass(formation.squadClass)
+      ? formation.weapon
+      : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
     this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon });
   }
 
@@ -193,7 +195,7 @@ export class MultiplayerBattle {
       } else if (event.button === 2 && (formation.mode === 'charging' || formation.mode === 'melee')) {
         suppressNextRightRelease = true;
         send({ type: 'reform', formationId: formation.id });
-      } else if (event.button === 2 && formation.squadClass === 'infantry' && formation.weapon === 'axe') {
+      } else if (event.button === 2 && canBannerAttackClass(formation.squadClass) && formation.weapon === 'axe') {
         const targetTeam: Team = formation.team === 'blue' ? 'red' : 'blue';
         const banner = this.game.banners.find((candidate) => candidate.team === targetTeam);
         const world = worldAtEvent(event);
@@ -209,7 +211,7 @@ export class MultiplayerBattle {
         return;
       }
       const formation = this.game.playerFormation;
-      if (formation.squadClass === 'artillery' || (formation.squadClass === 'infantry' && formation.weapon !== 'bayonet')) return;
+      if (isArtilleryClass(formation.squadClass) || formation.squadClass === 'dragoon' || (canBannerAttackClass(formation.squadClass) && formation.weapon !== 'bayonet')) return;
       send({ type: 'charge', formationId: formation.id, target: worldAtEvent(event) });
     };
     const keyDown = (event: KeyboardEvent): void => {
@@ -217,11 +219,11 @@ export class MultiplayerBattle {
       const formation = this.game.playerFormation;
       const key = event.key.toLowerCase();
       if (key === 'f') send({ type: 'reform', formationId: formation.id });
-      if (key === '1' || key === '2' || key === '3') {
+      if (key >= '1' && key <= '9') {
         if (formation.aliveCount() === 0) {
-          const squadClass: SquadClass = key === '1' ? 'infantry' : key === '2' ? 'cavalry' : 'artillery';
-          send({ type: 'class', formationId: formation.id, squadClass });
-        } else if (formation.squadClass === 'infantry') {
+          const squadClass = SQUAD_CLASSES[Number(key) - 1];
+          if (squadClass) send({ type: 'class', formationId: formation.id, squadClass });
+        } else if (canBannerAttackClass(formation.squadClass) && (key === '1' || key === '2' || key === '3')) {
           const weapon: WeaponType = key === '1' ? 'musket' : key === '2' ? 'bayonet' : 'axe';
           send({ type: 'weapon', formationId: formation.id, weapon });
         }
@@ -230,7 +232,7 @@ export class MultiplayerBattle {
     const keyUp = (event: KeyboardEvent): void => {
       if (event.key !== ' ') return;
       const formation = this.game.playerFormation;
-      if (formation.squadClass === 'artillery' || (formation.squadClass === 'infantry' && formation.weapon !== 'bayonet')) return;
+      if (isArtilleryClass(formation.squadClass) || formation.squadClass === 'dragoon' || (canBannerAttackClass(formation.squadClass) && formation.weapon !== 'bayonet')) return;
       const target = this.game.camera.screenToWorld(this.input.getPointer());
       send({ type: 'charge', formationId: formation.id, target });
     };
@@ -247,7 +249,7 @@ export class MultiplayerBattle {
     for (const card of document.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
       const click = (): void => {
         const value = card.dataset.class;
-        if (value !== 'infantry' && value !== 'cavalry' && value !== 'artillery') return;
+        if (!isSquadClass(value)) return;
         const formation = this.game.playerFormation;
         send({ type: 'class', formationId: formation.id, squadClass: value });
       };

@@ -21,7 +21,7 @@ export class InputManager {
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3', 'z', 'x', 'v'].includes(key)) {
+      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
         event.preventDefault();
       }
     }, { signal: this.eventController.signal });
@@ -125,8 +125,14 @@ export class InputManager {
       return selection;
     }
     if (this.consumePressed('1')) return 'infantry';
-    if (this.consumePressed('2')) return 'cavalry';
-    if (this.consumePressed('3')) return 'artillery';
+    if (this.consumePressed('2')) return 'lightInfantry';
+    if (this.consumePressed('3')) return 'grenadier';
+    if (this.consumePressed('4')) return 'dragoon';
+    if (this.consumePressed('5')) return 'cavalry';
+    if (this.consumePressed('6')) return 'hussar';
+    if (this.consumePressed('7')) return 'artillery';
+    if (this.consumePressed('8')) return 'heavyArtillery';
+    if (this.consumePressed('9')) return 'horseArtillery';
     return null;
   }
 

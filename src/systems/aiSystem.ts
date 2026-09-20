@@ -1,7 +1,16 @@
 import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { GAME_CONFIG } from '../game/config';
-import type { SquadClass, Team, Vec2 } from '../game/types';
+import { artilleryProfile, chargeProfile, volleyProfile } from '../game/classProfiles';
+import {
+  SQUAD_CLASSES,
+  canBannerAttackClass,
+  isArtilleryClass,
+  isChargeCavalryClass,
+  type SquadClass,
+  type Team,
+  type Vec2,
+} from '../game/types';
 
 export type AiIntent =
   | 'advance'
@@ -16,7 +25,9 @@ export type AiIntent =
   | 'defend'
   | 'escort'
   | 'bombard'
-  | 'deploy';
+  | 'deploy'
+  | 'rout'
+  | 'breakthrough';
 
 export interface AiCommand {
   formation: Formation;
@@ -46,6 +57,10 @@ interface Controller {
   reformCooldown: number;
 }
 
+function zeroScores(): Record<SquadClass, number> {
+  return Object.fromEntries(SQUAD_CLASSES.map((value) => [value, 0])) as Record<SquadClass, number>;
+}
+
 export class BattleAiSystem {
   private readonly controllers = new Map<string, Controller>();
 
@@ -67,7 +82,7 @@ export class BattleAiSystem {
 
     const activeBannerAttackers = new Map<Team, number>([['blue', 0], ['red', 0]]);
     for (const formation of formations) {
-      if (formation.mode !== 'bannerAttack' || !formation.bannerTargetTeam || formation.aliveCount() === 0) continue;
+      if (formation.mode !== 'bannerAttack' || formation.aliveCount() === 0) continue;
       activeBannerAttackers.set(formation.team, (activeBannerAttackers.get(formation.team) ?? 0) + 1);
     }
 
@@ -83,33 +98,35 @@ export class BattleAiSystem {
       const allies = formations.filter((candidate) => candidate.team === formation.team && candidate.aliveCount() > 0);
       const ownBanner = banners.find((banner) => banner.team === formation.team)!;
       const enemyBanner = banners.find((banner) => banner.team !== formation.team)!;
-
       let target = controller.targetId ? aliveById.get(controller.targetId) ?? null : null;
-      if (!target || target.team === formation.team) {
+      if (!target || target.team === formation.team || target.mode === 'routed') {
         controller.targetId = null;
         target = this.selectTarget(formation, enemies, locks);
         if (target) this.lockTarget(controller, target, locks);
       }
-
       const command = this.emptyCommand(formation, target);
 
+      if (formation.mode === 'routed') {
+        controller.intent = 'rout';
+        controller.targetId = null;
+        this.writeDebug(formation, controller);
+        commands.push(command);
+        continue;
+      }
       if (formation.mode === 'bannerAttack') {
         controller.intent = 'attack-banner';
-        controller.meleeTime = 0;
         this.writeDebug(formation, controller, `FLAG-${formation.bannerTargetTeam?.toUpperCase() ?? '?'}`);
         commands.push(command);
         continue;
       }
       if (formation.mode === 'charging') {
         controller.intent = 'charge';
-        controller.meleeTime = 0;
         this.writeDebug(formation, controller);
         commands.push(command);
         continue;
       }
       if (formation.mode === 'reforming') {
         controller.intent = 'reform';
-        controller.meleeTime = 0;
         this.writeDebug(formation, controller);
         commands.push(command);
         continue;
@@ -120,14 +137,13 @@ export class BattleAiSystem {
         if (target && controller.thinkTimer <= 0) {
           controller.thinkTimer = this.nextThink();
           const ratio = formation.aliveCount() / Math.max(1, target.aliveCount());
-          const cavalryBonus = formation.squadClass === 'cavalry' ? -0.12 : 0;
-          const breakScore = controller.caution * 0.55
-            + (ratio < 0.72 ? 0.35 : 0)
-            + (formation.aliveCount() <= Math.ceil(formation.maxSoldiers() * 0.35) ? 0.3 : 0)
+          const moralePressure = formation.morale < 42 ? 0.35 : formation.morale < 60 ? 0.15 : 0;
+          const breakScore = controller.caution * 0.48
+            + (ratio < 0.7 ? 0.35 : 0)
+            + moralePressure
             + (controller.meleeTime > 5 ? 0.12 : 0)
-            - controller.aggression * 0.25
-            + cavalryBonus;
-          if (controller.meleeTime > 2.0 && breakScore > 0.6 && Math.random() < breakScore) {
+            - controller.aggression * 0.22;
+          if (controller.meleeTime > 1.8 && breakScore > 0.58 && Math.random() < breakScore) {
             command.breakOffTarget = target;
             controller.intent = 'reform';
             controller.meleeTime = 0;
@@ -146,7 +162,6 @@ export class BattleAiSystem {
         const canRespondToBanner = ownBanner.underAttackTimer > 0
           && defenseTarget !== null
           && this.distance(formation.center, ownBanner.position) <= GAME_CONFIG.banner.aiResponseRadius;
-
         if (canRespondToBanner && defenseTarget) {
           target = defenseTarget;
           this.lockTarget(controller, target, locks);
@@ -154,10 +169,10 @@ export class BattleAiSystem {
           controller.intent = 'defend';
         }
 
-        if (formation.squadClass === 'artillery') {
+        if (isArtilleryClass(formation.squadClass)) {
           this.decideArtillery(formation, target, enemies, controller, command, locks);
-        } else if (formation.squadClass === 'cavalry') {
-          if (!canRespondToBanner && Math.random() < GAME_CONFIG.ai.retargetChance + 0.15) {
+        } else if (isChargeCavalryClass(formation.squadClass)) {
+          if (!canRespondToBanner && Math.random() < GAME_CONFIG.ai.retargetChance + 0.16) {
             const retarget = this.selectTarget(formation, enemies, locks);
             if (retarget) {
               target = retarget;
@@ -167,8 +182,10 @@ export class BattleAiSystem {
           }
           if (target) this.decideCavalry(formation, target, controller, command, locks);
           else controller.intent = 'advance';
+        } else if (formation.squadClass === 'dragoon') {
+          this.decideDragoon(formation, target, controller, command);
         } else {
-          this.decideInfantry(
+          this.decideFootInfantry(
             formation,
             target,
             enemies,
@@ -177,7 +194,6 @@ export class BattleAiSystem {
             enemyBanner,
             controller,
             command,
-            locks,
             activeBannerAttackers,
             canRespondToBanner,
           );
@@ -185,9 +201,9 @@ export class BattleAiSystem {
       }
 
       if (target && !command.reform && !command.chargeTarget && !command.bannerAttackTarget && !command.artilleryTarget) {
-        command.move = this.movementForIntent(formation, target, controller);
-      } else if (!target && controller.intent === 'advance') {
-        command.move = formation.team === 'blue' ? { x: 1, y: 0 } : { x: -1, y: 0 };
+        command.move = this.movementForIntent(formation, target, controller, enemyBanner.position);
+      } else if (!target && (controller.intent === 'advance' || controller.intent === 'breakthrough')) {
+        command.move = this.toward(formation.center, enemyBanner.position);
       }
 
       this.writeDebug(formation, controller);
@@ -205,12 +221,15 @@ export class BattleAiSystem {
     const scores = this.scoreClasses(formation.team, formations, banners, planned);
     const controller = this.controllers.get(formation.id) ?? this.createController();
     this.controllers.set(formation.id, controller);
-    scores.cavalry += controller.aggression * 12 + controller.flankPreference * 15;
-    scores.artillery += controller.caution * 12;
-    scores.infantry += controller.objectiveCommitment * 12;
-    scores.infantry += (Math.random() - 0.5) * 8;
-    scores.cavalry += (Math.random() - 0.5) * 8;
-    scores.artillery += (Math.random() - 0.5) * 8;
+    scores.cavalry += controller.aggression * 10 + controller.flankPreference * 9;
+    scores.hussar += controller.aggression * 11 + controller.flankPreference * 14;
+    scores.dragoon += controller.flankPreference * 9 + controller.caution * 5;
+    scores.artillery += controller.caution * 8;
+    scores.heavyArtillery += controller.caution * 11;
+    scores.horseArtillery += controller.flankPreference * 6 + controller.aggression * 4;
+    scores.infantry += controller.objectiveCommitment * 11;
+    scores.grenadier += controller.aggression * 7 + controller.objectiveCommitment * 7;
+    for (const value of SQUAD_CLASSES) scores[value] += (Math.random() - 0.5) * 10;
     return this.highestClass(scores);
   }
 
@@ -229,8 +248,8 @@ export class BattleAiSystem {
     banners: Banner[],
     planned: Map<string, SquadClass>,
   ): Record<SquadClass, number> {
-    const counts: Record<SquadClass, number> = { infantry: 0, cavalry: 0, artillery: 0 };
-    const enemyCounts: Record<SquadClass, number> = { infantry: 0, cavalry: 0, artillery: 0 };
+    const counts = zeroScores();
+    const enemyCounts = zeroScores();
     for (const formation of formations) {
       if (formation.aliveCount() <= 0) continue;
       (formation.team === team ? counts : enemyCounts)[formation.squadClass] += 1;
@@ -242,49 +261,78 @@ export class BattleAiSystem {
 
     const ownBanner = banners.find((banner) => banner.team === team)!;
     const enemyBanner = banners.find((banner) => banner.team !== team)!;
-    const friendlyNearEnemyBanner = formations.filter((formation) =>
-      formation.team === team && formation.aliveCount() > 0 && this.distance(formation.center, enemyBanner.position) < 1050,
-    ).length;
-    const enemyNearOwnBanner = formations.filter((formation) =>
-      formation.team !== team && formation.aliveCount() > 0 && this.distance(formation.center, ownBanner.position) < 1100,
-    ).length;
+    const enemyArtillery = enemyCounts.artillery + enemyCounts.heavyArtillery + enemyCounts.horseArtillery;
+    const enemyMounted = enemyCounts.cavalry + enemyCounts.hussar + enemyCounts.dragoon;
+    const enemyFoot = enemyCounts.infantry + enemyCounts.lightInfantry + enemyCounts.grenadier;
+    const friendlyNearEnemyBanner = formations.filter((formation) => formation.team === team && formation.aliveCount() > 0 && this.distance(formation.center, enemyBanner.position) < 1100).length;
+    const enemyNearOwnBanner = formations.filter((formation) => formation.team !== team && formation.aliveCount() > 0 && this.distance(formation.center, ownBanner.position) < 1200).length;
+    const avgEnemyMorale = this.averageMorale(formations.filter((formation) => formation.team !== team && formation.aliveCount() > 0));
+    const avgFriendlyMorale = this.averageMorale(formations.filter((formation) => formation.team === team && formation.aliveCount() > 0));
 
-    const scores: Record<SquadClass, number> = {
-      infantry: 62,
-      cavalry: 28,
-      artillery: 22,
+    const scores = zeroScores();
+    Object.assign(scores, {
+      infantry: 58,
+      lightInfantry: 30,
+      grenadier: 34,
+      dragoon: 30,
+      cavalry: 30,
+      hussar: 24,
+      artillery: 28,
+      heavyArtillery: 18,
+      horseArtillery: 24,
+    });
+
+    scores.infantry += Math.max(0, 8 - counts.infantry) * 4 + friendlyNearEnemyBanner * 5 + enemyNearOwnBanner * 4;
+    scores.lightInfantry += enemyArtillery * 5 + Math.max(0, 2 - counts.lightInfantry) * 8;
+    scores.grenadier += avgEnemyMorale < 55 ? 24 : 4;
+    scores.grenadier += friendlyNearEnemyBanner * 5;
+    scores.dragoon += enemyNearOwnBanner * 3 + Math.max(0, 2 - counts.dragoon) * 7;
+    scores.cavalry += enemyArtillery * 13 + Math.max(0, 3 - counts.cavalry) * 6;
+    scores.hussar += enemyArtillery * 6 + (avgEnemyMorale < 62 ? 30 : 4) + Math.max(0, 2 - counts.hussar) * 6;
+    scores.artillery += enemyFoot * 2.8 + Math.max(0, 2 - counts.artillery) * 10;
+    scores.heavyArtillery += enemyFoot * 2.3 + (avgEnemyMorale > 60 ? 12 : 0);
+    scores.horseArtillery += enemyFoot * 1.6 + (avgFriendlyMorale > 55 ? 6 : 0) + Math.max(0, 2 - counts.horseArtillery) * 7;
+
+    if (enemyBanner.ratio < 0.4) {
+      scores.infantry += 34;
+      scores.grenadier += 24;
+      scores.lightInfantry += 12;
+      scores.heavyArtillery -= 15;
+    }
+    if (enemyBanner.ratio < 0.2) {
+      scores.infantry += 38;
+      scores.grenadier += 32;
+      scores.cavalry -= 10;
+      scores.heavyArtillery -= 18;
+    }
+    if (ownBanner.underAttackTimer > 0 || ownBanner.ratio < 0.35) {
+      scores.infantry += 32;
+      scores.grenadier += 28;
+      scores.dragoon += 20;
+      scores.artillery -= 18;
+      scores.heavyArtillery -= 34;
+    }
+    scores.artillery -= enemyMounted * 3.5;
+    scores.heavyArtillery -= enemyMounted * 6;
+
+    const caps: Record<SquadClass, number> = {
+      infantry: GAME_CONFIG.ai.classSoftCapInfantry,
+      lightInfantry: GAME_CONFIG.ai.classSoftCapLightInfantry,
+      grenadier: GAME_CONFIG.ai.classSoftCapGrenadier,
+      dragoon: GAME_CONFIG.ai.classSoftCapDragoon,
+      cavalry: GAME_CONFIG.ai.classSoftCapCavalry,
+      hussar: GAME_CONFIG.ai.classSoftCapHussar,
+      artillery: GAME_CONFIG.ai.classSoftCapArtillery,
+      heavyArtillery: GAME_CONFIG.ai.classSoftCapHeavyArtillery,
+      horseArtillery: GAME_CONFIG.ai.classSoftCapHorseArtillery,
     };
-
-    scores.infantry += Math.max(0, 14 - counts.infantry) * 4.5;
-    scores.infantry += counts.artillery * 2.5;
-    scores.infantry += friendlyNearEnemyBanner * 5;
-    scores.infantry += enemyNearOwnBanner * 4;
-    if (enemyBanner.ratio < 0.45) scores.infantry += 38;
-    if (enemyBanner.ratio < 0.22) scores.infantry += 38;
-    if (ownBanner.underAttackTimer > 0) scores.infantry += 32;
-
-    scores.cavalry += enemyCounts.artillery * 15;
-    scores.cavalry += Math.max(0, 4 - counts.cavalry) * 7;
-    scores.cavalry += enemyCounts.cavalry < 3 ? 8 : 0;
-    scores.cavalry -= enemyNearOwnBanner * 2;
-    if (ownBanner.ratio < 0.35) scores.cavalry -= 22;
-    if (enemyBanner.ratio < 0.25) scores.cavalry -= 16;
-
-    scores.artillery += enemyCounts.infantry * 3.4;
-    scores.artillery += Math.max(0, 2 - counts.artillery) * 12;
-    scores.artillery += counts.infantry * 1.2;
-    scores.artillery -= enemyCounts.cavalry * 4.5;
-    scores.artillery -= enemyNearOwnBanner * 7;
-    if (ownBanner.underAttackTimer > 0) scores.artillery -= 30;
-
-    if (counts.infantry > GAME_CONFIG.ai.classSoftCapInfantry) scores.infantry -= (counts.infantry - GAME_CONFIG.ai.classSoftCapInfantry) * 12;
-    if (counts.cavalry > GAME_CONFIG.ai.classSoftCapCavalry) scores.cavalry -= (counts.cavalry - GAME_CONFIG.ai.classSoftCapCavalry) * 25;
-    if (counts.artillery > GAME_CONFIG.ai.classSoftCapArtillery) scores.artillery -= (counts.artillery - GAME_CONFIG.ai.classSoftCapArtillery) * 30;
-
+    for (const value of SQUAD_CLASSES) {
+      if (counts[value] > caps[value]) scores[value] -= (counts[value] - caps[value]) * (value.includes('Artillery') || value === 'artillery' ? 28 : 17);
+    }
     return scores;
   }
 
-  private decideInfantry(
+  private decideFootInfantry(
     formation: Formation,
     initialTarget: Formation | null,
     enemies: Formation[],
@@ -293,119 +341,113 @@ export class BattleAiSystem {
     enemyBanner: Banner,
     controller: Controller,
     command: AiCommand,
-    locks: Map<string, number>,
     activeBannerAttackers: Map<Team, number>,
     alreadyDefending: boolean,
   ): void {
     let target = initialTarget;
-    if (!alreadyDefending) {
-      const alliedAttackers = allies.filter((ally) => ally.mode === 'bannerAttack' && ally.bannerTargetTeam === enemyBanner.team);
-      const defenders = enemies.filter((enemy) => this.distance(enemy.center, enemyBanner.position) <= GAME_CONFIG.banner.aiDefenseRadius);
-      const localAllies = allies.filter((ally) => this.distance(ally.center, enemyBanner.position) <= GAME_CONFIG.banner.aiDefenseRadius + 120);
+    if (!alreadyDefending && canBannerAttackClass(formation.squadClass)) {
+      const defenders = enemies.filter((enemy) => this.distance(enemy.center, enemyBanner.position) <= GAME_CONFIG.banner.aiDefenseRadius && enemy.mode !== 'routed');
+      const localAllies = allies.filter((ally) => this.distance(ally.center, enemyBanner.position) <= GAME_CONFIG.banner.aiDefenseRadius + 150);
       const distanceToEnemyBanner = this.distance(formation.center, enemyBanner.position);
       const attackers = activeBannerAttackers.get(formation.team) ?? 0;
       const flagOpen = defenders.length === 0 || localAllies.length >= defenders.length + 1;
-      const shouldAttackBanner = !enemyBanner.destroyed
-        && formation.aliveCount() >= 7
+      if (!enemyBanner.destroyed
+        && formation.aliveCount() >= Math.max(5, Math.ceil(formation.maxSoldiers() * 0.38))
         && distanceToEnemyBanner <= GAME_CONFIG.banner.aiAttackTriggerDistance
         && attackers < GAME_CONFIG.banner.aiMaxAttackers
         && flagOpen
-        && (controller.objectiveCommitment > 0.5 || Math.random() < controller.objectiveCommitment * 0.45);
-
-      if (shouldAttackBanner) {
+        && controller.objectiveCommitment > 0.42) {
         command.bannerAttackTarget = enemyBanner;
         command.faceAngle = this.angleTo(formation.center, enemyBanner.position);
         controller.intent = 'attack-banner';
         activeBannerAttackers.set(formation.team, attackers + 1);
         return;
       }
-
-      if (alliedAttackers.length > 0 && distanceToEnemyBanner < 1120 && defenders.length > 0) {
-        target = this.nearestToPoint(defenders, enemyBanner.position);
-        if (target) {
-          this.lockTarget(controller, target, locks);
-          command.faceAngle = this.angleTo(formation.center, target.center);
-          controller.intent = 'escort';
-        }
-      } else if (Math.random() < GAME_CONFIG.ai.retargetChance) {
-        const retarget = this.selectTarget(formation, enemies, locks);
-        if (retarget && retarget.id !== controller.targetId) {
-          target = retarget;
-          this.lockTarget(controller, retarget, locks);
-          command.faceAngle = this.angleTo(formation.center, retarget.center);
-        }
-      }
     }
 
-    if (target) this.decideInfantryCombat(formation, target, controller, command, locks);
-    else {
+    if (!target) {
       controller.intent = ownBanner.underAttackTimer > 0 ? 'defend' : 'advance';
-      command.move = formation.team === 'blue' ? { x: 1, y: 0 } : { x: -1, y: 0 };
+      command.move = this.toward(formation.center, enemyBanner.position);
+      return;
     }
-  }
 
-  private decideInfantryCombat(
-    formation: Formation,
-    target: Formation,
-    controller: Controller,
-    command: AiCommand,
-    locks: Map<string, number>,
-  ): void {
     const distance = this.distance(formation.center, target.center);
-    const ownRatio = formation.aliveCount() / Math.max(1, target.aliveCount());
-    const targetLocks = locks.get(target.id) ?? 0;
-    const strategicIntent = controller.intent;
+    const volley = volleyProfile(formation.squadClass);
+    const routedOrBroken = target.mode === 'routed' || target.morale <= GAME_CONFIG.morale.breakthroughMoraleThreshold;
+    if (routedOrBroken && formation.morale > 45) {
+      controller.intent = 'breakthrough';
+      command.move = this.toward(formation.center, enemyBanner.position);
+      return;
+    }
 
-    if (
-      formation.needsReform()
-      && controller.reformCooldown <= 0
-      && distance > GAME_CONFIG.musket.effectiveRange + 70
-      && Math.random() < 0.25 + controller.caution * 0.45
-    ) {
+    const nearbyBreakthrough = !alreadyDefending && allies.some((ally) =>
+      ally !== formation
+      && ally.aliveCount() > 0
+      && ally.debugIntent === 'BREAKTHROUGH'
+      && this.distance(ally.center, formation.center) <= 560
+    );
+    if (nearbyBreakthrough && formation.morale > 52 && distance > volley.defensiveRange) {
+      controller.intent = 'breakthrough';
+      command.move = this.toward(formation.center, enemyBanner.position);
+      return;
+    }
+
+    if (formation.needsReform() && controller.reformCooldown <= 0 && distance > volley.effectiveRange + 80 && Math.random() < 0.28 + controller.caution * 0.4) {
       command.reform = true;
       controller.intent = 'reform';
       controller.reformCooldown = GAME_CONFIG.ai.reformCooldown;
       return;
     }
 
-    if (formation.canVolley() && distance <= GAME_CONFIG.musket.effectiveRange) {
-      const targetInFriendlyMelee = target.mode === 'melee';
-      const holdFireChance = targetInFriendlyMelee ? controller.caution * 0.55 : 0;
-      if (Math.random() >= holdFireChance) {
-        command.volley = true;
-        controller.intent = strategicIntent === 'defend' ? 'defend' : strategicIntent === 'escort' ? 'escort' : 'volley';
-      } else controller.intent = 'flank';
+    if (formation.canVolley() && distance <= volley.effectiveRange) {
+      command.volley = true;
+      controller.intent = 'volley';
       return;
     }
 
-    const reloadOpportunity = target.reloadTimer > 1.6;
-    const chargeScore = controller.aggression * 0.5
-      + Math.max(-0.25, Math.min(0.35, (ownRatio - 1) * 0.45))
-      + (reloadOpportunity ? 0.28 : 0)
-      + (target.mode === 'reforming' || target.mode === 'bannerAttack' || target.squadClass === 'artillery' ? 0.25 : 0)
-      - controller.caution * 0.18
-      - Math.max(0, targetLocks - 1) * 0.08
-      + (strategicIntent === 'defend' ? 0.18 : 0);
-
-    if (
-      distance >= GAME_CONFIG.charge.aiMinDistance
-      && distance <= GAME_CONFIG.charge.aiMaxDistance
-      && chargeScore > 0.58
-      && Math.random() < Math.min(0.88, chargeScore)
-    ) {
-      command.chargeTarget = this.leadChargeTarget(formation, target);
-      controller.intent = strategicIntent === 'defend' ? 'defend' : 'charge';
-    } else if (distance < controller.retreatRange && controller.caution > controller.aggression * 0.7 && strategicIntent !== 'defend') {
+    const ownRatio = formation.aliveCount() / Math.max(1, target.aliveCount());
+    if (formation.morale < 42 || (distance < controller.retreatRange && ownRatio < 0.72 && controller.caution > 0.5)) {
       controller.intent = 'retreat';
-    } else if (
-      strategicIntent !== 'defend'
-      && strategicIntent !== 'escort'
-      && distance > controller.preferredRange
-      && (controller.flankPreference > 0.55 || targetLocks >= 2)
-      && Math.random() < 0.35 + controller.flankPreference * 0.4
-    ) controller.intent = 'flank';
-    else if (distance > controller.preferredRange) controller.intent = strategicIntent === 'defend' ? 'defend' : strategicIntent === 'escort' ? 'escort' : 'advance';
-    else controller.intent = strategicIntent === 'defend' ? 'defend' : strategicIntent === 'escort' ? 'escort' : 'hold';
+      return;
+    }
+
+    if (formation.squadClass !== 'lightInfantry'
+      && distance >= GAME_CONFIG.charge.aiMinDistance
+      && distance <= GAME_CONFIG.charge.aiMaxDistance
+      && formation.morale > 58
+      && (target.reloadTimer > 0.9 || target.morale < 52)
+      && Math.random() < 0.18 + controller.aggression * 0.42) {
+      command.chargeTarget = this.leadChargeTarget(formation, target, 70);
+      controller.intent = 'charge';
+      return;
+    }
+
+    if (distance > volley.effectiveRange * 0.88) controller.intent = controller.flankPreference > 0.62 ? 'flank' : 'advance';
+    else controller.intent = 'hold';
+  }
+
+  private decideDragoon(
+    formation: Formation,
+    target: Formation | null,
+    controller: Controller,
+    command: AiCommand,
+  ): void {
+    if (!target) {
+      controller.intent = 'advance';
+      return;
+    }
+    const profile = volleyProfile('dragoon');
+    const distance = this.distance(formation.center, target.center);
+    if (formation.canVolley() && distance <= profile.effectiveRange) {
+      command.volley = true;
+      controller.intent = 'volley';
+      return;
+    }
+    if (distance < 270 || formation.morale < 40) {
+      controller.intent = 'retreat';
+      return;
+    }
+    controller.intent = distance > profile.effectiveRange * 0.92 ? 'advance' : 'flank';
   }
 
   private decideCavalry(
@@ -415,32 +457,23 @@ export class BattleAiSystem {
     command: AiCommand,
     locks: Map<string, number>,
   ): void {
+    const profile = chargeProfile(formation.squadClass);
     const distance = this.distance(formation.center, target.center);
     const targetLocks = locks.get(target.id) ?? 0;
-    const targetPriority = target.squadClass === 'artillery' ? 0.28 : target.mode === 'bannerAttack' ? 0.2 : 0;
-    const chargeScore = controller.aggression * 0.52
-      + controller.flankPreference * 0.2
-      + targetPriority
-      - Math.max(0, targetLocks - 1) * 0.06;
-
-    if (
-      distance >= GAME_CONFIG.cavalry.aiChargeMinDistance
-      && distance <= GAME_CONFIG.cavalry.aiChargeMaxDistance
-      && chargeScore > 0.48
-      && Math.random() < Math.min(0.94, chargeScore)
-    ) {
-      command.chargeTarget = this.leadChargeTarget(formation, target, 120);
+    if (formation.morale < 38) {
+      controller.intent = 'retreat';
+      return;
+    }
+    if (distance >= profile.aiMinDistance && distance <= profile.aiMaxDistance
+      && formation.reloadTimer <= 0
+      && Math.random() < 0.34 + controller.aggression * 0.42) {
+      command.chargeTarget = this.leadChargeTarget(formation, target, formation.squadClass === 'hussar' ? 120 : 90);
       controller.intent = 'charge';
       return;
     }
-
-    if (distance < 125) {
-      command.chargeTarget = this.leadChargeTarget(formation, target, 35);
-      controller.intent = 'charge';
-      return;
-    }
-
-    controller.intent = target.squadClass === 'artillery' || targetLocks >= 2 ? 'flank' : 'advance';
+    const artilleryVictim = isArtilleryClass(target.squadClass);
+    const brokenVictim = target.mode === 'routed' || target.morale < 45;
+    controller.intent = artilleryVictim || brokenVictim || targetLocks >= 2 ? 'flank' : 'advance';
   }
 
   private decideArtillery(
@@ -451,35 +484,34 @@ export class BattleAiSystem {
     command: AiCommand,
     locks: Map<string, number>,
   ): void {
-    const cavalryThreat = this.nearestToPoint(
-      enemies.filter((enemy) => enemy.squadClass === 'cavalry' && this.distance(enemy.center, formation.center) <= GAME_CONFIG.artillery.threatRetreatRange),
+    const profile = artilleryProfile(formation.squadClass);
+    const mountedThreat = this.nearestToPoint(
+      enemies.filter((enemy) => (isChargeCavalryClass(enemy.squadClass) || enemy.squadClass === 'dragoon')
+        && this.distance(enemy.center, formation.center) <= profile.threatRetreatRange),
       formation.center,
     );
-    if (cavalryThreat) {
-      this.lockTarget(controller, cavalryThreat, locks);
-      command.faceAngle = this.angleTo(formation.center, cavalryThreat.center);
+    if (mountedThreat) {
+      this.lockTarget(controller, mountedThreat, locks);
+      command.faceAngle = this.angleTo(formation.center, mountedThreat.center);
       controller.intent = 'retreat';
-      command.move = this.awayFrom(formation.center, cavalryThreat.center);
+      command.move = this.awayFrom(formation.center, mountedThreat.center);
       return;
     }
 
-    // Artillery evaluates the whole battlefield instead of inheriting the generic nearest-target choice.
     const bestTarget = this.selectArtilleryTarget(formation, enemies) ?? target;
     if (!bestTarget) {
       controller.intent = 'advance';
-      command.move = formation.team === 'blue' ? { x: 1, y: 0 } : { x: -1, y: 0 };
       return;
     }
     this.lockTarget(controller, bestTarget, locks);
     command.faceAngle = this.angleTo(formation.center, bestTarget.center);
     const distance = this.distance(formation.center, bestTarget.center);
-
-    if (distance > GAME_CONFIG.artillery.range * 0.97) {
+    if (distance > profile.range * 0.97) {
       controller.intent = 'advance';
       command.move = this.toward(formation.center, bestTarget.center);
       return;
     }
-    if (distance < GAME_CONFIG.artillery.minRange) {
+    if (distance < profile.minRange) {
       controller.intent = 'retreat';
       command.move = this.awayFrom(formation.center, bestTarget.center);
       return;
@@ -490,8 +522,8 @@ export class BattleAiSystem {
     }
     if (formation.canArtilleryFire()) {
       command.artilleryTarget = {
-        x: bestTarget.center.x + (Math.random() - 0.5) * GAME_CONFIG.artillery.targetJitter,
-        y: bestTarget.center.y + (Math.random() - 0.5) * GAME_CONFIG.artillery.targetJitter,
+        x: bestTarget.center.x + (Math.random() - 0.5) * profile.targetJitter,
+        y: bestTarget.center.y + (Math.random() - 0.5) * profile.targetJitter,
       };
       controller.intent = 'bombard';
       return;
@@ -499,15 +531,18 @@ export class BattleAiSystem {
     controller.intent = 'hold';
   }
 
-  private movementForIntent(formation: Formation, target: Formation, controller: Controller): Vec2 {
+  private movementForIntent(formation: Formation, target: Formation, controller: Controller, enemyBanner: Vec2): Vec2 {
     if (formation.mode !== 'line') return { x: 0, y: 0 };
+    if (controller.intent === 'breakthrough') return this.toward(formation.center, enemyBanner);
     const toward = this.toward(formation.center, target.center);
     if (controller.intent === 'advance' || controller.intent === 'defend' || controller.intent === 'escort') return toward;
     if (controller.intent === 'retreat') return { x: -toward.x, y: -toward.y };
     if (controller.intent === 'flank') {
       const rightX = -toward.y * controller.flankSign;
       const rightY = toward.x * controller.flankSign;
-      const desiredRange = formation.squadClass === 'cavalry' ? 380 : controller.preferredRange * 0.78;
+      const desiredRange = isChargeCavalryClass(formation.squadClass) ? 390
+        : formation.squadClass === 'dragoon' ? 470
+          : controller.preferredRange * 0.78;
       const desired = {
         x: target.center.x - toward.x * desiredRange + rightX * controller.flankOffset,
         y: target.center.y - toward.y * desiredRange + rightY * controller.flankOffset,
@@ -521,15 +556,18 @@ export class BattleAiSystem {
     let best: Formation | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const enemy of enemies) {
+      if (enemy.mode === 'routed' && !isChargeCavalryClass(formation.squadClass)) continue;
       const distance = this.distance(enemy.center, formation.center);
       const crowded = locks.get(enemy.id) ?? 0;
       const weakness = enemy.maxSoldiers() - enemy.aliveCount();
       const lanePenalty = Math.abs(enemy.center.y - formation.center.y) * 0.07;
       const objectiveBonus = enemy.mode === 'bannerAttack' ? -280 : 0;
       let classBonus = 0;
-      if (formation.squadClass === 'cavalry' && enemy.squadClass === 'artillery') classBonus -= 600;
-      if (formation.squadClass === 'artillery' && enemy.squadClass === 'infantry') classBonus -= 180;
-      if (formation.squadClass === 'artillery' && enemy.squadClass === 'cavalry') classBonus += 230;
+      if (isChargeCavalryClass(formation.squadClass) && isArtilleryClass(enemy.squadClass)) classBonus -= 640;
+      if (formation.squadClass === 'hussar' && enemy.morale < 55) classBonus -= 280;
+      if (isArtilleryClass(formation.squadClass) && canBannerAttackClass(enemy.squadClass)) classBonus -= 180;
+      if (isArtilleryClass(formation.squadClass) && isChargeCavalryClass(enemy.squadClass)) classBonus += 260;
+      if (formation.squadClass === 'lightInfantry' && isArtilleryClass(enemy.squadClass)) classBonus -= 180;
       const score = distance
         + crowded * GAME_CONFIG.ai.targetCrowdPenalty
         + lanePenalty
@@ -546,28 +584,26 @@ export class BattleAiSystem {
   }
 
   private selectArtilleryTarget(formation: Formation, enemies: Formation[]): Formation | null {
+    const profile = artilleryProfile(formation.squadClass);
     let best: Formation | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const enemy of enemies) {
       const distance = this.distance(formation.center, enemy.center);
-      if (distance > GAME_CONFIG.artillery.range || distance < GAME_CONFIG.artillery.minRange) continue;
-
-      // Prefer dense infantry concentrations. Nearby formations make a target more valuable
-      // because one shell can disrupt several squads even when it only directly damages one.
+      if (distance > profile.range || distance < profile.minRange || enemy.mode === 'routed') continue;
       let nearbyFormations = 0;
       let nearbySoldiers = 0;
       for (const other of enemies) {
-        if (this.distance(enemy.center, other.center) <= 430) {
+        if (this.distance(enemy.center, other.center) <= profile.blastRadius * 2.8 + 120) {
           nearbyFormations += 1;
           nearbySoldiers += other.aliveCount();
         }
       }
-
-      const classScore = enemy.squadClass === 'infantry' ? -420 : enemy.squadClass === 'artillery' ? -100 : 210;
-      const densityBonus = -(nearbyFormations - 1) * 135 - nearbySoldiers * 5.5;
-      const rangeScore = Math.abs(distance - GAME_CONFIG.artillery.preferredRange) * 0.16;
-      const objectiveBonus = enemy.mode === 'bannerAttack' ? -280 : 0;
-      const score = rangeScore + classScore + densityBonus + objectiveBonus + Math.random() * 95;
+      const classScore = canBannerAttackClass(enemy.squadClass) ? -380 : isArtilleryClass(enemy.squadClass) ? -90 : 170;
+      const densityBonus = -(nearbyFormations - 1) * 130 - nearbySoldiers * 5.2;
+      const rangeScore = Math.abs(distance - profile.preferredRange) * 0.16;
+      const objectiveBonus = enemy.mode === 'bannerAttack' ? -300 : 0;
+      const moraleBonus = enemy.morale < 55 ? -90 : 0;
+      const score = rangeScore + classScore + densityBonus + objectiveBonus + moraleBonus + Math.random() * 90;
       if (score < bestScore) {
         bestScore = score;
         best = enemy;
@@ -577,10 +613,10 @@ export class BattleAiSystem {
   }
 
   private selectBannerThreat(formation: Formation, enemies: Formation[], banner: Banner): Formation | null {
-    const threats = enemies.filter((enemy) =>
+    const threats = enemies.filter((enemy) => enemy.mode !== 'routed' && (
       (enemy.mode === 'bannerAttack' && enemy.bannerTargetTeam === banner.team)
-      || this.distance(enemy.center, banner.position) <= GAME_CONFIG.banner.aiDefenseRadius,
-    );
+      || this.distance(enemy.center, banner.position) <= GAME_CONFIG.banner.aiDefenseRadius
+    ));
     if (threats.length === 0) return null;
     return this.nearestToPoint(threats, banner.position) ?? this.nearestToPoint(threats, formation.center);
   }
@@ -602,11 +638,8 @@ export class BattleAiSystem {
     const dx = target.center.x - formation.center.x;
     const dy = target.center.y - formation.center.y;
     const distance = Math.hypot(dx, dy) || 1;
-    const lead = Math.min(extraLead, distance * 0.18);
-    return {
-      x: target.center.x + (dx / distance) * lead,
-      y: target.center.y + (dy / distance) * lead,
-    };
+    const lead = Math.min(extraLead, distance * 0.22);
+    return { x: target.center.x + (dx / distance) * lead, y: target.center.y + (dy / distance) * lead };
   }
 
   private lockTarget(controller: Controller, target: Formation, locks: Map<string, number>): void {
@@ -624,14 +657,10 @@ export class BattleAiSystem {
       aggression: 0.25 + Math.random() * 0.75,
       caution: 0.2 + Math.random() * 0.8,
       flankPreference: Math.random(),
-      objectiveCommitment: GAME_CONFIG.ai.objectiveCommitmentMin
-        + Math.random() * (GAME_CONFIG.ai.objectiveCommitmentMax - GAME_CONFIG.ai.objectiveCommitmentMin),
-      preferredRange: GAME_CONFIG.ai.preferredRangeMin
-        + Math.random() * (GAME_CONFIG.ai.preferredRangeMax - GAME_CONFIG.ai.preferredRangeMin),
-      retreatRange: GAME_CONFIG.ai.retreatRangeMin
-        + Math.random() * (GAME_CONFIG.ai.retreatRangeMax - GAME_CONFIG.ai.retreatRangeMin),
-      flankOffset: GAME_CONFIG.ai.flankOffsetMin
-        + Math.random() * (GAME_CONFIG.ai.flankOffsetMax - GAME_CONFIG.ai.flankOffsetMin),
+      objectiveCommitment: GAME_CONFIG.ai.objectiveCommitmentMin + Math.random() * (GAME_CONFIG.ai.objectiveCommitmentMax - GAME_CONFIG.ai.objectiveCommitmentMin),
+      preferredRange: GAME_CONFIG.ai.preferredRangeMin + Math.random() * (GAME_CONFIG.ai.preferredRangeMax - GAME_CONFIG.ai.preferredRangeMin),
+      retreatRange: GAME_CONFIG.ai.retreatRangeMin + Math.random() * (GAME_CONFIG.ai.retreatRangeMax - GAME_CONFIG.ai.retreatRangeMin),
+      flankOffset: GAME_CONFIG.ai.flankOffsetMin + Math.random() * (GAME_CONFIG.ai.flankOffsetMax - GAME_CONFIG.ai.flankOffsetMin),
       flankSign: Math.random() < 0.5 ? -1 : 1,
       meleeTime: 0,
       reformCooldown: Math.random() * 2,
@@ -654,10 +683,13 @@ export class BattleAiSystem {
 
   private highestClass(scores: Record<SquadClass, number>): SquadClass {
     let best: SquadClass = 'infantry';
-    for (const squadClass of ['cavalry', 'artillery'] as const) {
-      if (scores[squadClass] > scores[best]) best = squadClass;
-    }
+    for (const squadClass of SQUAD_CLASSES) if (scores[squadClass] > scores[best]) best = squadClass;
     return best;
+  }
+
+  private averageMorale(formations: Formation[]): number {
+    if (formations.length === 0) return 100;
+    return formations.reduce((sum, formation) => sum + formation.morale, 0) / formations.length;
   }
 
   private nextThink(): number {

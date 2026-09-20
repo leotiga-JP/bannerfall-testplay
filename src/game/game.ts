@@ -9,11 +9,12 @@ import {
   fireVolley,
   updateProjectiles,
 } from '../systems/combatSystem';
-import { type ArtilleryExplosion, createArtilleryShell, updateArtilleryShells } from '../systems/artillerySystem';
+import { type ArtilleryExplosion, createArtilleryShells, updateArtilleryShells } from '../systems/artillerySystem';
 import { MeleeSystem, type MeleeStrike } from '../systems/meleeSystem';
 import { Camera } from './camera';
 import { GAME_CONFIG } from './config';
-import type { SquadClass, Team, Vec2, WeaponType } from './types';
+import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, classLabel as squadClassLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from './types';
+import { artilleryProfile, chargeProfile, volleyProfile } from './classProfiles';
 import { ArtilleryShell } from '../entities/artilleryShell';
 import { Projectile } from '../entities/projectile';
 import type { BattleNetSnapshot, ContinuousControl, PlayerAction } from '../network/protocol';
@@ -40,11 +41,7 @@ export interface AxeStrike {
 export type NoticeKind = 'info' | 'warning' | 'success';
 export type IntroStage = 'own-banner' | 'pan-enemy' | 'enemy-banner' | 'return-player' | 'done';
 
-export interface ClassCounts {
-  infantry: number;
-  cavalry: number;
-  artillery: number;
-}
+export type ClassCounts = Record<SquadClass, number>;
 
 export interface GameSnapshot {
   time: number;
@@ -60,6 +57,7 @@ export interface GameSnapshot {
   playerRecommendedClass: SquadClass;
   playerAlive: number;
   playerMaxSoldiers: number;
+  playerMorale: number;
   playerReload: number;
   playerReloadProgress: number;
   playerRespawn: number | null;
@@ -79,6 +77,8 @@ export interface GameSnapshot {
   bannerMaxHp: number;
   blueBannerUnderAttack: boolean;
   redBannerUnderAttack: boolean;
+  blueReinforcementWave: number;
+  redReinforcementWave: number;
   screenShake: number;
   cameraZoom: number;
   cameraFollow: boolean;
@@ -128,6 +128,7 @@ export class Game {
   private readonly meleeQuietTimers = new Map<string, number>();
   private readonly respawnTimers = new Map<string, number>();
   private readonly plannedRespawnClasses = new Map<string, SquadClass>();
+  private reinforcementWaveRemaining: Record<Team, number>;
   private readonly remoteControls = new Map<string, ContinuousControl>();
   private readonly humanWeapons = new Map<string, WeaponType>();
   private networkSnapshotSeq = 0;
@@ -158,6 +159,7 @@ export class Game {
     this.blueSquads = Math.max(1, Math.min(50, Math.floor(options.blueSquads ?? legacyCount)));
     this.redSquads = Math.max(1, Math.min(50, Math.floor(options.redSquads ?? legacyCount)));
     this.respawnSeconds = Math.max(5, Math.min(60, options.respawnSeconds ?? GAME_CONFIG.army.respawnSeconds));
+    this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds };
     const defaultLocal = `B${String(Math.min(this.blueSquads, GAME_CONFIG.army.playerSquadIndex + 1)).padStart(2, '0')}`;
     const localFormationId = options.localFormationId ?? defaultLocal;
     this.humanFormationIds = new Set(options.humanFormationIds ?? [localFormationId]);
@@ -167,6 +169,9 @@ export class Game {
     const player = this.formations.find((formation) => formation.id === localFormationId) ?? this.formations[0];
     if (!player) throw new Error('Player formation was not created.');
     this.playerFormation = player;
+    this.nextPlayerClass = player.squadClass;
+    this.selectedWeapon = canVolleyClass(player.squadClass) ? 'musket' : 'bayonet';
+    this.playerFormation.weapon = this.selectedWeapon;
     this.banners = [
       new Banner('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.y }),
       new Banner('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.y }),
@@ -211,6 +216,7 @@ export class Game {
     this.meleeQuietTimers.clear();
     this.respawnTimers.clear();
     this.plannedRespawnClasses.clear();
+    this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds };
     this.time = 0;
     this.paused = false;
     this.winner = null;
@@ -218,9 +224,9 @@ export class Game {
     this.chargeAiming = false;
     this.chargeAimTarget = null;
     this.timeScale = 1;
-    this.selectedWeapon = 'musket';
-    this.nextPlayerClass = 'infantry';
-    this.playerFormation.weapon = 'musket';
+    this.selectedWeapon = canVolleyClass(this.playerFormation.squadClass) ? 'musket' : 'bayonet';
+    this.nextPlayerClass = this.playerFormation.squadClass;
+    this.playerFormation.weapon = this.selectedWeapon;
     this.introElapsed = 0;
     this.introActive = true;
     this.introStage = 'own-banner';
@@ -273,7 +279,7 @@ export class Game {
         this.plannedRespawnClasses.set(this.playerFormation.id, classChoice);
         this.setHint(`NEXT CLASS — ${this.classLabel(classChoice)}`, 2);
       }
-    } else if (this.playerFormation.squadClass === 'infantry') {
+    } else if (canBannerAttackClass(this.playerFormation.squadClass)) {
       const weapon = this.input.consumeWeaponSelection();
       if (weapon) this.selectPlayerWeapon(weapon);
     } else {
@@ -318,6 +324,7 @@ export class Game {
       this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.artilleryShake);
     }
 
+    this.updateMoraleAndRouts(dt);
     this.updateRespawns(dt);
     this.updateEffects(dt);
     this.updateWinner();
@@ -354,12 +361,13 @@ export class Game {
       playerRecommendedClass,
       playerAlive: this.playerFormation.aliveCount(),
       playerMaxSoldiers: this.playerFormation.maxSoldiers(),
+      playerMorale: this.playerFormation.morale,
       playerReload: this.playerFormation.reloadTimer,
       playerReloadProgress: this.playerFormation.reloadProgress(),
       playerRespawn,
       playerArtilleryDeployed: this.playerFormation.artilleryDeployed,
-      playerArtilleryDeployProgress: this.playerFormation.squadClass === 'artillery'
-        ? Math.min(1, this.playerFormation.artilleryDeployTimer / GAME_CONFIG.artillery.deploySeconds)
+      playerArtilleryDeployProgress: isArtilleryClass(this.playerFormation.squadClass)
+        ? Math.min(1, this.playerFormation.artilleryDeployTimer / artilleryProfile(this.playerFormation.squadClass).deploySeconds)
         : 0,
       selectedWeapon: this.selectedWeapon,
       playerBannerTargetTeam: playerTarget,
@@ -375,6 +383,8 @@ export class Game {
       bannerMaxHp: this.blueBanner.maxHp,
       blueBannerUnderAttack: this.blueBanner.underAttackTimer > 0,
       redBannerUnderAttack: this.redBanner.underAttackTimer > 0,
+      blueReinforcementWave: this.reinforcementWaveRemaining.blue,
+      redReinforcementWave: this.reinforcementWaveRemaining.red,
       screenShake: this.screenShake,
       cameraZoom: this.camera.zoom,
       cameraFollow: this.camera.followPlayer,
@@ -404,6 +414,7 @@ export class Game {
       artilleryDeployTimer: formation.artilleryDeployTimer,
       artilleryDeployed: formation.artilleryDeployed,
       chargeMomentum: formation.chargeMomentum,
+      morale: formation.morale,
       bannerTargetTeam: formation.bannerTargetTeam,
       respawnRemaining: this.respawnTimers.get(formation.id) ?? null,
       plannedClass: this.plannedRespawnClasses.get(formation.id) ?? null,
@@ -425,6 +436,8 @@ export class Game {
       redBannerHp: this.redBanner.hp,
       blueBannerUnderAttack: this.blueBanner.underAttackTimer,
       redBannerUnderAttack: this.redBanner.underAttackTimer,
+      blueReinforcementWave: this.reinforcementWaveRemaining.blue,
+      redReinforcementWave: this.reinforcementWaveRemaining.red,
       formations,
       projectiles: this.projectiles.map((projectile) => ({
         team: projectile.team,
@@ -434,6 +447,7 @@ export class Game {
         vy: projectile.velocity.y,
         life: projectile.life,
         damage: projectile.damage,
+        moraleDamage: projectile.moraleDamage,
       })),
       shells: this.artilleryShells.map((shell) => ({
         team: shell.team,
@@ -444,6 +458,11 @@ export class Game {
         vx: shell.velocity.x,
         vy: shell.velocity.y,
         active: shell.active,
+        sourceClass: shell.sourceClass,
+        blastRadius: shell.blastRadius,
+        blastDamage: shell.blastDamage,
+        edgeDamage: shell.edgeDamage,
+        moraleDamage: shell.moraleDamage,
       })),
     };
   }
@@ -457,6 +476,8 @@ export class Game {
     this.redBanner.hp = snapshot.redBannerHp;
     this.blueBanner.underAttackTimer = snapshot.blueBannerUnderAttack;
     this.redBanner.underAttackTimer = snapshot.redBannerUnderAttack;
+    this.reinforcementWaveRemaining.blue = snapshot.blueReinforcementWave;
+    this.reinforcementWaveRemaining.red = snapshot.redReinforcementWave;
 
     const firstSnapshot = !this.hasNetworkSnapshot;
     const teleportDistance = 520;
@@ -479,6 +500,7 @@ export class Game {
       formation.artilleryDeployTimer = net.artilleryDeployTimer;
       formation.artilleryDeployed = net.artilleryDeployed;
       formation.chargeMomentum = net.chargeMomentum;
+      formation.morale = net.morale;
       formation.bannerTargetTeam = net.bannerTargetTeam;
       if (net.respawnRemaining === null) this.respawnTimers.delete(formation.id);
       else this.respawnTimers.set(formation.id, net.respawnRemaining);
@@ -522,12 +544,22 @@ export class Game {
     // formations/soldiers are visually reconciled over several render frames.
     this.projectiles.length = 0;
     for (const net of snapshot.projectiles) {
-      this.projectiles.push(new Projectile(net.team, { x: net.x, y: net.y }, { x: net.vx, y: net.vy }, net.life, net.damage));
+      this.projectiles.push(new Projectile(net.team, { x: net.x, y: net.y }, { x: net.vx, y: net.vy }, net.life, net.damage, net.moraleDamage));
     }
     this.artilleryShells.length = 0;
     for (const net of snapshot.shells) {
       const speed = Math.hypot(net.vx, net.vy);
-      const shell = new ArtilleryShell(net.team, { x: net.x, y: net.y }, { x: net.targetX, y: net.targetY }, speed);
+      const shell = new ArtilleryShell(
+        net.team,
+        { x: net.x, y: net.y },
+        { x: net.targetX, y: net.targetY },
+        speed,
+        net.sourceClass,
+        net.blastRadius,
+        net.blastDamage,
+        net.edgeDamage,
+        net.moraleDamage,
+      );
       shell.active = net.active;
       this.artilleryShells.push(shell);
     }
@@ -594,10 +626,17 @@ export class Game {
   }
 
   private initialClassFor(index: number, count: number): SquadClass {
-    const ratio = (index + 0.5) / count;
-    if (ratio < 0.70) return 'infantry';
-    if (ratio < 0.90) return 'cavalry';
-    return 'artillery';
+    const mixedIndex = count > 1 ? (index * 7) % count : 0;
+    const ratio = (mixedIndex + 0.5) / count;
+    if (ratio < 0.40) return 'infantry';
+    if (ratio < 0.50) return 'lightInfantry';
+    if (ratio < 0.60) return 'grenadier';
+    if (ratio < 0.70) return 'dragoon';
+    if (ratio < 0.80) return 'cavalry';
+    if (ratio < 0.85) return 'hussar';
+    if (ratio < 0.90) return 'artillery';
+    if (ratio < 0.95) return 'heavyArtillery';
+    return 'horseArtillery';
   }
 
   private formationGrid(index: number, count: number, rear: boolean): Vec2 {
@@ -695,12 +734,21 @@ export class Game {
     formation.debugTargetId = null;
     const pointer = this.camera.screenToWorld(this.input.getPointer());
 
+    if (formation.mode === 'routed') {
+      this.cancelChargeAim();
+      this.setHint('ROUTING — 士気が回復するまで操作不能', 1.2);
+      this.input.clearActionInputs();
+      return;
+    }
+
     if (this.input.consumeReform()) {
       this.cancelChargeAim();
       if (formation.mode === 'bannerAttack') formation.cancelBannerAttack();
       const center = formation.averageAlivePosition();
       const direction = Math.atan2(pointer.y - center.y, pointer.x - center.x);
-      formation.weapon = formation.squadClass === 'infantry' ? this.selectedWeapon : 'bayonet';
+      formation.weapon = canBannerAttackClass(formation.squadClass)
+        ? this.selectedWeapon
+        : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
       formation.beginReform(direction, undefined, GAME_CONFIG.reform.reloadPenalty);
       this.input.clearActionInputs();
       return;
@@ -730,22 +778,23 @@ export class Game {
 
     formation.direction = Math.atan2(pointer.y - formation.center.y, pointer.x - formation.center.x);
 
-    if (formation.squadClass === 'artillery') {
+    if (isArtilleryClass(formation.squadClass)) {
       this.cancelChargeAim();
       this.movePlayerFormation(dt);
+      const profile = artilleryProfile(formation.squadClass);
       if (primaryClick) {
         if (!formation.artilleryDeployed) {
-          this.setHint('ARTILLERY — 停止して展開完了を待つ', 2.2);
+          this.setHint(`${this.classLabel(formation.squadClass)} — 停止して展開完了を待つ`, 2.2);
         } else if (formation.reloadTimer > 0) {
           this.setHint(`CANNON RELOAD ${formation.reloadTimer.toFixed(1)}s`, 1.4);
         } else {
-          this.performArtilleryShot(formation, pointer, GAME_CONFIG.artillery.playerReloadSeconds);
+          this.performArtilleryShot(formation, pointer, profile.playerReload);
         }
       }
       return;
     }
 
-    if (formation.squadClass === 'cavalry') {
+    if (isChargeCavalryClass(formation.squadClass)) {
       formation.weapon = 'bayonet';
       if (this.input.consumeChargeStart()) {
         this.chargeAiming = true;
@@ -764,7 +813,15 @@ export class Game {
       } else {
         this.movePlayerFormation(dt);
       }
-      if (primaryClick) this.setHint('CAVALRY — 射撃不可。右クリック / Spaceで長距離突撃', 2.4);
+      if (primaryClick) this.setHint(`${this.classLabel(formation.squadClass)} — 射撃不可。右クリック / Spaceで突撃`, 2.4);
+      return;
+    }
+
+    if (formation.squadClass === 'dragoon') {
+      this.cancelChargeAim();
+      formation.weapon = 'musket';
+      this.movePlayerFormation(dt);
+      if (primaryClick && formation.canVolley()) this.performVolley(formation, volleyProfile('dragoon').playerReload);
       return;
     }
 
@@ -800,7 +857,7 @@ export class Game {
     if (!this.chargeAiming) {
       this.movePlayerFormation(dt);
       if (primaryClick && this.selectedWeapon === 'musket' && formation.canVolley()) {
-        this.performVolley(formation, GAME_CONFIG.musket.playerReloadSeconds);
+        this.performVolley(formation, volleyProfile(formation.squadClass).playerReload);
       } else if (primaryClick && this.selectedWeapon !== 'musket') {
         this.setHint(this.selectedWeapon === 'bayonet'
           ? '銃剣：右クリック / Space 長押し → 離して突撃'
@@ -839,7 +896,7 @@ export class Game {
     if (formation.aliveCount() === 0 || this.winner) return;
 
     if (action.type === 'weapon') {
-      if (formation.squadClass !== 'infantry') return;
+      if (!canBannerAttackClass(formation.squadClass)) return;
       this.humanWeapons.set(formation.id, action.weapon);
       if (formation.mode === 'bannerAttack' && action.weapon !== 'axe') formation.cancelBannerAttack();
       if (formation.mode === 'line' || formation.mode === 'reforming') formation.weapon = action.weapon;
@@ -862,22 +919,22 @@ export class Game {
     if (formation.mode !== 'line') return;
 
     if (action.type === 'fire') {
-      if (formation.squadClass === 'artillery') {
-        this.performArtilleryShot(formation, action.target, GAME_CONFIG.artillery.playerReloadSeconds);
-      } else if (formation.squadClass === 'infantry' && this.weaponForFormation(formation) === 'musket' && formation.canVolley()) {
-        this.performVolley(formation, GAME_CONFIG.musket.playerReloadSeconds);
+      if (isArtilleryClass(formation.squadClass)) {
+        this.performArtilleryShot(formation, action.target, artilleryProfile(formation.squadClass).playerReload);
+      } else if (canVolleyClass(formation.squadClass) && this.weaponForFormation(formation) === 'musket' && formation.canVolley()) {
+        this.performVolley(formation, volleyProfile(formation.squadClass).playerReload);
       }
       return;
     }
     if (action.type === 'charge') {
-      if (formation.squadClass === 'artillery') return;
-      if (formation.squadClass === 'infantry' && this.weaponForFormation(formation) !== 'bayonet') return;
+      if (isArtilleryClass(formation.squadClass) || formation.squadClass === 'dragoon') return;
+      if (canBannerAttackClass(formation.squadClass) && this.weaponForFormation(formation) !== 'bayonet') return;
       const target = this.clampChargeTarget(formation, action.target);
       formation.beginCharge(target);
       return;
     }
     if (action.type === 'banner-attack') {
-      if (formation.squadClass !== 'infantry' || this.weaponForFormation(formation) !== 'axe') return;
+      if (!canBannerAttackClass(formation.squadClass) || this.weaponForFormation(formation) !== 'axe') return;
       const banner = this.bannerFor(action.targetTeam);
       formation.beginBannerAttack(banner.team, banner.position);
     }
@@ -889,7 +946,8 @@ export class Game {
       if (!formation || !formation.isPlayerControlled || formation.aliveCount() === 0) continue;
       if (formation.mode !== 'line') continue;
       formation.direction = Math.atan2(control.aim.y - formation.center.y, control.aim.x - formation.center.x);
-      if (formation.squadClass === 'infantry') formation.weapon = this.weaponForFormation(formation);
+      if (canBannerAttackClass(formation.squadClass)) formation.weapon = this.weaponForFormation(formation);
+      else if (canVolleyClass(formation.squadClass)) formation.weapon = 'musket';
       else formation.weapon = 'bayonet';
       const length = Math.hypot(control.moveX, control.moveY);
       if (length > 0.001) {
@@ -907,7 +965,7 @@ export class Game {
   }
 
   private selectPlayerWeapon(weapon: WeaponType): void {
-    if (this.playerFormation.squadClass !== 'infantry') return;
+    if (!canBannerAttackClass(this.playerFormation.squadClass)) return;
     this.selectedWeapon = weapon;
     this.humanWeapons.set(this.playerFormation.id, weapon);
     if (this.playerFormation.aliveCount() === 0) return;
@@ -924,7 +982,7 @@ export class Game {
     const commands = this.aiSystem.update(this.formations, this.banners, dt);
     for (const command of commands) {
       const formation = command.formation;
-      if (formation.aliveCount() === 0 || formation.mode === 'bannerAttack') continue;
+      if (formation.aliveCount() === 0 || formation.mode === 'bannerAttack' || formation.mode === 'routed') continue;
 
       if (command.faceAngle !== null && formation.mode === 'line') formation.direction = command.faceAngle;
 
@@ -934,7 +992,7 @@ export class Game {
       }
 
       if (command.reform && formation.mode === 'line') {
-        formation.weapon = formation.squadClass === 'infantry' ? 'musket' : 'bayonet';
+        formation.weapon = canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
         formation.beginReform(command.faceAngle ?? formation.direction, undefined, GAME_CONFIG.reform.reloadPenalty);
         continue;
       }
@@ -946,14 +1004,14 @@ export class Game {
 
       if (command.volley && formation.mode === 'line' && formation.canVolley()) {
         formation.weapon = 'musket';
-        const reload = GAME_CONFIG.musket.aiReloadMin
-          + Math.random() * (GAME_CONFIG.musket.aiReloadMax - GAME_CONFIG.musket.aiReloadMin);
+        const profile = volleyProfile(formation.squadClass);
+        const reload = profile.aiReloadMin + Math.random() * (profile.aiReloadMax - profile.aiReloadMin);
         this.performVolley(formation, reload);
       }
 
       if (command.artilleryTarget && formation.mode === 'line' && formation.canArtilleryFire()) {
-        const reload = GAME_CONFIG.artillery.aiReloadMin
-          + Math.random() * (GAME_CONFIG.artillery.aiReloadMax - GAME_CONFIG.artillery.aiReloadMin);
+        const profile = artilleryProfile(formation.squadClass);
+        const reload = profile.aiReloadMin + Math.random() * (profile.aiReloadMax - profile.aiReloadMin);
         this.performArtilleryShot(formation, command.artilleryTarget, reload);
         continue;
       }
@@ -965,7 +1023,7 @@ export class Game {
       }
 
       if (formation.mode === 'line') {
-        if (formation.squadClass === 'infantry') formation.weapon = 'musket';
+        if (canVolleyClass(formation.squadClass)) formation.weapon = 'musket';
         else formation.weapon = 'bayonet';
         const length = Math.hypot(command.move.x, command.move.y);
         if (length > 0.001) {
@@ -1003,9 +1061,10 @@ export class Game {
       this.clampFormationCenter(charger);
       const enemies = this.formations.filter((formation) => formation.team !== charger.team && formation.aliveCount() > 0);
 
-      if (charger.squadClass === 'cavalry') {
+      if (isChargeCavalryClass(charger.squadClass)) {
+        const profile = chargeProfile(charger.squadClass);
         this.resolveCavalryRoadkill(charger, enemies);
-        if (charger.chargeMomentum <= GAME_CONFIG.cavalry.minMomentum || reached) {
+        if (charger.chargeMomentum <= profile.minMomentum || reached) {
           const nearby = this.meleeSystem.hasNearbyEnemy(charger, enemies, GAME_CONFIG.melee.acquireRange + 40);
           if (nearby) charger.enterMelee();
           else charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
@@ -1031,7 +1090,8 @@ export class Game {
   }
 
   private resolveCavalryRoadkill(charger: Formation, enemies: Formation[]): void {
-    const radiusSq = GAME_CONFIG.cavalry.roadkillRadius * GAME_CONFIG.cavalry.roadkillRadius;
+    const profile = chargeProfile(charger.squadClass);
+    const radiusSq = profile.roadkillRadius * profile.roadkillRadius;
     let hitSomething = false;
     const cavalryAlive = charger.aliveSoldiers();
     const riderPositions = cavalryAlive.map((_, index) => charger.slotPosition(index, cavalryAlive.length));
@@ -1051,12 +1111,13 @@ export class Game {
         if (!collided) continue;
         charger.chargeVictims.add(target.id);
         const impact = { x: Math.cos(charger.direction), y: Math.sin(charger.direction) };
-        const killed = target.takeDamage(GAME_CONFIG.cavalry.roadkillDamage * Math.max(0.55, charger.chargeMomentum));
+        const killed = target.takeDamage(profile.roadkillDamage * Math.max(0.55, charger.chargeMomentum));
+        enemy.applyMoraleDamage(profile.roadkillMoraleDamage + (killed ? 4 : 0));
         target.knockback.x += impact.x * 220;
         target.knockback.y += impact.y * 220;
         target.position.x += impact.x * 18;
         target.position.y += impact.y * 18;
-        charger.chargeMomentum = Math.max(0, charger.chargeMomentum - GAME_CONFIG.cavalry.momentumPerHit);
+        charger.chargeMomentum = Math.max(0, charger.chargeMomentum - profile.momentumPerHit);
         hitSomething = true;
         if (killed) this.spawnCorpse(target.position, target.team, impact);
       }
@@ -1135,26 +1196,62 @@ export class Game {
     }
   }
 
-  private updateRespawns(dt: number): void {
+  private updateMoraleAndRouts(dt: number): void {
     if (this.winner) return;
     for (const formation of this.formations) {
-      if (formation.aliveCount() > 0) {
-        this.respawnTimers.delete(formation.id);
-        this.plannedRespawnClasses.delete(formation.id);
+      if (formation.aliveCount() === 0) continue;
+      if (formation.shouldRout()) {
+        const distance = GAME_CONFIG.morale.routedDistance;
+        const target = this.clampFormationPoint({
+          x: formation.center.x + (formation.team === 'blue' ? -distance : distance),
+          y: formation.center.y + (Math.random() - 0.5) * 180,
+        });
+        if (formation.beginRout(target)) {
+          this.applyNearbyMoraleShock(formation, 5.5, 430);
+          if (formation.isPlayerControlled) this.setNotice('MORALE BROKEN — ROUT!', 'warning', 3.2);
+        }
+      }
+      if (formation.mode !== 'routed') continue;
+      const reached = formation.advanceRout(dt);
+      this.clampFormationCenter(formation);
+      if ((formation.morale >= GAME_CONFIG.morale.reformThreshold && formation.routTravelled >= GAME_CONFIG.morale.routedDistance * 0.55) || reached) {
+        const direction = this.angleTo(formation.center, this.enemyDirectionPoint(formation.team));
+        formation.morale = Math.max(formation.morale, GAME_CONFIG.morale.reformThreshold);
+        formation.beginReform(direction, formation.center, GAME_CONFIG.reform.breakOffReloadPenalty);
+        formation.debugIntent = 'RALLY';
+        if (formation.isPlayerControlled) this.setNotice('SQUAD RALLIED', 'success', 2.4);
+      }
+    }
+  }
+
+  private applyNearbyMoraleShock(source: Formation, amount: number, radius: number = GAME_CONFIG.morale.nearbyWipeRadius): void {
+    for (const ally of this.formations) {
+      if (ally === source || ally.team !== source.team || ally.aliveCount() === 0) continue;
+      if (this.distance(ally.center, source.center) <= radius) ally.applyMoraleDamage(amount);
+    }
+  }
+
+  private updateRespawns(dt: number): void {
+    if (this.winner) return;
+
+    for (const team of ['blue', 'red'] as const) {
+      const dead = this.formations.filter((formation) => formation.team === team && formation.aliveCount() === 0);
+      if (dead.length === 0) {
+        this.reinforcementWaveRemaining[team] = this.respawnSeconds;
         continue;
       }
 
-      let remaining = this.respawnTimers.get(formation.id);
-      if (remaining === undefined) {
-        remaining = this.respawnSeconds;
-        this.respawnTimers.set(formation.id, remaining);
+      for (const formation of dead) {
+        if (this.respawnTimers.has(formation.id)) continue;
+        this.respawnTimers.set(formation.id, this.reinforcementWaveRemaining[team]);
+        this.applyNearbyMoraleShock(formation, GAME_CONFIG.morale.nearbyWipeDamage);
         if (formation.isPlayerControlled) {
           const planned = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
           this.plannedRespawnClasses.set(formation.id, planned);
           if (formation === this.playerFormation) {
             this.cancelChargeAim();
             this.nextPlayerClass = planned;
-            this.setNotice('YOUR SQUAD WAS WIPED — CHOOSE NEXT CLASS', 'warning', 4);
+            this.setNotice('YOUR SQUAD WAS WIPED — NEXT REINFORCEMENT WAVE', 'warning', 4);
           }
         } else {
           const chosen = this.aiSystem.chooseRespawnClass(formation, this.formations, this.banners, this.plannedRespawnClasses);
@@ -1162,32 +1259,33 @@ export class Game {
         }
       }
 
-      remaining -= dt;
-      if (remaining > 0) {
-        this.respawnTimers.set(formation.id, remaining);
-        continue;
-      }
+      this.reinforcementWaveRemaining[team] = Math.max(0, this.reinforcementWaveRemaining[team] - dt);
+      for (const formation of dead) this.respawnTimers.set(formation.id, this.reinforcementWaveRemaining[team]);
+      if (this.reinforcementWaveRemaining[team] > 0) continue;
 
-      let chosenClass = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
-      if (!formation.isPlayerControlled) {
+      for (const formation of dead) {
+        let chosenClass = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
+        if (!formation.isPlayerControlled) {
+          this.plannedRespawnClasses.delete(formation.id);
+          chosenClass = this.aiSystem.chooseRespawnClass(formation, this.formations, this.banners, this.plannedRespawnClasses);
+        }
+        const index = this.teamIndexOf(formation);
+        formation.reset(this.respawnFor(formation.team, index), formation.team === 'blue' ? 0 : Math.PI, chosenClass);
+        this.respawnTimers.delete(formation.id);
         this.plannedRespawnClasses.delete(formation.id);
-        chosenClass = this.aiSystem.chooseRespawnClass(formation, this.formations, this.banners, this.plannedRespawnClasses);
-      }
-      const index = this.teamIndexOf(formation);
-      formation.reset(this.respawnFor(formation.team, index), formation.team === 'blue' ? 0 : Math.PI, chosenClass);
-      this.respawnTimers.delete(formation.id);
-      this.plannedRespawnClasses.delete(formation.id);
-      if (formation.isPlayerControlled) {
-        const nextWeapon: WeaponType = chosenClass === 'infantry' ? 'musket' : 'bayonet';
-        this.humanWeapons.set(formation.id, nextWeapon);
-        formation.weapon = nextWeapon;
-        if (formation === this.playerFormation) {
-          this.nextPlayerClass = chosenClass;
-          this.selectedWeapon = nextWeapon;
-          this.camera.centerOn(formation.center);
-          this.setNotice(`${this.classLabel(chosenClass)} REDEPLOYED — REINFORCEMENT MARCH`, 'success', 3.2);
+        if (formation.isPlayerControlled) {
+          const nextWeapon: WeaponType = canVolleyClass(chosenClass) ? 'musket' : 'bayonet';
+          this.humanWeapons.set(formation.id, nextWeapon);
+          formation.weapon = nextWeapon;
+          if (formation === this.playerFormation) {
+            this.nextPlayerClass = chosenClass;
+            this.selectedWeapon = nextWeapon;
+            this.camera.centerOn(formation.center);
+            this.setNotice(`${this.classLabel(chosenClass)} REDEPLOYED — REINFORCEMENT WAVE`, 'success', 3.2);
+          }
         }
       }
+      this.reinforcementWaveRemaining[team] = this.respawnSeconds;
     }
   }
 
@@ -1208,8 +1306,8 @@ export class Game {
         const direction = target
           ? Math.atan2(target.center.y - formation.center.y, target.center.x - formation.center.x)
           : formation.direction;
-        formation.weapon = formation.squadClass === 'infantry'
-          ? (formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket')
+        formation.weapon = canVolleyClass(formation.squadClass)
+          ? (canBannerAttackClass(formation.squadClass) && formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket')
           : 'bayonet';
         formation.beginReform(direction, undefined, GAME_CONFIG.charge.postChargeReloadPenalty);
         this.meleeQuietTimers.delete(formation.id);
@@ -1235,8 +1333,8 @@ export class Game {
       y: own.y + (dy / distance) * GAME_CONFIG.reform.breakOffDistance,
     });
     const facing = Math.atan2(enemy.y - target.y, enemy.x - target.x);
-    formation.weapon = formation.squadClass === 'infantry'
-      ? (formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket')
+    formation.weapon = canVolleyClass(formation.squadClass)
+      ? (canBannerAttackClass(formation.squadClass) && formation.isPlayerControlled ? this.weaponForFormation(formation) : 'musket')
       : 'bayonet';
     formation.beginReform(facing, target, GAME_CONFIG.reform.breakOffReloadPenalty);
     if (formation.isPlayerControlled) this.screenShake = Math.max(this.screenShake, 1.4);
@@ -1331,32 +1429,37 @@ export class Game {
 
   private performArtilleryShot(formation: Formation, desiredTarget: Vec2, reloadSeconds: number): void {
     if (!formation.canArtilleryFire()) return;
+    const profile = artilleryProfile(formation.squadClass);
     const dx = desiredTarget.x - formation.center.x;
     const dy = desiredTarget.y - formation.center.y;
     const distance = Math.hypot(dx, dy) || 1;
-    if (distance > GAME_CONFIG.artillery.range) {
+    if (distance > profile.range) {
       if (formation === this.playerFormation) this.setHint('TARGET OUT OF ARTILLERY RANGE', 1.8);
       return;
     }
-    if (distance < GAME_CONFIG.artillery.minRange) {
+    if (distance < profile.minRange) {
       if (formation === this.playerFormation) this.setHint('TARGET TOO CLOSE FOR CANNON', 1.8);
       return;
     }
     formation.direction = Math.atan2(dy, dx);
-    this.artilleryShells.push(createArtilleryShell(formation, desiredTarget));
+    this.artilleryShells.push(...createArtilleryShells(formation, desiredTarget));
     formation.beginReload(reloadSeconds);
-    this.smoke.push({
-      position: {
-        x: formation.center.x + Math.cos(formation.direction) * 42,
-        y: formation.center.y + Math.sin(formation.direction) * 42,
-      },
-      velocity: { x: Math.cos(formation.direction) * 35, y: Math.sin(formation.direction) * 35 },
-      age: 0,
-      lifetime: GAME_CONFIG.effects.smokeLifetime * 1.7,
-      size: 24,
-    });
-    if (formation.isPlayerControlled || this.distanceToPlayer(formation.center) < 900) {
-      this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.artilleryShake * 0.7);
+    const right = { x: -Math.sin(formation.direction), y: Math.cos(formation.direction) };
+    for (let i = 0; i < profile.guns; i += 1) {
+      const offset = (i - (profile.guns - 1) / 2) * 20;
+      this.smoke.push({
+        position: {
+          x: formation.center.x + Math.cos(formation.direction) * 42 + right.x * offset,
+          y: formation.center.y + Math.sin(formation.direction) * 42 + right.y * offset,
+        },
+        velocity: { x: Math.cos(formation.direction) * 35, y: Math.sin(formation.direction) * 35 },
+        age: 0,
+        lifetime: GAME_CONFIG.effects.smokeLifetime * (1.25 + profile.smokeScale * 0.5),
+        size: 20 + 12 * profile.smokeScale,
+      });
+    }
+    if (formation.isPlayerControlled || this.distanceToPlayer(formation.center) < 1100) {
+      this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.artilleryShake * profile.shakeScale);
     }
   }
 
@@ -1480,7 +1583,7 @@ export class Game {
   }
 
   private classCounts(team: Team): ClassCounts {
-    const counts: ClassCounts = { infantry: 0, cavalry: 0, artillery: 0 };
+    const counts = Object.fromEntries(SQUAD_CLASSES.map((value) => [value, 0])) as ClassCounts;
     for (const formation of this.formations) {
       if (formation.team === team && formation.aliveCount() > 0) counts[formation.squadClass] += 1;
     }
@@ -1488,9 +1591,7 @@ export class Game {
   }
 
   private classLabel(squadClass: SquadClass): string {
-    if (squadClass === 'cavalry') return 'CAVALRY';
-    if (squadClass === 'artillery') return 'ARTILLERY';
-    return 'LINE INFANTRY';
+    return squadClassLabel(squadClass);
   }
 
   private bannerFor(team: Team): Banner {
@@ -1541,7 +1642,7 @@ export class Game {
   }
 
   private isSeparationMode(mode: FormationMode): boolean {
-    return mode === 'line' || mode === 'reforming' || mode === 'bannerAttack';
+    return mode === 'line' || mode === 'reforming' || mode === 'bannerAttack' || mode === 'routed';
   }
 
   private cancelChargeAim(): void {

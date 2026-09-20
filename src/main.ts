@@ -1,5 +1,5 @@
 import './styles.css';
-import type { SquadClass, Team } from './game/types';
+import { classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
 import { NetworkClient } from './network/networkClient';
 import { MultiplayerBattle } from './network/multiplayerBattle';
 import type { ChatMessage, MatchStartPayload, RoomState } from './network/protocol';
@@ -33,7 +33,7 @@ const required = [
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.8 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.9 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
@@ -85,9 +85,7 @@ function numberInput(id: string, min: number, max: number, fallback: number): nu
 }
 
 function classLabel(squadClass: SquadClass): string {
-  if (squadClass === 'cavalry') return 'CAVALRY';
-  if (squadClass === 'artillery') return 'ARTILLERY';
-  return 'INFANTRY';
+  return squadClassLabel(squadClass);
 }
 
 function spawnLabel(team: Team, index: number | null): string {
@@ -288,7 +286,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Phase 3.8';
+  document.title = 'Bannerfall — Phase 3.9';
 }
 
 network.onConnection = (connected, text) => {
@@ -371,7 +369,7 @@ document.querySelector('#join-red')?.addEventListener('click', () => network.cha
 for (const card of document.querySelectorAll<HTMLButtonElement>('[data-lobby-class]')) {
   card.addEventListener('click', () => {
     const value = card.dataset.lobbyClass;
-    if (value === 'infantry' || value === 'cavalry' || value === 'artillery') network.selectClass(value);
+    if (isSquadClass(value)) network.selectClass(value);
   });
 }
 readyButton!.addEventListener('click', () => {

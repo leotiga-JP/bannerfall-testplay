@@ -1,8 +1,18 @@
 import { GAME_CONFIG } from '../game/config';
-import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
+import { artilleryProfile, chargeProfile, moraleResistance } from '../game/classProfiles';
+import {
+  canBannerAttackClass,
+  canVolleyClass,
+  isArtilleryClass,
+  isChargeCavalryClass,
+  type SquadClass,
+  type Team,
+  type Vec2,
+  type WeaponType,
+} from '../game/types';
 import { Unit } from './unit';
 
-export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming' | 'bannerAttack';
+export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming' | 'bannerAttack' | 'routed';
 
 interface ClassSpec {
   soldiers: number;
@@ -10,6 +20,9 @@ interface ClassSpec {
   rows: number;
   lateralSpacing: number;
   rankSpacing: number;
+  playerMoveSpeed: number;
+  aiMoveSpeed: number;
+  aiRetreatSpeed: number;
 }
 
 export class Formation {
@@ -25,6 +38,7 @@ export class Formation {
   volleysFired = 0;
   mode: FormationMode = 'line';
   chargeTarget: Vec2 | null = null;
+  routTarget: Vec2 | null = null;
   bannerTargetTeam: Team | null = null;
   bannerAttackTimer = 0;
   weapon: WeaponType = 'musket';
@@ -35,6 +49,9 @@ export class Formation {
   artilleryDeployed = false;
   chargeMomentum = 0;
   readonly chargeVictims = new Set<string>();
+  morale: number = GAME_CONFIG.morale.max;
+  moraleShockTimer = 0;
+  routTravelled = 0;
 
   private layoutCount = 0;
   private movedThisFrame = false;
@@ -68,9 +85,10 @@ export class Formation {
     this.volleysFired = 0;
     this.mode = 'line';
     this.chargeTarget = null;
+    this.routTarget = null;
     this.bannerTargetTeam = null;
     this.bannerAttackTimer = 0;
-    this.weapon = squadClass === 'infantry' ? 'musket' : 'bayonet';
+    this.weapon = canVolleyClass(squadClass) ? 'musket' : 'bayonet';
     this.spawnProtectionTimer = GAME_CONFIG.army.spawnProtectionSeconds;
     this.debugIntent = this.isPlayerControlled ? 'PLAYER' : 'HOLD';
     this.debugTargetId = null;
@@ -80,6 +98,9 @@ export class Formation {
     this.chargeMomentum = 0;
     this.chargeVictims.clear();
     this.movedThisFrame = false;
+    this.morale = GAME_CONFIG.morale.max;
+    this.moraleShockTimer = 0;
+    this.routTravelled = 0;
     const spec = this.classSpec();
     for (const soldier of this.soldiers) {
       soldier.formationSlotIndex = soldier.slotIndex;
@@ -91,18 +112,20 @@ export class Formation {
   setClass(squadClass: SquadClass): void {
     this.squadClass = squadClass;
     this.rebuildSoldiers();
+    this.weapon = canVolleyClass(squadClass) ? 'musket' : 'bayonet';
+    this.morale = GAME_CONFIG.morale.max;
   }
 
   markMoved(): void {
     this.movedThisFrame = true;
-    if (this.squadClass === 'artillery') {
+    if (isArtilleryClass(this.squadClass)) {
       this.artilleryDeployed = false;
       this.artilleryDeployTimer = 0;
     }
   }
 
   beginCharge(target: Vec2): boolean {
-    if (this.mode !== 'line' || this.aliveCount() === 0 || this.squadClass === 'artillery') return false;
+    if (this.mode !== 'line' || this.aliveCount() === 0 || isArtilleryClass(this.squadClass) || this.squadClass === 'dragoon') return false;
     const dx = target.x - this.center.x;
     const dy = target.y - this.center.y;
     const distance = Math.hypot(dx, dy);
@@ -110,9 +133,10 @@ export class Formation {
     this.weapon = 'bayonet';
     this.direction = Math.atan2(dy, dx);
     this.chargeTarget = { ...target };
+    this.routTarget = null;
     this.bannerTargetTeam = null;
     this.mode = 'charging';
-    this.chargeMomentum = this.squadClass === 'cavalry' ? 1 : 0;
+    this.chargeMomentum = isChargeCavalryClass(this.squadClass) ? 1 : 0;
     this.chargeVictims.clear();
     return true;
   }
@@ -126,8 +150,10 @@ export class Formation {
       this.center = { ...this.chargeTarget };
       return true;
     }
-    const baseSpeed = this.squadClass === 'cavalry' ? GAME_CONFIG.cavalry.chargeSpeed : GAME_CONFIG.charge.moveSpeed;
-    const speed = this.squadClass === 'cavalry' ? baseSpeed * Math.max(0.45, this.chargeMomentum) : baseSpeed;
+    const profile = chargeProfile(this.squadClass);
+    const speed = isChargeCavalryClass(this.squadClass)
+      ? profile.speed * Math.max(0.45, this.chargeMomentum)
+      : profile.speed;
     const step = Math.min(distance, speed * dt);
     this.center.x += (dx / distance) * step;
     this.center.y += (dy / distance) * step;
@@ -136,10 +162,41 @@ export class Formation {
     return distance - step <= GAME_CONFIG.charge.stopDistance;
   }
 
+  beginRout(target: Vec2): boolean {
+    if (this.aliveCount() === 0 || this.mode === 'routed') return false;
+    this.mode = 'routed';
+    this.routTarget = { ...target };
+    this.chargeTarget = null;
+    this.bannerTargetTeam = null;
+    this.bannerAttackTimer = 0;
+    this.artilleryDeployed = false;
+    this.artilleryDeployTimer = 0;
+    this.routTravelled = 0;
+    this.debugIntent = 'ROUT';
+    return true;
+  }
+
+  advanceRout(dt: number): boolean {
+    if (this.mode !== 'routed' || !this.routTarget) return false;
+    const dx = this.routTarget.x - this.center.x;
+    const dy = this.routTarget.y - this.center.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 15) return true;
+    const speed = this.movementSpeed(false, true) * GAME_CONFIG.morale.routedSpeedMultiplier;
+    const step = Math.min(distance, speed * dt);
+    this.center.x += (dx / distance) * step;
+    this.center.y += (dy / distance) * step;
+    this.direction = Math.atan2(dy, dx);
+    this.routTravelled += step;
+    this.markMoved();
+    return distance - step <= 15;
+  }
+
   enterMelee(): void {
     this.weapon = 'bayonet';
     this.mode = 'melee';
     this.chargeTarget = null;
+    this.routTarget = null;
     this.bannerTargetTeam = null;
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
     this.reloadDuration = Math.max(this.reloadDuration, this.reloadTimer);
@@ -148,12 +205,13 @@ export class Formation {
   }
 
   beginBannerAttack(targetTeam: Team, targetPosition: Vec2): boolean {
-    if (this.aliveCount() === 0 || targetTeam === this.team || this.squadClass !== 'infantry') return false;
+    if (this.aliveCount() === 0 || targetTeam === this.team || !canBannerAttackClass(this.squadClass)) return false;
     this.weapon = 'axe';
     this.mode = 'bannerAttack';
     this.bannerTargetTeam = targetTeam;
     this.bannerAttackTimer = 0;
     this.chargeTarget = null;
+    this.routTarget = null;
     this.direction = Math.atan2(targetPosition.y - this.center.y, targetPosition.x - this.center.x);
     return true;
   }
@@ -178,6 +236,7 @@ export class Formation {
     this.assignCompactSlots(alive);
     this.mode = 'reforming';
     this.chargeTarget = null;
+    this.routTarget = null;
     this.bannerTargetTeam = null;
     this.bannerAttackTimer = 0;
     this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
@@ -187,23 +246,40 @@ export class Formation {
     return true;
   }
 
+  applyMoraleDamage(amount: number): void {
+    if (amount <= 0 || this.aliveCount() === 0 || this.spawnProtectionTimer > 0) return;
+    this.morale = Math.max(0, this.morale - amount * moraleResistance(this.squadClass));
+    this.moraleShockTimer = GAME_CONFIG.morale.shockCooldown;
+  }
+
   update(dt: number): void {
     this.reloadTimer = Math.max(0, this.reloadTimer - dt);
     this.spawnProtectionTimer = Math.max(0, this.spawnProtectionTimer - dt);
+    this.moraleShockTimer = Math.max(0, this.moraleShockTimer - dt);
     for (const soldier of this.soldiers) soldier.update(dt);
 
-    if (this.squadClass === 'artillery' && this.mode === 'line') {
+    if (isArtilleryClass(this.squadClass) && this.mode === 'line') {
       if (!this.movedThisFrame) {
-        this.artilleryDeployTimer = Math.min(GAME_CONFIG.artillery.deploySeconds, this.artilleryDeployTimer + dt);
-        this.artilleryDeployed = this.artilleryDeployTimer >= GAME_CONFIG.artillery.deploySeconds;
+        const deploy = artilleryProfile(this.squadClass).deploySeconds;
+        this.artilleryDeployTimer = Math.min(deploy, this.artilleryDeployTimer + dt);
+        this.artilleryDeployed = this.artilleryDeployTimer >= deploy;
       }
     }
+
+    if (this.moraleShockTimer <= 0 && this.aliveCount() > 0) {
+      let recovery: number = GAME_CONFIG.morale.lineRecoveryPerSecond;
+      if (this.mode === 'reforming') recovery = GAME_CONFIG.morale.reformRecoveryPerSecond;
+      if (this.mode === 'routed') recovery = GAME_CONFIG.morale.routRecoveryPerSecond;
+      this.morale = Math.min(GAME_CONFIG.morale.max, this.morale + recovery * dt);
+    }
+
     this.movedThisFrame = false;
 
     if (this.mode === 'melee') {
       this.center = this.averageAlivePosition();
       return;
     }
+    if (this.mode === 'routed') return;
 
     let settled = true;
     const catchup = this.mode === 'reforming'
@@ -243,7 +319,7 @@ export class Formation {
   }
 
   canVolley(): boolean {
-    return this.squadClass === 'infantry'
+    return canVolleyClass(this.squadClass)
       && this.mode === 'line'
       && this.weapon === 'musket'
       && this.reloadTimer <= 0
@@ -251,7 +327,7 @@ export class Formation {
   }
 
   canArtilleryFire(): boolean {
-    return this.squadClass === 'artillery'
+    return isArtilleryClass(this.squadClass)
       && this.mode === 'line'
       && this.artilleryDeployed
       && this.reloadTimer <= 0
@@ -287,20 +363,25 @@ export class Formation {
   }
 
   maxChargeDistance(): number {
-    return this.squadClass === 'cavalry' ? GAME_CONFIG.cavalry.chargeMaxDistance : GAME_CONFIG.charge.maxDistance;
+    return chargeProfile(this.squadClass).maxDistance;
   }
 
   movementSpeed(player: boolean, retreat = false): number {
-    if (this.squadClass === 'cavalry') {
-      if (retreat) return GAME_CONFIG.cavalry.aiRetreatSpeed;
-      return player ? GAME_CONFIG.cavalry.playerMoveSpeed : GAME_CONFIG.cavalry.aiMoveSpeed;
-    }
-    if (this.squadClass === 'artillery') {
-      if (retreat) return GAME_CONFIG.artillery.aiRetreatSpeed;
-      return player ? GAME_CONFIG.artillery.playerMoveSpeed : GAME_CONFIG.artillery.aiMoveSpeed;
-    }
-    if (retreat) return GAME_CONFIG.infantry.aiRetreatSpeed;
-    return player ? GAME_CONFIG.infantry.playerMoveSpeed : GAME_CONFIG.infantry.aiMoveSpeed;
+    const spec = this.classSpec();
+    if (retreat) return spec.aiRetreatSpeed;
+    return player ? spec.playerMoveSpeed : spec.aiMoveSpeed;
+  }
+
+  moraleRatio(): number {
+    return this.morale / GAME_CONFIG.morale.max;
+  }
+
+  isShaken(): boolean {
+    return this.morale < GAME_CONFIG.morale.shakenThreshold;
+  }
+
+  shouldRout(): boolean {
+    return this.mode !== 'routed' && this.morale <= GAME_CONFIG.morale.routThreshold && this.aliveCount() > 0;
   }
 
   slotPosition(index: number, count = this.layoutCount): Vec2 {
@@ -319,7 +400,7 @@ export class Formation {
   }
 
   private classSpec(squadClass: SquadClass = this.squadClass): ClassSpec {
-    return GAME_CONFIG[squadClass];
+    return GAME_CONFIG[squadClass] as ClassSpec;
   }
 
   private rebuildSoldiers(): void {

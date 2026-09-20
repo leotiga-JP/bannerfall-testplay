@@ -85,6 +85,7 @@ export interface FormationNetState {
   artilleryDeployTimer: number;
   artilleryDeployed: boolean;
   chargeMomentum: number;
+  morale: number;
   bannerTargetTeam: Team | null;
   respawnRemaining: number | null;
   plannedClass: SquadClass | null;
@@ -99,6 +100,7 @@ export interface ProjectileNetState {
   vy: number;
   life: number;
   damage: number;
+  moraleDamage: number;
 }
 
 export interface ShellNetState {
@@ -110,6 +112,11 @@ export interface ShellNetState {
   vx: number;
   vy: number;
   active: boolean;
+  sourceClass: SquadClass;
+  blastRadius: number;
+  blastDamage: number;
+  edgeDamage: number;
+  moraleDamage: number;
 }
 
 export interface BattleNetSnapshot {
@@ -120,6 +127,8 @@ export interface BattleNetSnapshot {
   redBannerHp: number;
   blueBannerUnderAttack: number;
   redBannerUnderAttack: number;
+  blueReinforcementWave: number;
+  redReinforcementWave: number;
   formations: FormationNetState[];
   projectiles: ProjectileNetState[];
   shells: ShellNetState[];

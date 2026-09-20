@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { Game } from '../src/game/game.ts';
 import type { InputManager } from '../src/input/inputManager.ts';
-import type { SquadClass, Team, Vec2, WeaponType } from '../src/game/types.ts';
+import { isSquadClass, type SquadClass, type Team, type Vec2, type WeaponType } from '../src/game/types.ts';
 import type {
   ChatMessage,
   ContinuousControl,
@@ -107,10 +107,6 @@ function cleanChat(value: unknown): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 220);
-}
-
-function isSquadClass(value: unknown): value is SquadClass {
-  return value === 'infantry' || value === 'cavalry' || value === 'artillery';
 }
 
 function randomCode(): string {
@@ -474,7 +470,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'bannerfall-server',
-      version: '3.8',
+      version: '3.9',
       rooms: rooms.size,
       battles,
       players: sessions.size,
@@ -487,7 +483,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Bannerfall Phase 3.8 Multiplayer Server');
+  res.end('Bannerfall Phase 3.9 Multiplayer Server');
 });
 
 const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: { threshold: 1024 }, maxPayload: 8 * 1024 * 1024 });

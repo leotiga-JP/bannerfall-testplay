@@ -1,5 +1,5 @@
 import type { GameSnapshot } from '../game/game';
-import type { SquadClass } from '../game/types';
+import { canBannerAttackClass, classLabel as squadClassLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass } from '../game/types';
 
 export class Hud {
   private readonly slots: HTMLElement[];
@@ -48,9 +48,11 @@ export class Hud {
                   ? 'MELEE'
                   : snapshot.playerMode === 'reforming'
                     ? 'REFORMING'
-                    : snapshot.playerClass === 'artillery' && !snapshot.playerArtilleryDeployed
-                      ? 'BATTLE'
-                      : ready ? 'READY' : 'RELOADING';
+                    : snapshot.playerMode === 'routed'
+                      ? 'ROUTING'
+                      : isArtilleryClass(snapshot.playerClass) && !snapshot.playerArtilleryDeployed
+                        ? 'BATTLE'
+                        : ready ? 'READY' : 'RELOADING';
 
     this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
     this.cameraElement.textContent = `CAM ${snapshot.cameraFollow ? 'FOLLOW' : 'FREE'} · ${snapshot.cameraZoom.toFixed(2)}x · TIME ${snapshot.timeScale.toFixed(1)}x${snapshot.debugAi ? ' · AI DEBUG' : ''}`;
@@ -84,60 +86,60 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall P3.7.1 — Blue ${bluePercent}% | Red ${redPercent}%`;
+    document.title = `Bannerfall P3.9 — Blue ${bluePercent}% | Red ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
     const className = this.classLabel(snapshot.playerClass);
     if (snapshot.playerRespawn !== null) {
-      this.playerState.textContent = `B10 · SQUAD WIPED · NEXT ${this.classLabel(snapshot.playerNextClass)}`;
-      this.playerDetail.textContent = `RESPAWN ${snapshot.playerRespawn.toFixed(1)}s`;
+      this.playerState.textContent = `SQUAD WIPED · NEXT ${this.classLabel(snapshot.playerNextClass)}`;
+      this.playerDetail.textContent = `REINFORCEMENT WAVE ${snapshot.playerRespawn.toFixed(1)}s`;
       return;
     }
 
     const mode = snapshot.playerMode === 'bannerAttack'
       ? snapshot.playerBannerInRange ? 'DESTROYING BANNER' : 'TO BANNER'
       : snapshot.playerMode.toUpperCase();
-    this.playerState.textContent = `B10 · ${className} · ${snapshot.playerAlive}/${snapshot.playerMaxSoldiers} · ${mode}`;
+    this.playerState.textContent = `${className} · ${snapshot.playerAlive}/${snapshot.playerMaxSoldiers} · ${mode} · MORALE ${Math.round(snapshot.playerMorale)}`;
 
-    if (snapshot.playerClass === 'cavalry') {
-      this.playerDetail.textContent = snapshot.playerMode === 'charging' ? 'MOMENTUM CHARGE' : 'SABRE · RMB / SPACE TO CHARGE';
+    if (isChargeCavalryClass(snapshot.playerClass)) {
+      this.playerDetail.textContent = snapshot.playerMode === 'charging' ? 'MOMENTUM CHARGE' : snapshot.playerClass === 'hussar' ? 'MORALE SHOCK · RMB / SPACE TO CHARGE' : 'SABRE · RMB / SPACE TO CHARGE';
       return;
     }
-    if (snapshot.playerClass === 'artillery') {
-      if (!snapshot.playerArtilleryDeployed) {
-        this.playerDetail.textContent = `CANNON · DEPLOY ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}%`;
-      } else {
-        this.playerDetail.textContent = ready ? 'CANNON · READY' : `CANNON · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
-      }
+    if (snapshot.playerClass === 'dragoon') {
+      this.playerDetail.textContent = ready ? 'CARBINE · READY · MOBILE FIRE' : `CARBINE · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
+      return;
+    }
+    if (isArtilleryClass(snapshot.playerClass)) {
+      if (!snapshot.playerArtilleryDeployed) this.playerDetail.textContent = `CANNON · DEPLOY ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}%`;
+      else this.playerDetail.textContent = ready ? 'CANNON · READY' : `CANNON · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
       return;
     }
 
-    if (snapshot.selectedWeapon === 'musket') {
-      this.playerDetail.textContent = ready ? 'MUSKET · READY' : `MUSKET · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
-    } else if (snapshot.selectedWeapon === 'bayonet') {
-      this.playerDetail.textContent = 'BAYONET · CHARGE / MELEE';
-    } else {
-      this.playerDetail.textContent = 'AXE · OBJECTIVE DAMAGE';
-    }
+    if (snapshot.selectedWeapon === 'musket') this.playerDetail.textContent = ready ? 'MUSKET · READY' : `MUSKET · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
+    else if (snapshot.selectedWeapon === 'bayonet') this.playerDetail.textContent = 'BAYONET · CHARGE / MELEE';
+    else this.playerDetail.textContent = 'AXE · OBJECTIVE DAMAGE';
   }
 
   private updateHotbar(snapshot: GameSnapshot): void {
     for (const slot of this.slots) this.clearSlot(slot);
-    if (snapshot.playerClass === 'infantry') {
+    if (canBannerAttackClass(snapshot.playerClass)) {
       this.configureSlot(0, '1', '━', 'MUSKET', snapshot.selectedWeapon === 'musket', snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
       this.configureSlot(1, '2', '†', 'BAYONET', snapshot.selectedWeapon === 'bayonet');
       this.configureSlot(2, '3', '⌁', 'AXE', snapshot.selectedWeapon === 'axe');
-    } else if (snapshot.playerClass === 'cavalry') {
-      this.configureSlot(0, 'RMB', '➤', 'CHARGE', snapshot.chargeAiming || snapshot.playerMode === 'charging');
+    } else if (snapshot.playerClass === 'dragoon') {
+      this.configureSlot(0, 'LMB', '━', 'CARBINE', true, snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
+      this.configureSlot(1, '—', '↯', 'MOBILE', false);
+      this.configureSlot(2, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
+    } else if (isChargeCavalryClass(snapshot.playerClass)) {
+      this.configureSlot(0, 'RMB', '➤', snapshot.playerClass === 'hussar' ? 'SHOCK' : 'CHARGE', snapshot.chargeAiming || snapshot.playerMode === 'charging');
       this.configureSlot(1, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
       this.configureSlot(2, '—', '†', 'SABRE', snapshot.playerMode === 'melee');
     } else {
       const cannonProgress = snapshot.playerArtilleryDeployed ? snapshot.playerReloadProgress : snapshot.playerArtilleryDeployProgress;
-      const cannonState = snapshot.playerArtilleryDeployed
-        ? snapshot.playerReload <= 0 ? 'READY' : 'RELOAD'
-        : 'DEPLOY';
-      this.configureSlot(0, 'LMB', '●', 'CANNON', snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0, cannonProgress, cannonState);
+      const cannonState = snapshot.playerArtilleryDeployed ? snapshot.playerReload <= 0 ? 'READY' : 'RELOAD' : 'DEPLOY';
+      const cannonLabel = snapshot.playerClass === 'heavyArtillery' ? 'HEAVY GUN' : snapshot.playerClass === 'horseArtillery' ? '3 GUNS' : '2 GUNS';
+      this.configureSlot(0, 'LMB', '●', cannonLabel, snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0, cannonProgress, cannonState);
       this.configureSlot(1, 'AUTO', '⌛', snapshot.playerArtilleryDeployed ? 'DEPLOYED' : 'DEPLOY', !snapshot.playerArtilleryDeployed);
       this.configureSlot(2, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
     }
@@ -148,7 +150,7 @@ export class Hud {
     this.classSelector.classList.toggle('hidden', !active);
     if (!active || snapshot.playerRespawn === null) return;
     this.respawnCountdown.textContent = snapshot.playerRespawn.toFixed(1);
-    this.armyComposition.textContent = `BLUE · INF ${snapshot.blueClasses.infantry} / CAV ${snapshot.blueClasses.cavalry} / ART ${snapshot.blueClasses.artillery}`;
+    this.armyComposition.textContent = `BLUE · INF ${snapshot.blueClasses.infantry} LGT ${snapshot.blueClasses.lightInfantry} GRN ${snapshot.blueClasses.grenadier} DRG ${snapshot.blueClasses.dragoon} CAV ${snapshot.blueClasses.cavalry} HUS ${snapshot.blueClasses.hussar} ART ${snapshot.blueClasses.artillery} H-A ${snapshot.blueClasses.heavyArtillery} HRS ${snapshot.blueClasses.horseArtillery}`;
     this.classRecommendation.textContent = `RECOMMENDED · ${this.classLabel(snapshot.playerRecommendedClass)}`;
     for (const card of this.classCards) {
       const value = card.dataset.class as SquadClass | undefined;
@@ -209,8 +211,6 @@ export class Hud {
   }
 
   private classLabel(squadClass: SquadClass): string {
-    if (squadClass === 'cavalry') return 'CAVALRY';
-    if (squadClass === 'artillery') return 'ARTILLERY';
-    return 'LINE INFANTRY';
+    return squadClassLabel(squadClass);
   }
 }
