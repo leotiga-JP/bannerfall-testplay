@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.7.1 - Network Smoothing" />
-    <title>Bannerfall - Phase 3.7.1 Network Smoothing</title>
+    <meta name="description" content="Bannerfall Phase 3.8 - Multiplayer Lobby & Deployment" />
+    <title>Bannerfall - Phase 3.8 Multiplayer Lobby</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">PHASE 3.7.1 · NETWORK SMOOTHING</span>
+            <span class="eyebrow">PHASE 3.8 · MULTIPLAYER LOBBY & DEPLOYMENT</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
@@ -59,24 +59,76 @@
           <button id="join-room" class="primary wide">JOIN ROOM</button>
         </div>
 
-        <div class="menu-panel lobby-panel hidden" id="lobby-screen">
+        <div class="menu-panel lobby-panel deployment-lobby hidden" id="lobby-screen">
           <div class="lobby-head">
             <div><span class="eyebrow">ROOM</span><h2 id="lobby-code">------</h2></div>
             <div class="lobby-buttons"><button id="copy-invite">COPY INVITE</button><button id="leave-room">LEAVE</button></div>
           </div>
           <div id="lobby-settings" class="lobby-settings"></div>
-          <div class="team-columns">
-            <section class="team-card blue-team">
-              <div class="team-title"><h3>BLUE</h3><button id="join-blue">JOIN BLUE</button></div>
-              <div id="blue-players" class="player-list"></div>
+
+          <div class="deployment-layout">
+            <section class="deployment-column">
+              <div class="deployment-toolbar">
+                <div class="team-switch">
+                  <span>TEAM</span>
+                  <button id="join-blue" class="team-choice blue-choice">BLUE</button>
+                  <button id="join-red" class="team-choice red-choice">RED</button>
+                </div>
+                <div class="deployment-summary">
+                  <strong id="deployment-status">SELECT A DEPLOYMENT POINT</strong>
+                  <span>選択枠は早い者勝ち。変更するとREADYが解除されます。</span>
+                </div>
+              </div>
+
+              <div id="deployment-map" class="deployment-map" aria-label="Deployment map">
+                <div class="deployment-zone blue-zone"><span>BLUE DEPLOYMENT</span></div>
+                <div class="deployment-front">NO MAN'S LAND</div>
+                <div class="deployment-zone red-zone"><span>RED DEPLOYMENT</span></div>
+                <div class="map-banner blue-banner-marker">⚑</div>
+                <div class="map-banner red-banner-marker">⚑</div>
+                <div id="spawn-points" class="spawn-points"></div>
+              </div>
+
+              <div class="lobby-class-section">
+                <span class="section-label">STARTING FORMATION</span>
+                <div id="lobby-class-cards" class="lobby-class-cards">
+                  <button class="lobby-class-card selected" data-lobby-class="infantry"><strong>LINE INFANTRY</strong><small>20兵 · Musket / Bayonet / Axe</small><em>旗を破壊可能</em></button>
+                  <button class="lobby-class-card" data-lobby-class="cavalry"><strong>CAVALRY</strong><small>12騎 · 高速 / Charge / Sabre</small><em>側面突破・砲兵狩り</em></button>
+                  <button class="lobby-class-card" data-lobby-class="artillery"><strong>ARTILLERY</strong><small>6兵 · 超長射程 / Area damage</small><em>後方火力支援</em></button>
+                </div>
+              </div>
+
+              <div class="team-columns compact-team-columns">
+                <section class="team-card blue-team">
+                  <div class="team-title"><h3>BLUE</h3><span id="blue-ready-count">0 READY</span></div>
+                  <div id="blue-players" class="player-list"></div>
+                </section>
+                <section class="team-card red-team">
+                  <div class="team-title"><h3>RED</h3><span id="red-ready-count">0 READY</span></div>
+                  <div id="red-players" class="player-list"></div>
+                </section>
+              </div>
+
+              <div class="ready-row">
+                <button id="toggle-ready" class="ready-button">READY</button>
+                <button id="start-match" class="primary">WAITING FOR READY</button>
+              </div>
             </section>
-            <section class="team-card red-team">
-              <div class="team-title"><h3>RED</h3><button id="join-red">JOIN RED</button></div>
-              <div id="red-players" class="player-list"></div>
-            </section>
+
+            <aside class="lobby-chat-panel">
+              <div class="chat-head"><strong>ROOM CHAT</strong><span>Enter to send</span></div>
+              <div id="lobby-chat-log" class="chat-log"></div>
+              <div class="chat-compose">
+                <input id="lobby-chat-input" maxlength="220" placeholder="作戦を相談…" />
+                <button id="lobby-chat-send">SEND</button>
+              </div>
+            </aside>
           </div>
-          <p class="muted">空いている部隊はAIが担当します。ホストがSTARTすると全員同時に戦場へ入ります。</p>
-          <button id="start-match" class="primary wide">START BATTLE</button>
+
+          <div id="lobby-countdown" class="lobby-countdown hidden">
+            <span>BATTLE STARTING</span>
+            <strong id="lobby-countdown-number">3</strong>
+          </div>
         </div>
       </section>
 
@@ -84,7 +136,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Phase 3.7.1 — Multiplayer</p>
+            <p id="battle-subtitle">Phase 3.8 — Multiplayer</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
@@ -114,6 +166,11 @@
           <div id="player-panel" class="player-panel">
             <strong id="player-state">PLAYER</strong>
             <span id="player-detail">READY</span>
+          </div>
+
+          <div id="battle-chat" class="battle-chat">
+            <div id="battle-chat-log" class="battle-chat-log"></div>
+            <input id="battle-chat-input" maxlength="220" placeholder="Enterでチャット" />
           </div>
 
           <div id="context-hint" class="context-hint hidden"></div>
@@ -152,6 +209,7 @@
           <span><kbd>RMB / Space</kbd> 突撃</span>
           <span><kbd>LMB</kbd> 射撃 / 砲撃</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>
+          <span><kbd>Enter</kbd> チャット</span>
           <span><kbd>Wheel</kbd> ズーム</span>
           <span><kbd>Minimap Click</kbd> カメラ移動</span>
           <span><kbd>C</kbd> 自部隊へ戻る</span>

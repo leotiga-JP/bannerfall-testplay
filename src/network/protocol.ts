@@ -1,6 +1,8 @@
 import type { FormationMode } from '../entities/formation';
 import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
 
+export type RoomPhase = 'lobby' | 'countdown' | 'battle';
+
 export interface RoomSettings {
   blueSquads: number;
   redSquads: number;
@@ -15,11 +17,14 @@ export interface LobbyPlayer {
   formationId: string | null;
   owner: boolean;
   connected: boolean;
+  squadClass: SquadClass;
+  spawnIndex: number | null;
+  ready: boolean;
 }
 
 export interface RoomState {
   code: string;
-  phase: 'lobby' | 'battle';
+  phase: RoomPhase;
   settings: RoomSettings;
   players: LobbyPlayer[];
   ownerId: string;
@@ -28,6 +33,15 @@ export interface RoomState {
 export interface MatchStartPayload {
   room: RoomState;
   authorityId: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  playerId: string;
+  playerName: string;
+  text: string;
+  at: number;
+  system?: boolean;
 }
 
 export interface ContinuousControl {
@@ -116,6 +130,10 @@ export type ClientMessage =
   | { type: 'create_room'; name: string; password: string; settings: Omit<RoomSettings, 'passwordProtected'> }
   | { type: 'join_room'; name: string; code: string; password: string }
   | { type: 'change_team'; team: Team }
+  | { type: 'select_class'; squadClass: SquadClass }
+  | { type: 'select_spawn'; spawnIndex: number }
+  | { type: 'set_ready'; ready: boolean }
+  | { type: 'chat_send'; text: string }
   | { type: 'start_match' }
   | { type: 'control'; control: ContinuousControl }
   | { type: 'action'; action: PlayerAction }
@@ -126,7 +144,10 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'welcome'; clientId: string }
   | { type: 'room_state'; room: RoomState }
+  | { type: 'match_countdown'; seconds: number }
   | { type: 'match_start'; payload: MatchStartPayload }
+  | { type: 'chat_history'; messages: ChatMessage[] }
+  | { type: 'chat_message'; message: ChatMessage }
   | { type: 'remote_control'; playerId: string; control: ContinuousControl }
   | { type: 'remote_action'; playerId: string; action: PlayerAction }
   | { type: 'battle_snapshot'; snapshot: BattleNetSnapshot }

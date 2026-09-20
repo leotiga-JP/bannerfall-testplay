@@ -1,102 +1,77 @@
-# Bannerfall Phase 3.7.1 — Network Smoothing
+# Bannerfall Phase 3.8 — Multiplayer Lobby & Deployment
 
-Phase 3.7 Multiplayer Foundationをベースに、ネットワーク同期時の見た目を滑らかにした修正版です。
+Phase 3.7.1 のサーバー権威型マルチプレイとネットワークスムージングを維持し、試合前の出撃準備を追加した版です。
 
-## 今回の変更
+## Phase 3.8 の追加要素
 
-- 10Hzのサーバースナップショットをそのまま瞬間反映せず、クライアント側で位置を連続補正
-- 部隊中心位置を指数補間
-- 各兵士の位置を指数補間
-- 部隊・兵士の向きも最短角度で補間
-- ローカルプレイヤー部隊は少し弱めの補正にし、操作感を残しながらサーバー状態へ収束
-- リスポーンや兵科変更など大きな位置変化は補間せず即座に同期
-- カメラは補正後のプレイヤー部隊を追従するため、同期時の画面揺れを軽減
-- 戦闘中の上部バーへ `TITLE` ボタンを追加
-- `TITLE` を押すとRoomから退出し、部隊はAIへ引き継がれてタイトル画面へ戻る
-- 再度試合へ入った際に入力イベントが二重登録されないようInputManagerを破棄可能に変更
-- 砲兵の画面上部に表示されていた `ARTILLERY DEPLOYING` 表示を削除
-- 砲兵の展開進捗はHotbar側のバーで確認
-- メニューエラー表示を全メニュー画面で見える位置へ修正
+- ロビーで開始兵科を選択
+  - Line Infantry
+  - Cavalry
+  - Artillery
+- ロビーの戦場図から出撃地点を選択
+- 出撃地点はサーバー側で排他予約（早い者勝ち）
+- チーム変更時は出撃地点予約を解除
+- 兵科・出撃地点変更時は READY を解除
+- 全プレイヤーが READY になったときだけホストが START 可能
+- START 後 3 秒の共通カウントダウン
+- ロビー / 戦闘で共通の Room Chat
+- 戦闘中は Enter でチャット欄へフォーカス
+- チャット入力中は WASD 等のゲーム入力を抑制
+- 人間が選ばなかった部隊枠は従来通り AI が担当
+- 切断したプレイヤー部隊は AI が引き継ぐ
 
-## ネットワークスムージングの考え方
+## 出撃地点
 
-サーバーは20Hzでゲームをシミュレーションし、10Hzでスナップショットを送信します。
-クライアント描画は通常60fps以上なので、スナップショットを直接座標へ代入すると約0.1秒ごとに位置が飛び、ユニットが小刻みに見えます。
+各陣営の総部隊数と同数の出撃枠があります。
 
-Phase 3.7.1では：
+例: 20 vs 20 の場合、BLUE は B01〜B20、RED は R01〜R20。
 
-```text
-Authoritative Snapshot
-        ↓
-Network Target Position
-        ↓
-毎描画フレームで補間
-        ↓
-Displayed Position
-```
+プレイヤーが B07 を予約した場合、その試合では B07 が人間プレイヤー担当となり、それ以外の空き枠は AI が担当します。
 
-という形にしています。
+## READY と開始
 
-位置差が非常に大きい場合（リスポーンなど）は、長距離を滑って見えないよう即座に新しい座標へ切り替えます。
+1. Team を選ぶ
+2. Starting Formation を選ぶ
+3. Deployment Point を選ぶ
+4. READY
+5. 全員 READY 後、Host が START BATTLE
+6. 3 秒カウントダウン後に試合開始
 
-## TITLEボタン
+READY 後に編成を変えたい場合は `CANCEL READY` を押してください。
 
-戦闘画面右上の `TITLE` を押すと：
+## Chat
 
-1. 現在のMultiplayerBattleを停止
-2. Serverへ `leave_room` を送信
-3. プレイヤーが担当していた部隊をAIへ返却
-4. タイトル画面へ戻る
+ロビーでは右側の Room Chat を使用します。
 
-シングルプレイで自分しかRoomにいない場合、Roomはサーバー側で閉じられます。
+戦闘中は画面左下のチャット欄を使用します。
 
-## GitHub Pages
-
-`.github/workflows/deploy.yml` は **変更不要** です。
-
-このZIPの中身をGitHub Desktopでcloneした `bannerfall-testplay` のルートへ上書きしてください。
-
-```text
-bannerfall-testplay/
-├ src/
-├ server/
-├ index.html
-├ package.json
-├ tsconfig.json
-├ vite.config.ts
-└ README.md
-```
-
-その後GitHub Desktopで：
-
-```text
-Changes確認
-→ Commit to main
-→ Push origin
-```
+- `Enter`: 戦闘中チャットへフォーカス
+- `Enter`: 送信
+- `Esc`: チャット欄からフォーカス解除
 
 ## 自宅サーバー
 
-サーバー側ゲームルールには変更ありませんが、クライアントと同じリポジトリから起動してください。
+Phase 3.8 では `server/` のコードも変更されています。更新後は Bannerfall Server を再起動してください。
 
 ```powershell
 cd C:\GitHub\bannerfall-testplay\server
-npm install
 npm run start
 ```
 
-別PowerShellで：
+Cloudflare Tunnel は同じ `127.0.0.1:8787` を参照している限り、原則そのまま利用できます。
 
 ```powershell
 cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
-## 開発確認
+Health check:
 
-TypeScript型チェック済みです。
-
-```powershell
-npm run build
+```text
+http://127.0.0.1:8787/health
 ```
 
-この実行環境ではVite本体が未インストールのため `tsc -b` まで確認しています。GitHub Actions側では従来どおり依存関係を取得してVite buildします。
+`version: "3.8"` が表示されれば新サーバーです。
+
+## GitHub Pages
+
+既存の `.github/workflows/deploy.yml` は変更不要です。Phase 3.8 ZIP の中身をローカルリポジトリ直下へ上書きして、GitHub Desktop から Commit / Push してください。

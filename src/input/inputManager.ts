@@ -17,6 +17,7 @@ export class InputManager {
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (event) => {
+      if (this.isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
@@ -28,6 +29,7 @@ export class InputManager {
     window.addEventListener('keyup', (event) => {
       const key = event.key.toLowerCase();
       this.keys.delete(key);
+      if (this.isEditableTarget(event.target)) return;
       this.released.add(key);
     }, { signal: this.eventController.signal });
 
@@ -209,6 +211,12 @@ export class InputManager {
     this.keys.clear();
     this.pressed.clear();
     this.released.clear();
+  }
+
+  private isEditableTarget(target: EventTarget | null): boolean {
+    const element = target instanceof HTMLElement ? target : null;
+    if (!element) return false;
+    return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element.isContentEditable;
   }
 
   private updatePointer(event: MouseEvent): void {

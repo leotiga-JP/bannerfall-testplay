@@ -29,6 +29,9 @@ export class MultiplayerBattle {
     if (!local?.formationId) throw new Error('Local formation was not assigned.');
     this.localFormationId = local.formationId;
     const humanIds = payload.room.players.flatMap((player) => player.formationId ? [player.formationId] : []);
+    const initialClasses = Object.fromEntries(
+      payload.room.players.flatMap((player) => player.formationId ? [[player.formationId, player.squadClass]] : []),
+    );
     for (const player of payload.room.players) {
       if (player.formationId) this.labels.set(player.formationId, `★ ${player.name}`);
     }
@@ -48,6 +51,7 @@ export class MultiplayerBattle {
       respawnSeconds: payload.room.settings.respawnSeconds,
       localFormationId: this.localFormationId,
       humanFormationIds: humanIds,
+      initialClasses,
       introEnabled: false,
     });
 

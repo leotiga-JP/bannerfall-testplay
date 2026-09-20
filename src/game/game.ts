@@ -27,6 +27,7 @@ export interface GameOptions {
   localFormationId?: string;
   humanFormationIds?: string[];
   introEnabled?: boolean;
+  initialClasses?: Record<string, SquadClass>;
 }
 
 export interface AxeStrike {
@@ -121,6 +122,7 @@ export class Game {
   readonly artilleryShells: ArtilleryShell[] = [];
   readonly artilleryExplosions: ArtilleryExplosion[] = [];
 
+  private readonly initialClasses: Record<string, SquadClass>;
   private readonly aiSystem = new BattleAiSystem();
   private readonly meleeSystem = new MeleeSystem();
   private readonly meleeQuietTimers = new Map<string, number>();
@@ -160,6 +162,7 @@ export class Game {
     const localFormationId = options.localFormationId ?? defaultLocal;
     this.humanFormationIds = new Set(options.humanFormationIds ?? [localFormationId]);
     this.humanFormationIds.add(localFormationId);
+    this.initialClasses = { ...(options.initialClasses ?? {}) };
     this.formations = this.createArmies();
     const player = this.formations.find((formation) => formation.id === localFormationId) ?? this.formations[0];
     if (!player) throw new Error('Player formation was not created.');
@@ -191,7 +194,7 @@ export class Game {
     for (let i = 0; i < this.formations.length; i += 1) {
       const formation = this.formations[i];
       const teamIndex = this.teamIndexOf(formation);
-      const squadClass = this.initialClassFor(teamIndex, this.squadCountFor(formation.team));
+      const squadClass = this.initialClassForFormation(formation.id, teamIndex, this.squadCountFor(formation.team));
       const spawn = this.initialSpawnFor(formation.team, teamIndex);
       formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, squadClass);
       formation.spawnProtectionTimer = 0;
@@ -571,7 +574,7 @@ export class Game {
       for (let i = 0; i < count; i += 1) {
         const id = `${team === 'blue' ? 'B' : 'R'}${String(i + 1).padStart(2, '0')}`;
         const isPlayer = this.humanFormationIds.has(id);
-        const squadClass = this.initialClassFor(i, count);
+        const squadClass = this.initialClassForFormation(id, i, count);
         formations.push(new Formation(
           id,
           team,
@@ -583,6 +586,11 @@ export class Game {
       }
     }
     return formations;
+  }
+
+
+  private initialClassForFormation(id: string, index: number, count: number): SquadClass {
+    return this.initialClasses[id] ?? this.initialClassFor(index, count);
   }
 
   private initialClassFor(index: number, count: number): SquadClass {

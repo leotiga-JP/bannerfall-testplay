@@ -3,8 +3,13 @@ import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { Game } from '../src/game/game.ts';
 import type { InputManager } from '../src/input/inputManager.ts';
-import type { Team, Vec2, WeaponType } from '../src/game/types.ts';
-import type { PlayerAction, ContinuousControl, RoomState } from '../src/network/protocol.ts';
+import type { SquadClass, Team, Vec2, WeaponType } from '../src/game/types.ts';
+import type {
+  ChatMessage,
+  ContinuousControl,
+  PlayerAction,
+  RoomState,
+} from '../src/network/protocol.ts';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -12,12 +17,17 @@ const MAX_PLAYERS = 20;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const TICK_SECONDS = 1 / 20;
 const SNAPSHOT_SECONDS = 1 / 10;
+const MATCH_COUNTDOWN_SECONDS = 3;
+const CHAT_HISTORY_LIMIT = 50;
 
 interface ServerPlayer {
   id: string;
   name: string;
   team: Team;
   formationId: string | null;
+  squadClass: SquadClass;
+  spawnIndex: number | null;
+  ready: boolean;
   ws: WebSocket;
 }
 
@@ -28,13 +38,15 @@ interface PasswordRecord {
 
 interface Room {
   code: string;
-  phase: 'lobby' | 'battle';
+  phase: 'lobby' | 'countdown' | 'battle';
   ownerId: string;
   password: PasswordRecord | null;
   settings: { blueSquads: number; redSquads: number; respawnSeconds: number };
   players: Map<string, ServerPlayer>;
+  chat: ChatMessage[];
   game: Game | null;
   snapshotClock: number;
+  countdownTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface Session {
@@ -89,6 +101,18 @@ function cleanName(value: unknown): string {
   return text.slice(0, 24) || 'Player';
 }
 
+function cleanChat(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 220);
+}
+
+function isSquadClass(value: unknown): value is SquadClass {
+  return value === 'infantry' || value === 'cavalry' || value === 'artillery';
+}
+
 function randomCode(): string {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     let code = '';
@@ -130,6 +154,9 @@ function publicRoom(room: Room): RoomState {
       formationId: player.formationId,
       owner: player.id === room.ownerId,
       connected: true,
+      squadClass: player.squadClass,
+      spawnIndex: player.spawnIndex,
+      ready: player.ready,
     })),
     ownerId: room.ownerId,
   };
@@ -160,6 +187,22 @@ function chooseTeam(room: Room): Team {
   return blue <= red ? 'blue' : 'red';
 }
 
+function allPlayersReady(room: Room): boolean {
+  if (room.players.size === 0) return false;
+  for (const player of room.players.values()) {
+    if (!player.ready || player.spawnIndex === null) return false;
+  }
+  return true;
+}
+
+function cancelCountdown(room: Room, message?: string): void {
+  if (room.countdownTimer) clearTimeout(room.countdownTimer);
+  room.countdownTimer = null;
+  if (room.phase === 'countdown') room.phase = 'lobby';
+  for (const player of room.players.values()) player.ready = false;
+  if (message) broadcast(room, { type: 'notice', message });
+}
+
 function removeFromRoom(session: Session, reason = 'left'): void {
   if (!session.roomCode) return;
   const room = rooms.get(session.roomCode);
@@ -174,13 +217,29 @@ function removeFromRoom(session: Session, reason = 'left'): void {
   }
 
   if (room.players.size === 0) {
+    if (room.countdownTimer) clearTimeout(room.countdownTimer);
     rooms.delete(room.code);
     console.log(`[room ${room.code}] closed`);
     return;
   }
+
+  if (room.phase === 'countdown') cancelCountdown(room, 'Player left. Start countdown cancelled.');
   if (room.ownerId === session.id) room.ownerId = room.players.keys().next().value as string;
   broadcastRoom(room);
   console.log(`[room ${room.code}] ${session.name} ${reason}`);
+}
+
+function makePlayer(session: Session, name: string, team: Team): ServerPlayer {
+  return {
+    id: session.id,
+    name,
+    team,
+    formationId: null,
+    squadClass: 'infantry',
+    spawnIndex: null,
+    ready: false,
+    ws: session.ws,
+  };
 }
 
 function createRoom(session: Session, message: Record<string, unknown>): void {
@@ -197,13 +256,16 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
     password: hashPassword(String(message.password ?? '')),
     settings: { blueSquads, redSquads, respawnSeconds },
     players: new Map(),
+    chat: [],
     game: null,
     snapshotClock: 0,
+    countdownTimer: null,
   };
   session.name = cleanName(message.name);
   session.roomCode = code;
-  room.players.set(session.id, { id: session.id, name: session.name, team: 'blue', formationId: null, ws: session.ws });
+  room.players.set(session.id, makePlayer(session, session.name, 'blue'));
   rooms.set(code, room);
+  send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
   console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s)`);
 }
@@ -212,20 +274,15 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
   const code = String(message.code ?? '').trim().toUpperCase();
   const room = rooms.get(code);
   if (!room) return send(session.ws, { type: 'error', message: 'Room not found.' });
-  if (room.phase !== 'lobby') return send(session.ws, { type: 'error', message: 'Match already started.' });
+  if (room.phase !== 'lobby') return send(session.ws, { type: 'error', message: 'Match already started or starting.' });
   const totalSlots = room.settings.blueSquads + room.settings.redSquads;
   if (room.players.size >= Math.min(MAX_PLAYERS, totalSlots)) return send(session.ws, { type: 'error', message: 'Room is full.' });
   if (!verifyPassword(String(message.password ?? ''), room.password)) return send(session.ws, { type: 'error', message: 'Incorrect password.' });
   removeFromRoom(session);
   session.name = cleanName(message.name);
   session.roomCode = code;
-  room.players.set(session.id, {
-    id: session.id,
-    name: session.name,
-    team: chooseTeam(room),
-    formationId: null,
-    ws: session.ws,
-  });
+  room.players.set(session.id, makePlayer(session, session.name, chooseTeam(room)));
+  send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
   console.log(`[room ${code}] ${session.name} joined`);
 }
@@ -238,24 +295,86 @@ function changeTeam(session: Session, team: unknown): void {
   const capacity = team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
   const occupied = teamCount(room, team) - (player.team === team ? 1 : 0);
   if (occupied >= capacity) return send(session.ws, { type: 'error', message: `${team.toUpperCase()} has no free squad slots.` });
+  if (player.team === team) return;
   player.team = team;
+  player.spawnIndex = null;
+  player.ready = false;
   broadcastRoom(room);
 }
 
-function startMatch(session: Session): void {
+function selectClass(session: Session, squadClass: unknown): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room || room.phase !== 'lobby' || !isSquadClass(squadClass)) return;
+  const player = room.players.get(session.id);
+  if (!player) return;
+  player.squadClass = squadClass;
+  player.ready = false;
+  broadcastRoom(room);
+}
+
+function selectSpawn(session: Session, rawIndex: unknown): void {
   const room = session.roomCode ? rooms.get(session.roomCode) : null;
   if (!room || room.phase !== 'lobby') return;
-  if (room.ownerId !== session.id) return send(session.ws, { type: 'error', message: 'Only the room host can start.' });
-  if (teamCount(room, 'blue') > room.settings.blueSquads || teamCount(room, 'red') > room.settings.redSquads) {
-    return send(session.ws, { type: 'error', message: 'Too many players for the selected army size.' });
+  const player = room.players.get(session.id);
+  if (!player) return;
+  const capacity = player.team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
+  const index = Number(rawIndex);
+  if (!Number.isInteger(index) || index < 0 || index >= capacity) {
+    return send(session.ws, { type: 'error', message: 'Invalid spawn point.' });
+  }
+  const occupied = [...room.players.values()].find((candidate) =>
+    candidate.id !== player.id && candidate.team === player.team && candidate.spawnIndex === index);
+  if (occupied) return send(session.ws, { type: 'error', message: `Spawn ${index + 1} is already reserved by ${occupied.name}.` });
+  player.spawnIndex = index;
+  player.ready = false;
+  broadcastRoom(room);
+}
+
+function setReady(session: Session, ready: unknown): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room || room.phase !== 'lobby') return;
+  const player = room.players.get(session.id);
+  if (!player) return;
+  const next = ready === true;
+  if (next && player.spawnIndex === null) return send(session.ws, { type: 'error', message: 'Select a deployment point before READY.' });
+  player.ready = next;
+  broadcastRoom(room);
+}
+
+function sendChat(session: Session, rawText: unknown): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room) return;
+  const player = room.players.get(session.id);
+  if (!player) return;
+  const text = cleanChat(rawText);
+  if (!text) return;
+  const message: ChatMessage = {
+    id: crypto.randomUUID(),
+    playerId: player.id,
+    playerName: player.name,
+    text,
+    at: Date.now(),
+  };
+  room.chat.push(message);
+  if (room.chat.length > CHAT_HISTORY_LIMIT) room.chat.splice(0, room.chat.length - CHAT_HISTORY_LIMIT);
+  broadcast(room, { type: 'chat_message', message });
+}
+
+function launchMatch(room: Room): void {
+  if (room.phase !== 'countdown' || !allPlayersReady(room)) {
+    cancelCountdown(room, 'Deployment changed. Start cancelled.');
+    broadcastRoom(room);
+    return;
   }
 
-  const counters: Record<Team, number> = { blue: 0, red: 0 };
+  const initialClasses: Record<string, SquadClass> = {};
+  const humanFormationIds: string[] = [];
   for (const player of room.players.values()) {
-    const index = counters[player.team]++;
-    player.formationId = `${player.team === 'blue' ? 'B' : 'R'}${String(index + 1).padStart(2, '0')}`;
+    if (player.spawnIndex === null) continue;
+    player.formationId = `${player.team === 'blue' ? 'B' : 'R'}${String(player.spawnIndex + 1).padStart(2, '0')}`;
+    humanFormationIds.push(player.formationId);
+    initialClasses[player.formationId] = player.squadClass;
   }
-  const humanFormationIds = [...room.players.values()].flatMap((player) => player.formationId ? [player.formationId] : []);
   const firstFormationId = humanFormationIds[0] ?? 'B01';
   room.game = new Game(new HeadlessInput() as unknown as InputManager, {
     blueSquads: room.settings.blueSquads,
@@ -263,12 +382,29 @@ function startMatch(session: Session): void {
     respawnSeconds: room.settings.respawnSeconds,
     localFormationId: firstFormationId,
     humanFormationIds,
+    initialClasses,
     introEnabled: false,
   });
   room.phase = 'battle';
   room.snapshotClock = 0;
+  room.countdownTimer = null;
   broadcast(room, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server' } });
   console.log(`[room ${room.code}] authoritative match started (${humanFormationIds.length} players)`);
+}
+
+function startMatch(session: Session): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room || room.phase !== 'lobby') return;
+  if (room.ownerId !== session.id) return send(session.ws, { type: 'error', message: 'Only the room host can start.' });
+  if (!allPlayersReady(room)) return send(session.ws, { type: 'error', message: 'Every player must select a spawn point and READY first.' });
+  if (teamCount(room, 'blue') > room.settings.blueSquads || teamCount(room, 'red') > room.settings.redSquads) {
+    return send(session.ws, { type: 'error', message: 'Too many players for the selected army size.' });
+  }
+
+  room.phase = 'countdown';
+  broadcastRoom(room);
+  broadcast(room, { type: 'match_countdown', seconds: MATCH_COUNTDOWN_SECONDS });
+  room.countdownTimer = setTimeout(() => launchMatch(room), MATCH_COUNTDOWN_SECONDS * 1000);
 }
 
 function applyControl(session: Session, control: ContinuousControl): void {
@@ -296,6 +432,10 @@ function handleMessage(session: Session, raw: RawData): void {
     case 'create_room': createRoom(session, message); break;
     case 'join_room': joinRoom(session, message); break;
     case 'change_team': changeTeam(session, message.team); break;
+    case 'select_class': selectClass(session, message.squadClass); break;
+    case 'select_spawn': selectSpawn(session, message.spawnIndex); break;
+    case 'set_ready': setReady(session, message.ready); break;
+    case 'chat_send': sendChat(session, message.text); break;
     case 'start_match': startMatch(session); break;
     case 'control': applyControl(session, message.control as ContinuousControl); break;
     case 'action': applyAction(session, message.action as PlayerAction); break;
@@ -334,6 +474,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'bannerfall-server',
+      version: '3.8',
       rooms: rooms.size,
       battles,
       players: sessions.size,
@@ -346,7 +487,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Bannerfall Phase 3.7 Multiplayer Server');
+  res.end('Bannerfall Phase 3.8 Multiplayer Server');
 });
 
 const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: { threshold: 1024 }, maxPayload: 8 * 1024 * 1024 });

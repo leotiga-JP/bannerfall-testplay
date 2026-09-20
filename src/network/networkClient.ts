@@ -1,5 +1,6 @@
 import type {
   BattleNetSnapshot,
+  ChatMessage,
   ClientMessage,
   ContinuousControl,
   MatchStartPayload,
@@ -7,6 +8,7 @@ import type {
   RoomState,
   ServerMessage,
 } from './protocol';
+import type { SquadClass, Team } from '../game/types';
 
 export class NetworkClient {
   clientId = '';
@@ -15,7 +17,10 @@ export class NetworkClient {
 
   onConnection?: (connected: boolean, text: string) => void;
   onRoomState?: (room: RoomState) => void;
+  onMatchCountdown?: (seconds: number) => void;
   onMatchStart?: (payload: MatchStartPayload) => void;
+  onChatHistory?: (messages: ChatMessage[]) => void;
+  onChatMessage?: (message: ChatMessage) => void;
   onRemoteControl?: (playerId: string, control: ContinuousControl) => void;
   onRemoteAction?: (playerId: string, action: PlayerAction) => void;
   onBattleSnapshot?: (snapshot: BattleNetSnapshot) => void;
@@ -74,8 +79,26 @@ export class NetworkClient {
     this.send({ type: 'join_room', name, code: code.trim().toUpperCase(), password });
   }
 
-  changeTeam(team: 'blue' | 'red'): void {
+  changeTeam(team: Team): void {
     this.send({ type: 'change_team', team });
+  }
+
+  selectClass(squadClass: SquadClass): void {
+    this.send({ type: 'select_class', squadClass });
+  }
+
+  selectSpawn(spawnIndex: number): void {
+    this.send({ type: 'select_spawn', spawnIndex });
+  }
+
+  setReady(ready: boolean): void {
+    this.send({ type: 'set_ready', ready });
+  }
+
+  sendChat(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.send({ type: 'chat_send', text: trimmed });
   }
 
   startMatch(): void {
@@ -127,10 +150,19 @@ export class NetworkClient {
         this.room = message.room;
         this.onRoomState?.(message.room);
         break;
+      case 'match_countdown':
+        this.onMatchCountdown?.(message.seconds);
+        break;
       case 'match_start':
         this.room = message.payload.room;
         this.authorityId = message.payload.authorityId;
         this.onMatchStart?.(message.payload);
+        break;
+      case 'chat_history':
+        this.onChatHistory?.(message.messages);
+        break;
+      case 'chat_message':
+        this.onChatMessage?.(message.message);
         break;
       case 'remote_control':
         this.onRemoteControl?.(message.playerId, message.control);
