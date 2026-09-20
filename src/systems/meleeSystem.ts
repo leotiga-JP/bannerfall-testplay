@@ -67,7 +67,7 @@ export class MeleeSystem {
     formations: Formation[],
     dt: number,
     strikes: MeleeStrike[],
-    onDeath: (position: Vec2, team: Team, impactDirection: Vec2) => void,
+    onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
   ): boolean {
     let anyStrike = false;
     const pendingHits: PendingHit[] = [];
@@ -106,7 +106,7 @@ export class MeleeSystem {
       hit.target.knockback.x += hit.direction.x * GAME_CONFIG.melee.knockbackSpeed;
       hit.target.knockback.y += hit.direction.y * GAME_CONFIG.melee.knockbackSpeed;
       anyStrike = true;
-      if (killed) onDeath(hit.target.position, hit.target.team, hit.direction);
+      if (killed) onDeath(hit.target.position, hit.target.team, hit.direction, attackerFormation?.id ?? '', targetFormation?.id ?? '');
     }
 
     return anyStrike;

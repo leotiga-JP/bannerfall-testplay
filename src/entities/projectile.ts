@@ -7,15 +7,17 @@ export class Projectile {
   life: number;
   readonly damage: number;
   readonly moraleDamage: number;
+  readonly sourceFormationId: string;
   readonly trail: Vec2[] = [];
 
-  constructor(team: Team, position: Vec2, velocity: Vec2, life: number, damage: number, moraleDamage = 0) {
+  constructor(team: Team, position: Vec2, velocity: Vec2, life: number, damage: number, moraleDamage = 0, sourceFormationId = '') {
     this.team = team;
     this.position = { ...position };
     this.velocity = { ...velocity };
     this.life = life;
     this.damage = damage;
     this.moraleDamage = moraleDamage;
+    this.sourceFormationId = sourceFormationId;
   }
 
   update(dt: number): void {

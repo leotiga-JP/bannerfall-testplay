@@ -17,6 +17,7 @@ export class Hud {
     private readonly redBannerBar: HTMLElement,
     private readonly playerState: HTMLElement,
     private readonly playerDetail: HTMLElement,
+    private readonly playerStats: HTMLElement,
     private readonly notice: HTMLElement,
     private readonly objectiveProgress: HTMLElement,
     private readonly contextHint: HTMLElement,
@@ -67,6 +68,7 @@ export class Hud {
     this.redBannerCard.classList.toggle('under-attack', snapshot.redBannerUnderAttack);
 
     this.updatePlayerPanel(snapshot, ready);
+    this.playerStats.textContent = `KILLS ${snapshot.playerKills} · DEATHS ${snapshot.playerLosses} · BANNER DMG ${Math.round(snapshot.playerBannerDamage)}`;
     this.updateHotbar(snapshot);
     this.updateClassSelector(snapshot);
 
@@ -86,7 +88,7 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall P3.9.1 — Blue ${bluePercent}% | Red ${redPercent}%`;
+    document.title = `Bannerfall P3.9.2 — Blue ${bluePercent}% | Red ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {

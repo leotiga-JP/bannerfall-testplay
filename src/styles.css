@@ -190,6 +190,7 @@ canvas {
 }
 .player-panel strong { color: #ffe08a; font: 800 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .player-panel span { color: #c9bea7; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.player-panel .player-stats { margin-top: 3px; padding-top: 5px; border-top: 1px solid rgba(224,210,171,.18); color: #e7d497; letter-spacing: .04em; }
 
 .context-hint {
   position: absolute;
@@ -697,3 +698,28 @@ button.wide { width: 100%; margin-top: 10px; }
   .ready-row { grid-template-columns: 1fr; }
   .battle-chat { width: min(430px, calc(100vw - 36px)); }
 }
+
+
+/* Phase 3.9.2 battle statistics */
+.scoreboard {
+  position: absolute; inset: 0; z-index: 45; display: grid; place-items: center;
+  background: rgba(5, 7, 8, .42); pointer-events: none;
+}
+.scoreboard-card {
+  width: min(920px, calc(100% - 56px)); max-height: 72%; overflow: hidden;
+  padding: 14px; background: rgba(15, 15, 13, .94);
+  border: 1px solid rgba(225, 209, 166, .42); box-shadow: 0 18px 60px rgba(0,0,0,.5);
+}
+.scoreboard-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; color: #e9d9a8; font: 800 12px ui-monospace, monospace; }
+.scoreboard-head span { color: #918a7b; font-size: 10px; }
+.scoreboard-columns, .scoreboard-row {
+  display: grid; grid-template-columns: minmax(210px, 1.8fr) .55fr .9fr .5fr .55fr .75fr; gap: 9px; align-items: center;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.scoreboard-columns { padding: 7px 9px; color: #827b6c; border-bottom: 1px solid rgba(225,209,166,.18); }
+.scoreboard-body { max-height: 430px; overflow-y: auto; }
+.scoreboard-row { padding: 8px 9px; color: #d8cfbd; border-bottom: 1px solid rgba(225,209,166,.08); }
+.scoreboard-row.blue span:nth-child(2) { color: #81acd8; }
+.scoreboard-row.red span:nth-child(2) { color: #d9877f; }
+.scoreboard-row.local { background: rgba(230, 199, 105, .08); color: #f2df9d; }
+.scoreboard-row span:nth-child(n+4), .scoreboard-columns span:nth-child(n+4) { text-align: right; }

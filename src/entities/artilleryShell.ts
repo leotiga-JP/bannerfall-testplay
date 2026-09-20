@@ -3,6 +3,7 @@ import type { SquadClass, Team, Vec2 } from '../game/types';
 export class ArtilleryShell {
   readonly team: Team;
   readonly sourceClass: SquadClass;
+  readonly sourceFormationId: string;
   position: Vec2;
   readonly target: Vec2;
   readonly velocity: Vec2;
@@ -22,6 +23,7 @@ export class ArtilleryShell {
     blastDamage = 145,
     edgeDamage = 48,
     moraleDamage = 20,
+    sourceFormationId = '',
   ) {
     this.team = team;
     this.position = { ...start };
@@ -31,6 +33,7 @@ export class ArtilleryShell {
     this.blastDamage = blastDamage;
     this.edgeDamage = edgeDamage;
     this.moraleDamage = moraleDamage;
+    this.sourceFormationId = sourceFormationId;
     const dx = target.x - start.x;
     const dy = target.y - start.y;
     const distance = Math.hypot(dx, dy) || 1;

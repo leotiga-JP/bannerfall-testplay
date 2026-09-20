@@ -37,6 +37,7 @@ export function createArtilleryShells(formation: Formation, target: Vec2): Artil
       profile.blastDamage,
       profile.edgeDamage,
       profile.moraleDamage,
+      formation.id,
     ));
   }
   return shells;
@@ -47,7 +48,7 @@ export function updateArtilleryShells(
   formations: Formation[],
   dt: number,
   explosions: ArtilleryExplosion[],
-  onDeath: (position: Vec2, team: Team, impactDirection: Vec2) => void,
+  onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
 ): boolean {
   let explodedNearAnything = false;
   for (const shell of shells) {
@@ -76,7 +77,7 @@ export function updateArtilleryShells(
         const norm = distance > 0.001 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
         soldier.knockback.x += norm.x * 135 * (1 - t * 0.55);
         soldier.knockback.y += norm.y * 135 * (1 - t * 0.55);
-        if (killed) onDeath(soldier.position, soldier.team, norm);
+        if (killed) onDeath(soldier.position, soldier.team, norm, shell.sourceFormationId, formation.id);
         formationHit = true;
       }
       if (formationHit) formation.applyMoraleDamage(shell.moraleDamage);

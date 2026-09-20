@@ -43,6 +43,12 @@ export type IntroStage = 'own-banner' | 'pan-enemy' | 'enemy-banner' | 'return-p
 
 export type ClassCounts = Record<SquadClass, number>;
 
+export interface FormationCombatStats {
+  kills: number;
+  losses: number;
+  bannerDamage: number;
+}
+
 export interface GameSnapshot {
   time: number;
   paused: boolean;
@@ -58,6 +64,9 @@ export interface GameSnapshot {
   playerAlive: number;
   playerMaxSoldiers: number;
   playerMorale: number;
+  playerKills: number;
+  playerLosses: number;
+  playerBannerDamage: number;
   playerReload: number;
   playerReloadProgress: number;
   playerRespawn: number | null;
@@ -121,6 +130,7 @@ export class Game {
   readonly axeStrikes: AxeStrike[] = [];
   readonly artilleryShells: ArtilleryShell[] = [];
   readonly artilleryExplosions: ArtilleryExplosion[] = [];
+  readonly combatStats = new Map<string, FormationCombatStats>();
 
   private readonly initialClasses: Record<string, SquadClass>;
   private readonly aiSystem = new BattleAiSystem();
@@ -166,6 +176,9 @@ export class Game {
     this.humanFormationIds.add(localFormationId);
     this.initialClasses = { ...(options.initialClasses ?? {}) };
     this.formations = this.createArmies();
+    for (const formation of this.formations) {
+      this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
+    }
     const player = this.formations.find((formation) => formation.id === localFormationId) ?? this.formations[0];
     if (!player) throw new Error('Player formation was not created.');
     this.playerFormation = player;
@@ -216,6 +229,9 @@ export class Game {
     this.meleeQuietTimers.clear();
     this.respawnTimers.clear();
     this.plannedRespawnClasses.clear();
+    for (const formation of this.formations) {
+      this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
+    }
     this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds };
     this.time = 0;
     this.paused = false;
@@ -300,7 +316,7 @@ export class Game {
       this.formations,
       dt,
       this.meleeStrikes,
-      (position, team, impactDirection) => this.spawnCorpse(position, team, impactDirection),
+      (position, team, impactDirection, sourceFormationId, targetFormationId) => this.recordDeath(position, team, impactDirection, sourceFormationId, targetFormationId),
     );
     if (struck && this.playerFormation.mode === 'melee') {
       this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.meleeShake);
@@ -311,14 +327,14 @@ export class Game {
       this.projectiles,
       this.formations,
       dt,
-      (position, team, impactDirection) => this.spawnCorpse(position, team, impactDirection),
+      (position, team, impactDirection, sourceFormationId, targetFormationId) => this.recordDeath(position, team, impactDirection, sourceFormationId, targetFormationId),
     );
     const artilleryImpact = updateArtilleryShells(
       this.artilleryShells,
       this.formations,
       dt,
       this.artilleryExplosions,
-      (position, team, impactDirection) => this.spawnCorpse(position, team, impactDirection),
+      (position, team, impactDirection, sourceFormationId, targetFormationId) => this.recordDeath(position, team, impactDirection, sourceFormationId, targetFormationId),
     );
     if (artilleryImpact && this.artilleryExplosions.some((explosion) => this.distanceToPlayer(explosion.position) < 900)) {
       this.screenShake = Math.max(this.screenShake, GAME_CONFIG.effects.artilleryShake);
@@ -347,6 +363,8 @@ export class Game {
       this.plannedRespawnClasses,
     );
 
+    const playerStats = this.getFormationStats(this.playerFormation.id);
+
     return {
       time: this.time,
       paused: this.paused,
@@ -362,6 +380,9 @@ export class Game {
       playerAlive: this.playerFormation.aliveCount(),
       playerMaxSoldiers: this.playerFormation.maxSoldiers(),
       playerMorale: this.playerFormation.morale,
+      playerKills: playerStats.kills,
+      playerLosses: playerStats.losses,
+      playerBannerDamage: playerStats.bannerDamage,
       playerReload: this.playerFormation.reloadTimer,
       playerReloadProgress: this.playerFormation.reloadProgress(),
       playerRespawn,
@@ -438,9 +459,11 @@ export class Game {
       redBannerUnderAttack: this.redBanner.underAttackTimer,
       blueReinforcementWave: this.reinforcementWaveRemaining.blue,
       redReinforcementWave: this.reinforcementWaveRemaining.red,
+      stats: [...this.combatStats.entries()].map(([formationId, stats]) => ({ formationId, ...stats })),
       formations,
       projectiles: this.projectiles.map((projectile) => ({
         team: projectile.team,
+        sourceFormationId: projectile.sourceFormationId,
         x: projectile.position.x,
         y: projectile.position.y,
         vx: projectile.velocity.x,
@@ -451,6 +474,7 @@ export class Game {
       })),
       shells: this.artilleryShells.map((shell) => ({
         team: shell.team,
+        sourceFormationId: shell.sourceFormationId,
         x: shell.position.x,
         y: shell.position.y,
         targetX: shell.target.x,
@@ -478,6 +502,9 @@ export class Game {
     this.redBanner.underAttackTimer = snapshot.redBannerUnderAttack;
     this.reinforcementWaveRemaining.blue = snapshot.blueReinforcementWave;
     this.reinforcementWaveRemaining.red = snapshot.redReinforcementWave;
+    for (const net of snapshot.stats ?? []) {
+      this.combatStats.set(net.formationId, { kills: net.kills, losses: net.losses, bannerDamage: net.bannerDamage });
+    }
 
     const firstSnapshot = !this.hasNetworkSnapshot;
     const teleportDistance = 520;
@@ -544,7 +571,7 @@ export class Game {
     // formations/soldiers are visually reconciled over several render frames.
     this.projectiles.length = 0;
     for (const net of snapshot.projectiles) {
-      this.projectiles.push(new Projectile(net.team, { x: net.x, y: net.y }, { x: net.vx, y: net.vy }, net.life, net.damage, net.moraleDamage));
+      this.projectiles.push(new Projectile(net.team, { x: net.x, y: net.y }, { x: net.vx, y: net.vy }, net.life, net.damage, net.moraleDamage, net.sourceFormationId));
     }
     this.artilleryShells.length = 0;
     for (const net of snapshot.shells) {
@@ -559,6 +586,7 @@ export class Game {
         net.blastDamage,
         net.edgeDamage,
         net.moraleDamage,
+        net.sourceFormationId,
       );
       shell.active = net.active;
       this.artilleryShells.push(shell);
@@ -1119,7 +1147,7 @@ export class Game {
         target.position.y += impact.y * 18;
         charger.chargeMomentum = Math.max(0, charger.chargeMomentum - profile.momentumPerHit);
         hitSomething = true;
-        if (killed) this.spawnCorpse(target.position, target.team, impact);
+        if (killed) this.recordDeath(target.position, target.team, impact, charger.id, enemy.id);
       }
     }
     if (hitSomething && (charger.isPlayerControlled || this.distanceToPlayer(charger.center) < 760)) {
@@ -1172,7 +1200,9 @@ export class Game {
       if (attackers <= 0) continue;
       const wasUnderAttack = banner.underAttackTimer > 0;
       const beforeRatio = banner.ratio;
-      banner.takeDamage(attackers * GAME_CONFIG.banner.axeDamagePerSoldier);
+      const dealtBannerDamage = banner.takeDamage(attackers * GAME_CONFIG.banner.axeDamagePerSoldier);
+      const attackerStats = this.getFormationStats(formation.id);
+      attackerStats.bannerDamage += dealtBannerDamage;
       formation.bannerAttackTimer = GAME_CONFIG.banner.axeInterval;
       this.spawnAxeStrikes(formation, banner, attackers);
 
@@ -1476,6 +1506,33 @@ export class Game {
         team: formation.team,
         life: GAME_CONFIG.effects.axeStrikeLifetime,
       });
+    }
+  }
+
+  getFormationStats(formationId: string): FormationCombatStats {
+    let stats = this.combatStats.get(formationId);
+    if (!stats) {
+      stats = { kills: 0, losses: 0, bannerDamage: 0 };
+      this.combatStats.set(formationId, stats);
+    }
+    return stats;
+  }
+
+  getCombatStatsEntries(): Array<{ formationId: string } & FormationCombatStats> {
+    return [...this.combatStats.entries()].map(([formationId, stats]) => ({ formationId, ...stats }));
+  }
+
+  private recordDeath(
+    position: Vec2,
+    team: Team,
+    impactDirection: Vec2,
+    sourceFormationId: string,
+    targetFormationId: string,
+  ): void {
+    this.spawnCorpse(position, team, impactDirection);
+    if (targetFormationId) this.getFormationStats(targetFormationId).losses += 1;
+    if (sourceFormationId && sourceFormationId !== targetFormationId) {
+      this.getFormationStats(sourceFormationId).kills += 1;
     }
   }
 

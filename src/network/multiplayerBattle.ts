@@ -1,6 +1,6 @@
 import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
-import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
+import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, classLabel, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { InputManager } from '../input/inputManager';
 import { Renderer } from '../rendering/renderer';
 import { Hud } from '../ui/hud';
@@ -14,6 +14,9 @@ export class MultiplayerBattle {
   private readonly hud: Hud;
   private readonly labels = new Map<string, string>();
   private readonly localFormationId: string;
+  private room: RoomState;
+  private readonly scoreboard: HTMLElement;
+  private readonly scoreboardBody: HTMLElement;
   private running = true;
   private previousTime = performance.now();
   private snapshotAccumulator = 0;
@@ -28,6 +31,12 @@ export class MultiplayerBattle {
     const local = payload.room.players.find((player) => player.id === network.clientId);
     if (!local?.formationId) throw new Error('Local formation was not assigned.');
     this.localFormationId = local.formationId;
+    this.room = payload.room;
+    const scoreboard = document.querySelector<HTMLElement>('#scoreboard');
+    const scoreboardBody = document.querySelector<HTMLElement>('#scoreboard-body');
+    if (!scoreboard || !scoreboardBody) throw new Error('Missing battle scoreboard elements.');
+    this.scoreboard = scoreboard;
+    this.scoreboardBody = scoreboardBody;
     const humanIds = payload.room.players.flatMap((player) => player.formationId ? [player.formationId] : []);
     const initialClasses = Object.fromEntries(
       payload.room.players.flatMap((player) => player.formationId ? [[player.formationId, player.squadClass]] : []),
@@ -74,10 +83,12 @@ export class MultiplayerBattle {
     };
 
     this.installNetworkInputEvents();
+    this.installScoreboardEvents();
     requestAnimationFrame((now) => this.frame(now));
   }
 
   updateRoom(room: RoomState): void {
+    this.room = room;
     this.labels.clear();
     for (const player of room.players) {
       if (player.formationId) this.labels.set(player.formationId, `★ ${player.name}`);
@@ -100,7 +111,7 @@ export class MultiplayerBattle {
     return new Hud(
       get('status'), get('pause-overlay'), get('camera-status'),
       get('blue-banner-card'), get('red-banner-card'), get('blue-banner-hp'), get('red-banner-hp'),
-      get('blue-banner-bar'), get('red-banner-bar'), get('player-state'), get('player-detail'),
+      get('blue-banner-bar'), get('red-banner-bar'), get('player-state'), get('player-detail'), get('player-stats'),
       get('notice'), get('objective-progress'), get('context-hint'), get('hotbar'),
       get('class-selector'), get('respawn-countdown'), get('army-composition'), get('class-recommendation'),
     );
@@ -148,7 +159,58 @@ export class MultiplayerBattle {
       this.localFormationId,
     );
     this.hud.update(snapshot);
+    if (!this.scoreboard.classList.contains('hidden')) this.renderScoreboard();
     requestAnimationFrame((time) => this.frame(time));
+  }
+
+  private installScoreboardEvents(): void {
+    const keyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return;
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      this.scoreboard.classList.remove('hidden');
+      this.renderScoreboard();
+    };
+    const keyUp = (event: KeyboardEvent): void => {
+      if (event.key !== 'Tab') return;
+      event.preventDefault();
+      this.scoreboard.classList.add('hidden');
+    };
+    window.addEventListener('keydown', keyDown);
+    window.addEventListener('keyup', keyUp);
+    this.cleanup.push(() => window.removeEventListener('keydown', keyDown));
+    this.cleanup.push(() => window.removeEventListener('keyup', keyUp));
+    this.cleanup.push(() => this.scoreboard.classList.add('hidden'));
+  }
+
+  private renderScoreboard(): void {
+    this.scoreboardBody.innerHTML = '';
+    const players = [...this.room.players].sort((a, b) => {
+      if (a.team !== b.team) return a.team === 'blue' ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const player of players) {
+      if (!player.formationId) continue;
+      const stats = this.game.getFormationStats(player.formationId);
+      const formation = this.game.formations.find((candidate) => candidate.id === player.formationId);
+      const row = document.createElement('div');
+      row.className = `scoreboard-row ${player.team}${player.id === this.network.clientId ? ' local' : ''}`;
+      const values = [
+        `${player.id === this.network.clientId ? '★ ' : ''}${player.name} · ${player.formationId}`,
+        player.team.toUpperCase(),
+        classLabel(formation?.squadClass ?? player.squadClass),
+        String(stats.kills),
+        String(stats.losses),
+        String(Math.round(stats.bannerDamage)),
+      ];
+      for (const value of values) {
+        const cell = document.createElement('span');
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      this.scoreboardBody.appendChild(row);
+    }
   }
 
   private sendContinuousControl(): void {

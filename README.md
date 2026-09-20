@@ -1,3 +1,21 @@
+# Bannerfall Phase 3.9.2 — Battle Statistics
+
+Phase 3.9.1をベースに、マルチプレイ戦績のサーバー権威集計を追加した版です。
+
+## 追加内容
+
+- 各部隊の **KILLS / DEATHS / BANNER DMG** をサーバー側Gameで集計
+- 左下のプレイヤーパネルへ自分の戦績を常時表示
+- **Tab長押し**で人間プレイヤー全員のスコアボードを表示
+- スコアボード：Player/Squad、Team、Class、Kills、Deaths、Banner Damage
+- マスケット、白兵戦、騎兵ロードキル、砲撃のキルを攻撃元部隊へ帰属
+- リスポーンや兵科変更をまたいでも同一部隊の戦績を維持
+- 旗への斧ダメージも部隊別に累積
+
+`deploy.yml` の変更は不要です。`server/` と共有ゲームロジックを変更しているため、更新後はBannerfall Serverを再起動してください。
+
+---
+
 # Bannerfall Phase 3.9.1 — Rout Movement Fix
 
 Phase 3.8 のマルチプレイヤーロビー／出撃準備／チャットと、Phase 3.7.1 のネットワークスムージングを維持しつつ、**膠着した戦線が局地的な勝利から崩れて動くこと**を狙った版です。

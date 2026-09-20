@@ -57,6 +57,7 @@ export function fireVolley(formation: Formation): VolleyResult {
       profile.projectileLife,
       profile.damage,
       profile.moraleDamage,
+      formation.id,
     ));
 
     flashes.push({ position: { ...muzzle }, direction: formation.direction, life: GAME_CONFIG.effects.flashLifetime });
@@ -94,7 +95,7 @@ export function updateProjectiles(
   projectiles: Projectile[],
   formations: Formation[],
   dt: number,
-  onDeath: (position: Vec2, team: Team, impactDirection: Vec2) => void,
+  onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
 ): void {
   const bulletRadius = GAME_CONFIG.musket.bulletRadius;
   const coarseRadius = GAME_CONFIG.formation.collisionRadius + 70;
@@ -122,7 +123,7 @@ export function updateProjectiles(
         projectile.life = 0;
         if (killed) {
           const speed = Math.hypot(projectile.velocity.x, projectile.velocity.y) || 1;
-          onDeath(target.position, target.team, { x: projectile.velocity.x / speed, y: projectile.velocity.y / speed });
+          onDeath(target.position, target.team, { x: projectile.velocity.x / speed, y: projectile.velocity.y / speed }, projectile.sourceFormationId, formation.id);
         }
         hit = true;
         break;

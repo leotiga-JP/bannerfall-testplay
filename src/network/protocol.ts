@@ -92,8 +92,16 @@ export interface FormationNetState {
   soldiers: SoldierNetState[];
 }
 
+export interface FormationCombatStatsNetState {
+  formationId: string;
+  kills: number;
+  losses: number;
+  bannerDamage: number;
+}
+
 export interface ProjectileNetState {
   team: Team;
+  sourceFormationId: string;
   x: number;
   y: number;
   vx: number;
@@ -105,6 +113,7 @@ export interface ProjectileNetState {
 
 export interface ShellNetState {
   team: Team;
+  sourceFormationId: string;
   x: number;
   y: number;
   targetX: number;
@@ -129,6 +138,7 @@ export interface BattleNetSnapshot {
   redBannerUnderAttack: number;
   blueReinforcementWave: number;
   redReinforcementWave: number;
+  stats: FormationCombatStatsNetState[];
   formations: FormationNetState[];
   projectiles: ProjectileNetState[];
   shells: ShellNetState[];
