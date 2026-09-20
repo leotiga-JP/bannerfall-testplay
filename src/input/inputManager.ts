@@ -12,6 +12,7 @@ export class InputManager {
   private pointer: Vec2 = { x: 640, y: 360 };
   private panDelta: Vec2 = { x: 0, y: 0 };
   private wheelDelta = 0;
+  private queuedClassSelection: SquadClass | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (event) => {
@@ -115,10 +116,19 @@ export class InputManager {
   }
 
   consumeClassSelection(): SquadClass | null {
+    if (this.queuedClassSelection) {
+      const selection = this.queuedClassSelection;
+      this.queuedClassSelection = null;
+      return selection;
+    }
     if (this.consumePressed('1')) return 'infantry';
     if (this.consumePressed('2')) return 'cavalry';
     if (this.consumePressed('3')) return 'artillery';
     return null;
+  }
+
+  queueClassSelection(selection: SquadClass): void {
+    this.queuedClassSelection = selection;
   }
 
   consumePrimaryClick(): Vec2 | null {

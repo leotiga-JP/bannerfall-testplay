@@ -48,6 +48,7 @@ export interface GameSnapshot {
   playerAlive: number;
   playerMaxSoldiers: number;
   playerReload: number;
+  playerReloadProgress: number;
   playerRespawn: number | null;
   playerArtilleryDeployed: boolean;
   playerArtilleryDeployProgress: number;
@@ -303,6 +304,7 @@ export class Game {
       playerAlive: this.playerFormation.aliveCount(),
       playerMaxSoldiers: this.playerFormation.maxSoldiers(),
       playerReload: this.playerFormation.reloadTimer,
+      playerReloadProgress: this.playerFormation.reloadProgress(),
       playerRespawn,
       playerArtilleryDeployed: this.playerFormation.artilleryDeployed,
       playerArtilleryDeployProgress: this.playerFormation.squadClass === 'artillery'

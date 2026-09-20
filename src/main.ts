@@ -4,6 +4,7 @@ import { Game } from './game/game';
 import { InputManager } from './input/inputManager';
 import { Renderer } from './rendering/renderer';
 import { Hud } from './ui/hud';
+import type { SquadClass } from './game/types';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game');
 const statusElement = document.querySelector<HTMLElement>('#status');
@@ -43,6 +44,14 @@ canvas!.width = GAME_CONFIG.viewport.width;
 canvas!.height = GAME_CONFIG.viewport.height;
 
 const input = new InputManager(canvas!);
+for (const card of classSelector!.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
+  card.addEventListener('click', () => {
+    const value = card.dataset.class as SquadClass | undefined;
+    if (value === 'infantry' || value === 'cavalry' || value === 'artillery') {
+      input.queueClassSelection(value);
+    }
+  });
+}
 const game = new Game(input);
 const renderer = new Renderer(ctx);
 const hud = new Hud(

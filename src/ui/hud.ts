@@ -125,7 +125,7 @@ export class Hud {
   private updateHotbar(snapshot: GameSnapshot): void {
     for (const slot of this.slots) this.clearSlot(slot);
     if (snapshot.playerClass === 'infantry') {
-      this.configureSlot(0, '1', '━', 'MUSKET', snapshot.selectedWeapon === 'musket');
+      this.configureSlot(0, '1', '━', 'MUSKET', snapshot.selectedWeapon === 'musket', snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
       this.configureSlot(1, '2', '†', 'BAYONET', snapshot.selectedWeapon === 'bayonet');
       this.configureSlot(2, '3', '⌁', 'AXE', snapshot.selectedWeapon === 'axe');
     } else if (snapshot.playerClass === 'cavalry') {
@@ -133,7 +133,11 @@ export class Hud {
       this.configureSlot(1, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
       this.configureSlot(2, '—', '†', 'SABRE', snapshot.playerMode === 'melee');
     } else {
-      this.configureSlot(0, 'LMB', '●', 'CANNON', snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0);
+      const cannonProgress = snapshot.playerArtilleryDeployed ? snapshot.playerReloadProgress : snapshot.playerArtilleryDeployProgress;
+      const cannonState = snapshot.playerArtilleryDeployed
+        ? snapshot.playerReload <= 0 ? 'READY' : 'RELOAD'
+        : 'DEPLOY';
+      this.configureSlot(0, 'LMB', '●', 'CANNON', snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0, cannonProgress, cannonState);
       this.configureSlot(1, 'AUTO', '⌛', snapshot.playerArtilleryDeployed ? 'DEPLOYED' : 'DEPLOY', !snapshot.playerArtilleryDeployed);
       this.configureSlot(2, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
     }
@@ -153,7 +157,15 @@ export class Hud {
     }
   }
 
-  private configureSlot(index: number, key: string, icon: string, label: string, selected: boolean): void {
+  private configureSlot(
+    index: number,
+    key: string,
+    icon: string,
+    label: string,
+    selected: boolean,
+    progress: number | null = null,
+    progressLabel = '',
+  ): void {
     const slot = this.slots[index];
     if (!slot) return;
     slot.classList.remove('empty');
@@ -164,6 +176,24 @@ export class Hud {
     if (keyElement) keyElement.textContent = key;
     if (iconElement) iconElement.textContent = icon;
     if (labelElement) labelElement.textContent = label;
+    this.setSlotProgress(slot, progress, progressLabel);
+  }
+
+  private setSlotProgress(slot: HTMLElement, progress: number | null, label: string): void {
+    let meter = slot.querySelector<HTMLElement>('.slot-meter');
+    if (!meter) {
+      meter = document.createElement('div');
+      meter.className = 'slot-meter hidden';
+      const fill = document.createElement('span');
+      fill.className = 'slot-meter-fill';
+      meter.appendChild(fill);
+      slot.appendChild(meter);
+    }
+    const fill = meter.querySelector<HTMLElement>('.slot-meter-fill');
+    const normalized = progress === null ? 0 : Math.max(0, Math.min(1, progress));
+    meter.classList.toggle('hidden', progress === null);
+    meter.dataset.state = label;
+    if (fill) fill.style.width = `${Math.round(normalized * 100)}%`;
   }
 
   private clearSlot(slot: HTMLElement): void {
@@ -175,6 +205,7 @@ export class Hud {
     if (keyElement) keyElement.textContent = '';
     if (iconElement) iconElement.textContent = '';
     if (labelElement) labelElement.textContent = '';
+    this.setSlotProgress(slot, null, '');
   }
 
   private classLabel(squadClass: SquadClass): string {

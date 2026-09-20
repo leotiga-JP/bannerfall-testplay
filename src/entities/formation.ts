@@ -21,6 +21,7 @@ export class Formation {
   direction: number;
   squadClass: SquadClass;
   reloadTimer = 0;
+  reloadDuration = 0;
   volleysFired = 0;
   mode: FormationMode = 'line';
   chargeTarget: Vec2 | null = null;
@@ -63,6 +64,7 @@ export class Formation {
       this.rebuildSoldiers();
     }
     this.reloadTimer = 0;
+    this.reloadDuration = 0;
     this.volleysFired = 0;
     this.mode = 'line';
     this.chargeTarget = null;
@@ -140,6 +142,7 @@ export class Formation {
     this.chargeTarget = null;
     this.bannerTargetTeam = null;
     this.reloadTimer = Math.max(this.reloadTimer, 0.25);
+    this.reloadDuration = Math.max(this.reloadDuration, this.reloadTimer);
     this.artilleryDeployed = false;
     this.artilleryDeployTimer = 0;
   }
@@ -178,6 +181,7 @@ export class Formation {
     this.bannerTargetTeam = null;
     this.bannerAttackTimer = 0;
     this.reloadTimer = Math.max(this.reloadTimer, reloadPenalty);
+    this.reloadDuration = Math.max(this.reloadDuration, this.reloadTimer);
     this.artilleryDeployed = false;
     this.artilleryDeployTimer = 0;
     return true;
@@ -256,7 +260,14 @@ export class Formation {
 
   beginReload(seconds: number): void {
     this.reloadTimer = seconds;
+    this.reloadDuration = seconds;
     this.volleysFired += 1;
+  }
+
+  reloadProgress(): number {
+    if (this.reloadTimer <= 0) return 1;
+    if (this.reloadDuration <= 0) return 0;
+    return Math.max(0, Math.min(1, 1 - this.reloadTimer / this.reloadDuration));
   }
 
   needsReform(): boolean {

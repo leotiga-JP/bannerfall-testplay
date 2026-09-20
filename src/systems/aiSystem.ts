@@ -463,7 +463,8 @@ export class BattleAiSystem {
       return;
     }
 
-    const bestTarget = target ?? this.selectArtilleryTarget(formation, enemies);
+    // Artillery evaluates the whole battlefield instead of inheriting the generic nearest-target choice.
+    const bestTarget = this.selectArtilleryTarget(formation, enemies) ?? target;
     if (!bestTarget) {
       controller.intent = 'advance';
       command.move = formation.team === 'blue' ? { x: 1, y: 0 } : { x: -1, y: 0 };
@@ -473,7 +474,7 @@ export class BattleAiSystem {
     command.faceAngle = this.angleTo(formation.center, bestTarget.center);
     const distance = this.distance(formation.center, bestTarget.center);
 
-    if (distance > GAME_CONFIG.artillery.range * 0.94) {
+    if (distance > GAME_CONFIG.artillery.range * 0.97) {
       controller.intent = 'advance';
       command.move = this.toward(formation.center, bestTarget.center);
       return;
@@ -549,10 +550,24 @@ export class BattleAiSystem {
     let bestScore = Number.POSITIVE_INFINITY;
     for (const enemy of enemies) {
       const distance = this.distance(formation.center, enemy.center);
-      if (distance > GAME_CONFIG.artillery.range * 1.25) continue;
-      const classScore = enemy.squadClass === 'infantry' ? -260 : enemy.squadClass === 'artillery' ? -80 : 120;
-      const densityBonus = -enemy.aliveCount() * 8;
-      const score = Math.abs(distance - GAME_CONFIG.artillery.preferredRange) + classScore + densityBonus + Math.random() * 80;
+      if (distance > GAME_CONFIG.artillery.range || distance < GAME_CONFIG.artillery.minRange) continue;
+
+      // Prefer dense infantry concentrations. Nearby formations make a target more valuable
+      // because one shell can disrupt several squads even when it only directly damages one.
+      let nearbyFormations = 0;
+      let nearbySoldiers = 0;
+      for (const other of enemies) {
+        if (this.distance(enemy.center, other.center) <= 430) {
+          nearbyFormations += 1;
+          nearbySoldiers += other.aliveCount();
+        }
+      }
+
+      const classScore = enemy.squadClass === 'infantry' ? -420 : enemy.squadClass === 'artillery' ? -100 : 210;
+      const densityBonus = -(nearbyFormations - 1) * 135 - nearbySoldiers * 5.5;
+      const rangeScore = Math.abs(distance - GAME_CONFIG.artillery.preferredRange) * 0.16;
+      const objectiveBonus = enemy.mode === 'bannerAttack' ? -280 : 0;
+      const score = rangeScore + classScore + densityBonus + objectiveBonus + Math.random() * 95;
       if (score < bestScore) {
         bestScore = score;
         best = enemy;
