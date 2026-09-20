@@ -184,9 +184,30 @@ export class Formation {
     if (distance <= 15) return true;
     const speed = this.movementSpeed(false, true) * GAME_CONFIG.morale.routedSpeedMultiplier;
     const step = Math.min(distance, speed * dt);
-    this.center.x += (dx / distance) * step;
-    this.center.y += (dy / distance) * step;
+    const moveX = (dx / distance) * step;
+    const moveY = (dy / distance) * step;
+    this.center.x += moveX;
+    this.center.y += moveY;
     this.direction = Math.atan2(dy, dx);
+
+    // ROUT is a real retreat, not just a logical formation-center move.
+    // Move every surviving soldier with the retreating center so enemies can
+    // visually track, shoot, and pursue the broken unit while it falls back.
+    for (const soldier of this.soldiers) {
+      if (soldier.dead) continue;
+      soldier.position.x += moveX;
+      soldier.position.y += moveY;
+      soldier.position.x = Math.max(
+        GAME_CONFIG.world.padding,
+        Math.min(GAME_CONFIG.world.width - GAME_CONFIG.world.padding, soldier.position.x),
+      );
+      soldier.position.y = Math.max(
+        GAME_CONFIG.world.padding,
+        Math.min(GAME_CONFIG.world.height - GAME_CONFIG.world.padding, soldier.position.y),
+      );
+      soldier.direction = this.direction;
+    }
+
     this.routTravelled += step;
     this.markMoved();
     return distance - step <= 15;

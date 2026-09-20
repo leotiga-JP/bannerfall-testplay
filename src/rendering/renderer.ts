@@ -224,7 +224,7 @@ export class Renderer {
       if (formation.aliveCount() === 0 || !this.pointVisible(formation.center, camera, 300)) continue;
       if (formation.id === localFormationId) this.drawPlayerSelection(formation, camera);
       if (formation.spawnProtectionTimer > 0) this.drawSpawnProtection(formation, camera);
-      if (isArtilleryClass(formation.squadClass)) this.drawCannon(formation, camera);
+      if (isArtilleryClass(formation.squadClass)) this.drawCannon(formation, camera, formation.mode === 'routed');
       for (const soldier of formation.soldiers) {
         if (!soldier.dead) {
           this.drawSoldier(
@@ -236,6 +236,7 @@ export class Renderer {
             formation.squadClass,
             formation.weapon,
             formation.mode === 'bannerAttack',
+            formation.mode === 'routed',
             camera,
           );
         }
@@ -253,6 +254,7 @@ export class Renderer {
     squadClass: SquadClass,
     weapon: WeaponType,
     objectiveAttack: boolean,
+    routed: boolean,
     camera: Camera,
   ): void {
     const { ctx } = this;
@@ -260,15 +262,17 @@ export class Renderer {
     ctx.translate(position.x, position.y);
     ctx.rotate(direction);
 
-    const teamBody = team === 'blue' ? '#315f99' : '#a43d3d';
+    const routedBody = '#777b80';
+    const routedSkin = '#aaa9a3';
+    const teamBody = routed ? routedBody : team === 'blue' ? '#315f99' : '#a43d3d';
     if (isChargeCavalryClass(squadClass) || squadClass === 'dragoon' || squadClass === 'horseArtillery') {
-      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : '#5a4633';
+      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : routed ? '#66686b' : '#5a4633';
       ctx.beginPath();
       ctx.ellipse(0, 0, 15, 7, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : teamBody;
       ctx.fillRect(-3, -7, 10, 8);
-      ctx.fillStyle = '#e4d2aa';
+      ctx.fillStyle = routed ? routedSkin : '#e4d2aa';
       ctx.beginPath();
       ctx.arc(6, -5, 3.2, 0, Math.PI * 2);
       ctx.fill();
@@ -284,7 +288,7 @@ export class Renderer {
     if (isArtilleryClass(squadClass)) {
       ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : teamBody;
       ctx.fillRect(-7, -5, 14, 10);
-      ctx.fillStyle = '#e4d2aa';
+      ctx.fillStyle = routed ? routedSkin : '#e4d2aa';
       ctx.beginPath();
       ctx.arc(4, 0, 3.3, 0, Math.PI * 2);
       ctx.fill();
@@ -294,7 +298,7 @@ export class Renderer {
 
     const body = hitFlashTimer > 0
       ? '#fff1c6'
-      : team === 'blue' ? '#315f99' : '#a43d3d';
+      : routed ? routedBody : team === 'blue' ? '#315f99' : '#a43d3d';
     ctx.fillStyle = body;
     ctx.fillRect(
       -GAME_CONFIG.soldier.bodyLength / 2,
@@ -303,7 +307,7 @@ export class Renderer {
       GAME_CONFIG.soldier.bodyWidth,
     );
 
-    ctx.fillStyle = '#e4d2aa';
+    ctx.fillStyle = routed ? routedSkin : '#e4d2aa';
     ctx.beginPath();
     ctx.arc(3, 0, 3.8, 0, Math.PI * 2);
     ctx.fill();
@@ -343,7 +347,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  private drawCannon(formation: Formation, camera: Camera): void {
+  private drawCannon(formation: Formation, camera: Camera, routed = false): void {
     const { ctx } = this;
     const profile = artilleryProfile(formation.squadClass);
     const rightX = -Math.sin(formation.direction);
@@ -355,13 +359,13 @@ export class Renderer {
       ctx.rotate(formation.direction);
       const heavy = formation.squadClass === 'heavyArtillery';
       const horse = formation.squadClass === 'horseArtillery';
-      ctx.strokeStyle = '#2c2923';
+      ctx.strokeStyle = routed ? '#5f6265' : '#2c2923';
       ctx.lineWidth = (heavy ? 10 : horse ? 5 : 7) / Math.max(0.7, camera.zoom);
       ctx.beginPath();
       ctx.moveTo(-10, 0);
       ctx.lineTo(heavy ? 58 : horse ? 37 : 43, 0);
       ctx.stroke();
-      ctx.fillStyle = '#4b4032';
+      ctx.fillStyle = routed ? '#777a7d' : '#4b4032';
       const wheel = heavy ? 13 : horse ? 8 : 10;
       ctx.beginPath();
       ctx.arc(-5, -10, wheel, 0, Math.PI * 2);
@@ -413,9 +417,11 @@ export class Renderer {
     ctx.font = `bold ${size}px ui-monospace, monospace`;
     const customLabel = formationLabels.get(formation.id);
     const isLocal = formation.id === localFormationId;
-    ctx.fillStyle = customLabel
-      ? (isLocal ? '#ffe18a' : '#fff0b8')
-      : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
+    ctx.fillStyle = formation.mode === 'routed'
+      ? '#b9bbbd'
+      : customLabel
+        ? (isLocal ? '#ffe18a' : '#fff0b8')
+        : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
     const suffix = isLocal ? ' · YOU' : '';
     const objective = formation.mode === 'bannerAttack' ? ' · AXE' : '';
     const classTag = classShortLabel(formation.squadClass);
@@ -427,7 +433,9 @@ export class Renderer {
     const moraleY = formation.center.y - 44;
     ctx.fillStyle = 'rgba(20,18,14,.72)';
     ctx.fillRect(formation.center.x - moraleWidth / 2, moraleY, moraleWidth, 4 / camera.zoom);
-    ctx.fillStyle = formation.morale < GAME_CONFIG.morale.routThreshold ? '#d45a55' : formation.morale < GAME_CONFIG.morale.shakenThreshold ? '#d8a64f' : '#7fc48d';
+    ctx.fillStyle = formation.mode === 'routed'
+      ? '#9a9da1'
+      : formation.morale < GAME_CONFIG.morale.routThreshold ? '#d45a55' : formation.morale < GAME_CONFIG.morale.shakenThreshold ? '#d8a64f' : '#7fc48d';
     ctx.fillRect(formation.center.x - moraleWidth / 2, moraleY, moraleWidth * formation.moraleRatio(), 4 / camera.zoom);
   }
 
@@ -632,9 +640,11 @@ export class Renderer {
 
     for (const formation of formations) {
       if (formation.aliveCount() === 0) continue;
-      ctx.fillStyle = formation.isPlayerControlled
-        ? '#ffe073'
-        : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
+      ctx.fillStyle = formation.mode === 'routed'
+        ? (formation.isPlayerControlled ? '#c7c9cb' : '#96999d')
+        : formation.isPlayerControlled
+          ? '#ffe073'
+          : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
       const px = x + formation.center.x * sx;
       const py = y + formation.center.y * sy;
       const size = formation.isPlayerControlled ? 7 : formation.mode === 'bannerAttack' ? 6 : 4;
