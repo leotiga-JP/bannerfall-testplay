@@ -1,6 +1,7 @@
 import type { SquadClass, Vec2, WeaponType } from '../game/types';
 
 export class InputManager {
+  private readonly eventController = new AbortController();
   private readonly keys = new Set<string>();
   private readonly pressed = new Set<string>();
   private readonly released = new Set<string>();
@@ -22,13 +23,13 @@ export class InputManager {
       if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3', 'z', 'x', 'v'].includes(key)) {
         event.preventDefault();
       }
-    });
+    }, { signal: this.eventController.signal });
 
     window.addEventListener('keyup', (event) => {
       const key = event.key.toLowerCase();
       this.keys.delete(key);
       this.released.add(key);
-    });
+    }, { signal: this.eventController.signal });
 
     canvas.addEventListener('mousemove', (event) => {
       const before = this.pointer;
@@ -37,7 +38,7 @@ export class InputManager {
         this.panDelta.x += this.pointer.x - before.x;
         this.panDelta.y += this.pointer.y - before.y;
       }
-    });
+    }, { signal: this.eventController.signal });
 
     canvas.addEventListener('mousedown', (event) => {
       this.updatePointer(event);
@@ -52,7 +53,7 @@ export class InputManager {
         this.rightMousePressed = true;
         event.preventDefault();
       }
-    });
+    }, { signal: this.eventController.signal });
 
     window.addEventListener('mouseup', (event) => {
       if (event.button === 1) this.middleMouseDown = false;
@@ -60,14 +61,14 @@ export class InputManager {
         this.rightMouseDown = false;
         this.rightMouseReleased = true;
       }
-    });
+    }, { signal: this.eventController.signal });
 
     canvas.addEventListener('wheel', (event) => {
       this.wheelDelta += event.deltaY;
       event.preventDefault();
-    }, { passive: false });
+    }, { passive: false, signal: this.eventController.signal });
 
-    canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    canvas.addEventListener('contextmenu', (event) => event.preventDefault(), { signal: this.eventController.signal });
   }
 
   isDown(key: string): boolean {
@@ -201,6 +202,13 @@ export class InputManager {
     this.rightMousePressed = false;
     this.rightMouseReleased = false;
     this.leftClickPoint = null;
+  }
+
+  destroy(): void {
+    this.eventController.abort();
+    this.keys.clear();
+    this.pressed.clear();
+    this.released.clear();
   }
 
   private updatePointer(event: MouseEvent): void {

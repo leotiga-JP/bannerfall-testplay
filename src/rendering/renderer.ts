@@ -669,7 +669,6 @@ export class Renderer {
   private drawPlayerMode(snapshot: GameSnapshot): void {
     let text = '';
     if (snapshot.chargeAiming) text = snapshot.playerClass === 'cavalry' ? 'CAVALRY CHARGE — RELEASE TO COMMIT' : 'CHARGE VECTOR — RELEASE TO COMMIT';
-    else if (snapshot.playerClass === 'artillery' && snapshot.playerMode === 'line' && !snapshot.playerArtilleryDeployed) text = `ARTILLERY DEPLOYING — ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}%`;
     else if (snapshot.playerMode === 'charging') text = snapshot.playerClass === 'cavalry' ? 'CAVALRY — FULL CHARGE' : 'PLAYER SQUAD — CHARGING';
     else if (snapshot.playerMode === 'melee') text = 'PLAYER SQUAD — BAYONET MELEE';
     else if (snapshot.playerMode === 'reforming') text = 'PLAYER SQUAD — REFORMING';

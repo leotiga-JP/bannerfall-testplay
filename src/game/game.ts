@@ -90,6 +90,18 @@ export interface GameSnapshot {
   contextualHint: string;
 }
 
+interface NetworkSoldierTarget {
+  x: number;
+  y: number;
+  direction: number;
+}
+
+interface NetworkFormationTarget {
+  x: number;
+  y: number;
+  direction: number;
+  soldiers: NetworkSoldierTarget[];
+}
 
 export class Game {
   readonly formations: Formation[];
@@ -117,6 +129,8 @@ export class Game {
   private readonly remoteControls = new Map<string, ContinuousControl>();
   private readonly humanWeapons = new Map<string, WeaponType>();
   private networkSnapshotSeq = 0;
+  private readonly networkTargets = new Map<string, NetworkFormationTarget>();
+  private hasNetworkSnapshot = false;
   private time = 0;
   private paused = false;
   private winner: Team | null = null;
@@ -441,15 +455,19 @@ export class Game {
     this.blueBanner.underAttackTimer = snapshot.blueBannerUnderAttack;
     this.redBanner.underAttackTimer = snapshot.redBannerUnderAttack;
 
+    const firstSnapshot = !this.hasNetworkSnapshot;
+    const teleportDistance = 520;
+
     for (const net of snapshot.formations) {
       const formation = this.formations.find((candidate) => candidate.id === net.id);
       if (!formation) continue;
-      if (formation.squadClass !== net.squadClass || formation.soldiers.length !== net.soldiers.length) {
-        formation.setClass(net.squadClass);
-      }
-      formation.center.x = net.x;
-      formation.center.y = net.y;
-      formation.direction = net.direction;
+
+      const classChanged = formation.squadClass !== net.squadClass || formation.soldiers.length !== net.soldiers.length;
+      if (classChanged) formation.setClass(net.squadClass);
+
+      const distanceToAuthoritative = Math.hypot(formation.center.x - net.x, formation.center.y - net.y);
+      const snapImmediately = firstSnapshot || classChanged || distanceToAuthoritative >= teleportDistance;
+
       formation.mode = net.mode;
       formation.weapon = net.weapon;
       formation.reloadTimer = net.reloadTimer;
@@ -463,20 +481,42 @@ export class Game {
       else this.respawnTimers.set(formation.id, net.respawnRemaining);
       if (net.plannedClass === null) this.plannedRespawnClasses.delete(formation.id);
       else this.plannedRespawnClasses.set(formation.id, net.plannedClass);
+
+      const soldiers: NetworkSoldierTarget[] = [];
       for (let i = 0; i < formation.soldiers.length; i += 1) {
         const soldier = formation.soldiers[i];
         const state = net.soldiers[i];
         if (!state) continue;
-        soldier.position.x = state.x;
-        soldier.position.y = state.y;
         soldier.hp = state.hp;
         soldier.dead = state.dead;
-        soldier.direction = state.direction;
         soldier.hitFlashTimer = state.hit;
         soldier.meleeStabTimer = state.stab;
+        soldiers.push({ x: state.x, y: state.y, direction: state.direction });
+        if (snapImmediately) {
+          soldier.position.x = state.x;
+          soldier.position.y = state.y;
+          soldier.direction = state.direction;
+        }
       }
+
+      if (snapImmediately) {
+        formation.center.x = net.x;
+        formation.center.y = net.y;
+        formation.direction = net.direction;
+      }
+
+      this.networkTargets.set(formation.id, {
+        x: net.x,
+        y: net.y,
+        direction: net.direction,
+        soldiers,
+      });
     }
 
+    this.hasNetworkSnapshot = true;
+
+    // Projectiles are short lived. They still use authoritative snapshots, while
+    // formations/soldiers are visually reconciled over several render frames.
     this.projectiles.length = 0;
     for (const net of snapshot.projectiles) {
       this.projectiles.push(new Projectile(net.team, { x: net.x, y: net.y }, { x: net.vx, y: net.vy }, net.life, net.damage));
@@ -488,6 +528,40 @@ export class Game {
       shell.active = net.active;
       this.artilleryShells.push(shell);
     }
+  }
+
+  smoothNetworkState(dt: number): void {
+    if (!this.hasNetworkSnapshot || dt <= 0) return;
+
+    // Exponential reconciliation keeps the 10 Hz authoritative snapshots from
+    // appearing as 10 visible teleports per second on a 60+ Hz display.
+    const remoteBlend = 1 - Math.exp(-16 * dt);
+    const localBlend = 1 - Math.exp(-8 * dt);
+    const soldierBlend = 1 - Math.exp(-20 * dt);
+
+    for (const formation of this.formations) {
+      const target = this.networkTargets.get(formation.id);
+      if (!target) continue;
+      const blend = formation === this.playerFormation ? localBlend : remoteBlend;
+      formation.center.x += (target.x - formation.center.x) * blend;
+      formation.center.y += (target.y - formation.center.y) * blend;
+      formation.direction = this.lerpAngle(formation.direction, target.direction, blend);
+
+      const count = Math.min(formation.soldiers.length, target.soldiers.length);
+      for (let i = 0; i < count; i += 1) {
+        const soldier = formation.soldiers[i];
+        const state = target.soldiers[i];
+        soldier.position.x += (state.x - soldier.position.x) * soldierBlend;
+        soldier.position.y += (state.y - soldier.position.y) * soldierBlend;
+        soldier.direction = this.lerpAngle(soldier.direction, state.direction, soldierBlend);
+      }
+    }
+  }
+
+  private lerpAngle(from: number, to: number, amount: number): number {
+    let delta = (to - from + Math.PI) % (Math.PI * 2) - Math.PI;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    return from + delta * amount;
   }
 
   private createArmies(): Formation[] {

@@ -111,6 +111,17 @@ function startBattle(payload: MatchStartPayload): void {
   if (subtitle) subtitle.textContent = `Room ${payload.room.code} · ${payload.room.settings.blueSquads}v${payload.room.settings.redSquads}`;
 }
 
+function returnToTitle(): void {
+  currentBattle?.stop();
+  currentBattle = null;
+  if (currentRoom && network.connected) network.leaveRoom();
+  currentRoom = null;
+  battleShell!.classList.add('hidden');
+  menuShell!.classList.remove('hidden');
+  showScreen('title');
+  document.title = 'Bannerfall — Phase 3.7.1';
+}
+
 network.onConnection = (connected, text) => {
   connectionStatus!.textContent = text;
   connectionDot!.classList.toggle('online', connected);
@@ -183,6 +194,8 @@ document.querySelector('#leave-room')?.addEventListener('click', () => {
   currentRoom = null;
   showScreen('title');
 });
+
+document.querySelector('#return-title')?.addEventListener('click', () => returnToTitle());
 
 document.querySelector('#copy-invite')?.addEventListener('click', async () => {
   if (!currentRoom) return;

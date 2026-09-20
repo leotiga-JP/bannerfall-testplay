@@ -59,6 +59,26 @@ body {
 }
 
 #status { color: #e8dbb8; min-width: 118px; text-align: right; }
+.topbar-button {
+  padding: 6px 10px;
+  min-width: 64px;
+  border-color: rgba(213, 189, 114, 0.55);
+  background: rgba(24, 20, 15, 0.82);
+  color: #dcc98f;
+  font-size: 10px;
+}
+.topbar-button:hover { background: #342c1f; border-color: #d5bd72; }
+
+.menu-error-global {
+  position: fixed;
+  left: 50%;
+  top: 18px;
+  z-index: 100;
+  width: min(720px, calc(100vw - 36px));
+  transform: translateX(-50%);
+  box-sizing: border-box;
+}
+
 #camera-status { color: #aebbd0; white-space: nowrap; }
 
 .canvas-wrap {

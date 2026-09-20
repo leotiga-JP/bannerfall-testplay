@@ -81,8 +81,10 @@ export class MultiplayerBattle {
   }
 
   stop(): void {
+    if (!this.running) return;
     this.running = false;
     for (const dispose of this.cleanup) dispose();
+    this.input.destroy();
   }
 
   private createHud(): Hud {
@@ -105,9 +107,10 @@ export class MultiplayerBattle {
     const rawDt = Math.min((now - this.previousTime) / 1000, 0.04);
     this.previousTime = now;
 
-    // Remote clients predict locally for responsiveness; authoritative snapshots
-    // from the room host continuously correct the shared battlefield state.
+    // Clients keep short local prediction for responsive controls, then reconcile
+    // toward the latest authoritative server snapshot over several render frames.
     this.game.update(rawDt);
+    if (!this.network.isAuthority) this.game.smoothNetworkState(rawDt);
 
     if (this.network.isAuthority) {
       this.snapshotAccumulator += rawDt;
