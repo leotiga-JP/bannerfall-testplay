@@ -190,6 +190,7 @@ export class MultiplayerBattle {
       this.game.projectiles,
       this.game.artilleryShells,
       this.game.artilleryExplosions,
+      this.game.fieldworks,
       this.game.smoke,
       this.game.muzzleFlashes,
       this.game.corpses,
@@ -267,7 +268,7 @@ export class MultiplayerBattle {
     const weapon: WeaponType = canBannerAttackClass(formation.squadClass)
       ? formation.weapon
       : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
-    this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon });
+    this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon, forcedMarch: this.input.isForcedMarchHeld() });
   }
 
   private installNetworkInputEvents(): void {
@@ -325,8 +326,15 @@ export class MultiplayerBattle {
       const formation = this.game.playerFormation;
       const key = event.key.toLowerCase();
       if (key === 'f') send({ type: 'reform', formationId: formation.id });
-      if (key === 'b') send({ type: 'recall', formationId: formation.id });
       if (key === 'n') this.hud.toggleClassReservation();
+      if (key === '4' && formation.aliveCount() > 0 && formation.squadClass === 'grenadier') {
+        send({ type: 'grenade', formationId: formation.id, target: this.game.camera.screenToWorld(this.input.getPointer()) });
+      }
+      if (key === '5' && formation.aliveCount() > 0 && formation.fieldworkKits > 0) {
+        const target = this.game.camera.screenToWorld(this.input.getPointer());
+        const direction = Math.atan2(target.y - formation.center.y, target.x - formation.center.x) + Math.PI / 2;
+        send({ type: 'fieldwork', formationId: formation.id, target, direction });
+      }
       if (key >= '1' && key <= '9') {
         if (formation.aliveCount() === 0) {
           const squadClass = SQUAD_CLASSES[Number(key) - 1];

@@ -73,6 +73,10 @@ export function volleyProfile(squadClass: SquadClass): VolleyProfile {
       return { ...standardVolley, damage: 82, playerReload: 2.85, aiReloadMin: 2.8, aiReloadMax: 3.5, spread: 0.13, effectiveRange: 690, defensiveRange: 410, moraleDamage: 0.65 };
     case 'grenadier':
       return { ...standardVolley, damage: 108, playerReload: 3.9, aiReloadMin: 3.8, aiReloadMax: 4.55, spread: 0.10, effectiveRange: 600, defensiveRange: 385, moraleDamage: 1.25 };
+    case 'sharpshooter':
+      return { ...standardVolley, damage: 230, playerReload: 6.4, aiReloadMin: 6.2, aiReloadMax: 7.3, spread: 0.035, projectileSpeed: 1500, projectileLife: 2.0, effectiveRange: 1240, defensiveRange: 720, moraleDamage: 1.15 };
+    case 'engineer':
+      return { ...standardVolley, damage: 88, playerReload: 4.25, aiReloadMin: 4.2, aiReloadMax: 5.0, spread: 0.14, effectiveRange: 545, defensiveRange: 340, moraleDamage: 0.8 };
     case 'dragoon':
       return { ...standardVolley, damage: 78, playerReload: 3.15, aiReloadMin: 3.1, aiReloadMax: 3.75, spread: 0.12, effectiveRange: 565, defensiveRange: 360, moraleDamage: 0.7 };
     default:
@@ -85,7 +89,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
     return {
       guns: 1,
       deploySeconds: 4.2,
-      range: 6200,
+      range: 4200,
       minRange: 480,
       playerReload: 12.8,
       aiReloadMin: 12.5,
@@ -97,7 +101,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
       moraleDamage: 44,
       targetJitter: 48,
       threatRetreatRange: 720,
-      preferredRange: 4750,
+      preferredRange: 3300,
       smokeScale: 2.0,
       shakeScale: 1.65,
     };
@@ -158,6 +162,19 @@ export function chargeProfile(squadClass: SquadClass): ChargeProfile {
       minMomentum: GAME_CONFIG.hussar.minMomentum,
     };
   }
+  if (squadClass === 'cuirassier') {
+    return {
+      maxDistance: GAME_CONFIG.cuirassier.chargeMaxDistance,
+      speed: GAME_CONFIG.cuirassier.chargeSpeed,
+      aiMinDistance: GAME_CONFIG.cuirassier.aiChargeMinDistance,
+      aiMaxDistance: GAME_CONFIG.cuirassier.aiChargeMaxDistance,
+      roadkillDamage: GAME_CONFIG.cuirassier.roadkillDamage,
+      roadkillMoraleDamage: 4,
+      roadkillRadius: GAME_CONFIG.cuirassier.roadkillRadius,
+      momentumPerHit: GAME_CONFIG.cuirassier.momentumPerHit,
+      minMomentum: GAME_CONFIG.cuirassier.minMomentum,
+    };
+  }
   if (squadClass === 'cavalry') {
     return {
       maxDistance: GAME_CONFIG.cavalry.chargeMaxDistance,
@@ -188,9 +205,12 @@ export function meleeProfile(squadClass: SquadClass): MeleeProfile {
   switch (squadClass) {
     case 'grenadier': return { damage: 48, cooldown: 0.66, moveSpeed: 106, moraleDamage: 4.2 };
     case 'lightInfantry': return { damage: 27, cooldown: 0.72, moveSpeed: 112, moraleDamage: 2.0 };
+    case 'sharpshooter': return { damage: 20, cooldown: 0.82, moveSpeed: 108, moraleDamage: 1.0 };
+    case 'engineer': return { damage: 31, cooldown: 0.74, moveSpeed: 116, moraleDamage: 2.2 };
     case 'dragoon': return { damage: 33, cooldown: 0.68, moveSpeed: 132, moraleDamage: 2.4 };
     case 'cavalry': return { damage: GAME_CONFIG.cavalry.meleeDamage, cooldown: GAME_CONFIG.cavalry.meleeCooldown, moveSpeed: GAME_CONFIG.cavalry.meleeMoveSpeed, moraleDamage: 4.5 };
     case 'hussar': return { damage: GAME_CONFIG.hussar.meleeDamage, cooldown: GAME_CONFIG.hussar.meleeCooldown, moveSpeed: GAME_CONFIG.hussar.meleeMoveSpeed, moraleDamage: 9.0 };
+    case 'cuirassier': return { damage: GAME_CONFIG.cuirassier.meleeDamage, cooldown: GAME_CONFIG.cuirassier.meleeCooldown, moveSpeed: GAME_CONFIG.cuirassier.meleeMoveSpeed, moraleDamage: 2.0 };
     case 'artillery': return { damage: 16, cooldown: 1.05, moveSpeed: 76, moraleDamage: 1.0 };
     case 'heavyArtillery': return { damage: 14, cooldown: 1.15, moveSpeed: 62, moraleDamage: 0.8 };
     case 'horseArtillery': return { damage: 18, cooldown: 0.96, moveSpeed: 90, moraleDamage: 1.2 };
@@ -202,6 +222,9 @@ export function moraleResistance(squadClass: SquadClass): number {
   switch (squadClass) {
     case 'grenadier': return 0.66;
     case 'hussar': return 0.78;
+    case 'cuirassier': return 0.62;
+    case 'sharpshooter': return 0.92;
+    case 'engineer': return 0.90;
     case 'cavalry': return 0.84;
     case 'dragoon': return 0.88;
     case 'lightInfantry': return 0.9;
@@ -218,4 +241,18 @@ export function artilleryClass(squadClass: SquadClass): boolean {
 
 export function mountedChargeClass(squadClass: SquadClass): boolean {
   return isChargeCavalryClass(squadClass);
+}
+
+export function fieldworkKitCapacity(squadClass: SquadClass): number {
+  switch (squadClass) {
+    case 'infantry': return GAME_CONFIG.fieldworks.kitsInfantry;
+    case 'lightInfantry': return GAME_CONFIG.fieldworks.kitsLightInfantry;
+    case 'grenadier': return GAME_CONFIG.fieldworks.kitsGrenadier;
+    case 'sharpshooter': return GAME_CONFIG.fieldworks.kitsSharpshooter;
+    case 'engineer': return GAME_CONFIG.fieldworks.kitsEngineer;
+    case 'artillery': return GAME_CONFIG.fieldworks.kitsArtillery;
+    case 'heavyArtillery': return GAME_CONFIG.fieldworks.kitsHeavyArtillery;
+    case 'horseArtillery': return GAME_CONFIG.fieldworks.kitsHorseArtillery;
+    default: return 0;
+  }
 }

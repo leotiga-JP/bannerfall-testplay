@@ -229,6 +229,9 @@ export class BattleAiSystem {
     scores.horseArtillery += controller.flankPreference * 6 + controller.aggression * 4;
     scores.infantry += controller.objectiveCommitment * 11;
     scores.grenadier += controller.aggression * 7 + controller.objectiveCommitment * 7;
+    scores.sharpshooter += controller.caution * 8;
+    scores.engineer += controller.objectiveCommitment * 13;
+    scores.cuirassier += controller.aggression * 8 + controller.caution * 5;
     for (const value of SQUAD_CLASSES) scores[value] += (Math.random() - 0.5) * 10;
     return this.highestClass(scores);
   }
@@ -262,8 +265,8 @@ export class BattleAiSystem {
     const ownBanner = banners.find((banner) => banner.team === team)!;
     const enemyBanner = banners.find((banner) => banner.team !== team)!;
     const enemyArtillery = enemyCounts.artillery + enemyCounts.heavyArtillery + enemyCounts.horseArtillery;
-    const enemyMounted = enemyCounts.cavalry + enemyCounts.hussar + enemyCounts.dragoon;
-    const enemyFoot = enemyCounts.infantry + enemyCounts.lightInfantry + enemyCounts.grenadier;
+    const enemyMounted = enemyCounts.cavalry + enemyCounts.hussar + enemyCounts.cuirassier + enemyCounts.dragoon;
+    const enemyFoot = enemyCounts.infantry + enemyCounts.lightInfantry + enemyCounts.grenadier + enemyCounts.sharpshooter + enemyCounts.engineer;
     const friendlyNearEnemyBanner = formations.filter((formation) => formation.team === team && formation.aliveCount() > 0 && this.distance(formation.center, enemyBanner.position) < 1100).length;
     const enemyNearOwnBanner = formations.filter((formation) => formation.team !== team && formation.aliveCount() > 0 && this.distance(formation.center, ownBanner.position) < 1200).length;
     const avgEnemyMorale = this.averageMorale(formations.filter((formation) => formation.team !== team && formation.aliveCount() > 0));
@@ -274,9 +277,12 @@ export class BattleAiSystem {
       infantry: 58,
       lightInfantry: 30,
       grenadier: 34,
+      sharpshooter: 18,
+      engineer: 24,
       dragoon: 30,
       cavalry: 30,
       hussar: 24,
+      cuirassier: 22,
       artillery: 28,
       heavyArtillery: 18,
       horseArtillery: 24,
@@ -286,9 +292,12 @@ export class BattleAiSystem {
     scores.lightInfantry += enemyArtillery * 5 + Math.max(0, 2 - counts.lightInfantry) * 8;
     scores.grenadier += avgEnemyMorale < 55 ? 24 : 4;
     scores.grenadier += friendlyNearEnemyBanner * 5;
+    scores.sharpshooter += enemyMounted * 12 + Math.max(0, 2 - counts.sharpshooter) * 5;
+    scores.engineer += friendlyNearEnemyBanner * 11 + enemyNearOwnBanner * 7 + Math.max(0, 2 - counts.engineer) * 5;
     scores.dragoon += enemyNearOwnBanner * 3 + Math.max(0, 2 - counts.dragoon) * 7;
     scores.cavalry += enemyArtillery * 13 + Math.max(0, 3 - counts.cavalry) * 6;
     scores.hussar += enemyArtillery * 6 + (avgEnemyMorale < 62 ? 30 : 4) + Math.max(0, 2 - counts.hussar) * 6;
+    scores.cuirassier += enemyFoot * 1.2 + (avgFriendlyMorale < 55 ? 10 : 0) + Math.max(0, 2 - counts.cuirassier) * 5;
     scores.artillery += enemyFoot * 2.8 + Math.max(0, 2 - counts.artillery) * 10;
     scores.heavyArtillery += enemyFoot * 2.3 + (avgEnemyMorale > 60 ? 12 : 0);
     scores.horseArtillery += enemyFoot * 1.6 + (avgFriendlyMorale > 55 ? 6 : 0) + Math.max(0, 2 - counts.horseArtillery) * 7;
@@ -296,18 +305,21 @@ export class BattleAiSystem {
     if (enemyBanner.ratio < 0.4) {
       scores.infantry += 34;
       scores.grenadier += 24;
+      scores.engineer += 38;
       scores.lightInfantry += 12;
       scores.heavyArtillery -= 15;
     }
     if (enemyBanner.ratio < 0.2) {
       scores.infantry += 38;
       scores.grenadier += 32;
+      scores.engineer += 52;
       scores.cavalry -= 10;
       scores.heavyArtillery -= 18;
     }
     if (ownBanner.underAttackTimer > 0 || ownBanner.ratio < 0.35) {
       scores.infantry += 32;
       scores.grenadier += 28;
+      scores.engineer += 26;
       scores.dragoon += 20;
       scores.artillery -= 18;
       scores.heavyArtillery -= 34;
@@ -319,9 +331,12 @@ export class BattleAiSystem {
       infantry: GAME_CONFIG.ai.classSoftCapInfantry,
       lightInfantry: GAME_CONFIG.ai.classSoftCapLightInfantry,
       grenadier: GAME_CONFIG.ai.classSoftCapGrenadier,
+      sharpshooter: GAME_CONFIG.ai.classSoftCapSharpshooter,
+      engineer: GAME_CONFIG.ai.classSoftCapEngineer,
       dragoon: GAME_CONFIG.ai.classSoftCapDragoon,
       cavalry: GAME_CONFIG.ai.classSoftCapCavalry,
       hussar: GAME_CONFIG.ai.classSoftCapHussar,
+      cuirassier: GAME_CONFIG.ai.classSoftCapCuirassier,
       artillery: GAME_CONFIG.ai.classSoftCapArtillery,
       heavyArtillery: GAME_CONFIG.ai.classSoftCapHeavyArtillery,
       horseArtillery: GAME_CONFIG.ai.classSoftCapHorseArtillery,
@@ -568,6 +583,8 @@ export class BattleAiSystem {
       if (isArtilleryClass(formation.squadClass) && canBannerAttackClass(enemy.squadClass)) classBonus -= 180;
       if (isArtilleryClass(formation.squadClass) && isChargeCavalryClass(enemy.squadClass)) classBonus += 260;
       if (formation.squadClass === 'lightInfantry' && isArtilleryClass(enemy.squadClass)) classBonus -= 180;
+      if (formation.squadClass === 'sharpshooter' && (isChargeCavalryClass(enemy.squadClass) || enemy.squadClass === 'dragoon')) classBonus -= 520;
+      if (formation.squadClass === 'cuirassier' && canBannerAttackClass(enemy.squadClass)) classBonus -= 120;
       const score = distance
         + crowded * GAME_CONFIG.ai.targetCrowdPenalty
         + lanePenalty

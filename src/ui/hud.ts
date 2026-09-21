@@ -1,5 +1,6 @@
 import type { GameSnapshot } from '../game/game';
 import { canBannerAttackClass, classLabel as squadClassLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass } from '../game/types';
+import { fieldworkKitCapacity } from '../game/classProfiles';
 
 export class Hud {
   private readonly slots: HTMLElement[];
@@ -43,11 +44,9 @@ export class Hud {
       : snapshot.winner
         ? snapshot.winner === 'blue' ? 'BLUE VICTORY' : 'RED VICTORY'
         : snapshot.playerRespawn !== null
-          ? 'CHOOSE CLASS'
-          : snapshot.playerRecallRemaining !== null
-            ? 'RECALLING'
-            : snapshot.playerBaseRecoveryRemaining !== null
-              ? 'REINFORCING'
+          ? '兵科選択'
+          : snapshot.playerBaseRecoveryRemaining !== null
+              ? '補充中'
               : snapshot.playerMode === 'bannerAttack'
             ? snapshot.playerBannerInRange ? 'AXE ATTACK' : 'OBJECTIVE MOVE'
             : snapshot.chargeAiming
@@ -59,7 +58,9 @@ export class Hud {
                   : snapshot.playerMode === 'reforming'
                     ? 'REFORMING'
                     : snapshot.playerMode === 'routed'
-                      ? 'ROUTING'
+                      ? '敗走中'
+                      : snapshot.playerForcedMarch
+                        ? '強行軍'
                       : isArtilleryClass(snapshot.playerClass) && !snapshot.playerArtilleryDeployed
                         ? 'BATTLE'
                         : ready ? 'READY' : 'RELOADING';
@@ -97,32 +98,32 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall P3.9.4.2 — Blue ${bluePercent}% | Red ${redPercent}%`;
+    document.title = `Bannerfall P3.10 — BLUE ${bluePercent}% | RED ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
     const className = this.classLabel(snapshot.playerClass);
     if (snapshot.playerRespawn !== null) {
-      this.playerState.textContent = `SQUAD WIPED · NEXT ${this.classLabel(snapshot.playerNextClass)}`;
-      this.playerDetail.textContent = `REINFORCEMENT WAVE ${snapshot.playerRespawn.toFixed(1)}s`;
-      return;
-    }
-    if (snapshot.playerRecallRemaining !== null) {
-      this.playerState.textContent = `${className} · RECALLING`;
-      this.playerDetail.textContent = `RETURN TO SPAWN ${snapshot.playerRecallRemaining.toFixed(1)}s · MOVE/ATTACK TO CANCEL`;
+      this.playerState.textContent = `部隊壊滅 · 次回 ${this.classLabel(snapshot.playerNextClass)}`;
+      this.playerDetail.textContent = `援軍到着まで ${snapshot.playerRespawn.toFixed(1)}秒`;
       return;
     }
     if (snapshot.playerBaseRecoveryRemaining !== null) {
-      this.playerState.textContent = `${className} · REINFORCING`;
-      this.playerDetail.textContent = `MEN & MORALE RESTORE IN ${snapshot.playerBaseRecoveryRemaining.toFixed(1)}s`;
+      this.playerState.textContent = `${className} · 補充中`;
+      this.playerDetail.textContent = `兵員・士気・資材回復まで ${snapshot.playerBaseRecoveryRemaining.toFixed(1)}秒`;
       return;
     }
 
     const mode = snapshot.playerMode === 'bannerAttack'
       ? snapshot.playerBannerInRange ? 'DESTROYING BANNER' : 'TO BANNER'
       : snapshot.playerMode.toUpperCase();
-    this.playerState.textContent = `${className} · ${snapshot.playerAlive}/${snapshot.playerMaxSoldiers} · ${mode} · MORALE ${Math.round(snapshot.playerMorale)}`;
+    this.playerState.textContent = `${className} · ${snapshot.playerAlive}/${snapshot.playerMaxSoldiers} · ${mode} · 士気 ${Math.round(snapshot.playerMorale)}`;
+    if (snapshot.playerForcedMarch) this.playerDetail.textContent = `SHIFT 強行軍 · 士気を消費中（最低1）`;
 
+    if (snapshot.playerForcedMarch) {
+      this.playerDetail.textContent = 'SHIFT 強行軍 · 士気を消費して高速移動（士気1で停止）';
+      return;
+    }
     if (isChargeCavalryClass(snapshot.playerClass)) {
       this.playerDetail.textContent = snapshot.playerMode === 'charging' ? 'MOMENTUM CHARGE' : snapshot.playerClass === 'hussar' ? 'MORALE SHOCK · RMB TO CHARGE' : 'SABRE · RMB TO CHARGE';
       return;
@@ -145,24 +146,32 @@ export class Hud {
   private updateHotbar(snapshot: GameSnapshot): void {
     for (const slot of this.slots) this.clearSlot(slot);
     if (canBannerAttackClass(snapshot.playerClass)) {
-      this.configureSlot(0, '1', '━', 'MUSKET', snapshot.selectedWeapon === 'musket', snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
-      this.configureSlot(1, '2', '†', 'BAYONET', snapshot.selectedWeapon === 'bayonet');
-      this.configureSlot(2, '3', '⌁', 'AXE', snapshot.selectedWeapon === 'axe');
+      this.configureSlot(0, '1', '━', 'マスケット', snapshot.selectedWeapon === 'musket', snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
+      this.configureSlot(1, '2', '†', '銃剣', snapshot.selectedWeapon === 'bayonet');
+      this.configureSlot(2, '3', '⌁', '斧', snapshot.selectedWeapon === 'axe');
     } else if (snapshot.playerClass === 'dragoon') {
-      this.configureSlot(0, 'LMB', '━', 'CARBINE', true, snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
-      this.configureSlot(1, '—', '↯', 'MOBILE', false);
-      this.configureSlot(2, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
+      this.configureSlot(0, 'LMB', '━', 'カービン', true, snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
+      this.configureSlot(1, '—', '↯', '機動射撃', false);
+      this.configureSlot(2, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
     } else if (isChargeCavalryClass(snapshot.playerClass)) {
-      this.configureSlot(0, 'RMB', '➤', snapshot.playerClass === 'hussar' ? 'SHOCK' : 'CHARGE', snapshot.chargeAiming || snapshot.playerMode === 'charging');
-      this.configureSlot(1, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
-      this.configureSlot(2, '—', '†', 'SABRE', snapshot.playerMode === 'melee');
+      this.configureSlot(0, 'RMB', '➤', snapshot.playerClass === 'hussar' ? '衝撃突撃' : '突撃', snapshot.chargeAiming || snapshot.playerMode === 'charging');
+      this.configureSlot(1, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
+      this.configureSlot(2, '—', '†', 'サーベル', snapshot.playerMode === 'melee');
     } else {
       const cannonProgress = snapshot.playerArtilleryDeployed ? snapshot.playerReloadProgress : snapshot.playerArtilleryDeployProgress;
-      const cannonState = snapshot.playerArtilleryDeployed ? snapshot.playerReload <= 0 ? 'READY' : 'RELOAD' : 'DEPLOY';
-      const cannonLabel = snapshot.playerClass === 'heavyArtillery' ? 'HEAVY GUN' : snapshot.playerClass === 'horseArtillery' ? '3 GUNS' : '2 GUNS';
+      const cannonState = snapshot.playerArtilleryDeployed ? snapshot.playerReload <= 0 ? 'READY' : 'RELOAD' : '展開';
+      const cannonLabel = snapshot.playerClass === 'heavyArtillery' ? '重砲' : snapshot.playerClass === 'horseArtillery' ? '3門砲' : '2門砲';
       this.configureSlot(0, 'LMB', '●', cannonLabel, snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0, cannonProgress, cannonState);
-      this.configureSlot(1, 'AUTO', '⌛', snapshot.playerArtilleryDeployed ? 'DEPLOYED' : 'DEPLOY', !snapshot.playerArtilleryDeployed);
-      this.configureSlot(2, 'F', '↶', 'REFORM', snapshot.playerMode === 'reforming');
+      this.configureSlot(1, 'AUTO', '⌛', snapshot.playerArtilleryDeployed ? '展開済' : '展開', !snapshot.playerArtilleryDeployed);
+      this.configureSlot(2, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
+    }
+
+    if (snapshot.playerClass === 'grenadier') {
+      const grenadeProgress = snapshot.playerGrenadeCooldown <= 0 ? 1 : Math.max(0, 1 - snapshot.playerGrenadeCooldown / 12);
+      this.configureSlot(3, '4', '●', '手榴弾', snapshot.playerGrenadeCooldown <= 0, grenadeProgress, snapshot.playerGrenadeCooldown <= 0 ? '使用可' : '再使用待ち');
+    }
+    if (fieldworkKitCapacity(snapshot.playerClass) > 0) {
+      this.configureSlot(4, '5', '╳', `馬防柵 ×${snapshot.playerFieldworkKits}`, snapshot.playerFieldworkKits > 0);
     }
   }
 
@@ -184,16 +193,16 @@ export class Hud {
     this.classSelector.classList.toggle('hidden', !active);
 
     this.reserveClassToggle.classList.toggle('reserved', snapshot.playerHasReservedClass);
-    this.reserveClassToggle.textContent = `NEXT CLASS · ${this.classLabel(snapshot.playerNextClass).toUpperCase()} [N]`;
+    this.reserveClassToggle.textContent = `次回兵科 · ${this.classLabel(snapshot.playerNextClass)} [N]`;
     this.reserveClassToggle.disabled = !!snapshot.winner;
 
     if (!active) return;
-    this.classSelectorTitle.textContent = dead ? 'CHOOSE NEXT FORMATION' : 'RESERVE NEXT FORMATION';
+    this.classSelectorTitle.textContent = dead ? '次の兵科を選択' : '次回兵科を予約';
     this.classSelectorDescription.textContent = dead && snapshot.playerRespawn !== null
-      ? `Respawn in ${snapshot.playerRespawn.toFixed(1)}s · カードをクリック、または1〜9`
+      ? `援軍到着まで ${snapshot.playerRespawn.toFixed(1)}秒 · カードをクリック`
       : '次に部隊が全滅した際の兵科を予約します · カードをクリック · Nで閉じる';
-    this.armyComposition.textContent = `BLUE · INF ${snapshot.blueClasses.infantry} LGT ${snapshot.blueClasses.lightInfantry} GRN ${snapshot.blueClasses.grenadier} DRG ${snapshot.blueClasses.dragoon} CAV ${snapshot.blueClasses.cavalry} HUS ${snapshot.blueClasses.hussar} ART ${snapshot.blueClasses.artillery} H-A ${snapshot.blueClasses.heavyArtillery} HRS ${snapshot.blueClasses.horseArtillery}`;
-    this.classRecommendation.textContent = `RECOMMENDED · ${this.classLabel(snapshot.playerRecommendedClass)}`;
+    this.armyComposition.textContent = `BLUE · 戦列${snapshot.blueClasses.infantry} 軽歩${snapshot.blueClasses.lightInfantry} 擲弾${snapshot.blueClasses.grenadier} 狙撃${snapshot.blueClasses.sharpshooter} 工兵${snapshot.blueClasses.engineer} 竜騎${snapshot.blueClasses.dragoon} 騎兵${snapshot.blueClasses.cavalry} 軽騎${snapshot.blueClasses.hussar} 胸甲${snapshot.blueClasses.cuirassier} 野砲${snapshot.blueClasses.artillery} 重砲${snapshot.blueClasses.heavyArtillery} 騎砲${snapshot.blueClasses.horseArtillery}`;
+    this.classRecommendation.textContent = `推奨 · ${this.classLabel(snapshot.playerRecommendedClass)}`;
     for (const card of this.classCards) {
       const value = card.dataset.class as SquadClass | undefined;
       card.classList.toggle('selected', value === snapshot.playerNextClass);

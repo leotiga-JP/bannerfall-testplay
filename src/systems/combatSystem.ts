@@ -1,8 +1,9 @@
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
+import { Fieldwork } from '../entities/fieldwork';
 import { GAME_CONFIG } from '../game/config';
 import { volleyProfile } from '../game/classProfiles';
-import type { Team, Vec2 } from '../game/types';
+import { isMountedClass, type Team, type Vec2 } from '../game/types';
 
 export interface SmokeParticle {
   position: Vec2;
@@ -91,9 +92,33 @@ function distanceToSegmentSquared(point: Vec2, start: Vec2, end: Vec2): number {
   return dx * dx + dy * dy;
 }
 
+function orientation(a: Vec2, b: Vec2, c: Vec2): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function segmentsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const o1 = orientation(a, b, c);
+  const o2 = orientation(a, b, d);
+  const o3 = orientation(c, d, a);
+  const o4 = orientation(c, d, b);
+  return ((o1 >= 0 && o2 <= 0) || (o1 <= 0 && o2 >= 0))
+    && ((o3 >= 0 && o4 <= 0) || (o3 <= 0 && o4 >= 0));
+}
+
+function projectileHitsFieldwork(start: Vec2, end: Vec2, fieldwork: Fieldwork): boolean {
+  const endpoints = fieldwork.endpoints();
+  if (segmentsIntersect(start, end, endpoints.a, endpoints.b)) return true;
+  const r2 = (GAME_CONFIG.fieldworks.thickness + GAME_CONFIG.musket.bulletRadius) ** 2;
+  return distanceToSegmentSquared(endpoints.a, start, end) <= r2
+    || distanceToSegmentSquared(endpoints.b, start, end) <= r2
+    || distanceToSegmentSquared(start, endpoints.a, endpoints.b) <= r2
+    || distanceToSegmentSquared(end, endpoints.a, endpoints.b) <= r2;
+}
+
 export function updateProjectiles(
   projectiles: Projectile[],
   formations: Formation[],
+  fieldworks: Fieldwork[],
   dt: number,
   onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
 ): void {
@@ -108,6 +133,15 @@ export function updateProjectiles(
     const segmentMid = { x: (previous.x + projectile.position.x) / 2, y: (previous.y + projectile.position.y) / 2 };
 
     let hit = false;
+    for (const fieldwork of fieldworks) {
+      if (!fieldwork.active || fieldwork.team === projectile.team) continue;
+      if (!projectileHitsFieldwork(previous, projectile.position, fieldwork)) continue;
+      fieldwork.takeDamage(projectile.damage * GAME_CONFIG.fieldworks.bulletDamageMultiplier);
+      projectile.life = 0;
+      hit = true;
+      break;
+    }
+    if (hit) continue;
     for (const formation of formations) {
       if (formation.team === projectile.team || formation.aliveCount() === 0 || formation.spawnProtectionTimer > 0) continue;
       const cdx = formation.center.x - segmentMid.x;
@@ -118,7 +152,11 @@ export function updateProjectiles(
         if (target.dead) continue;
         const hitRadius = GAME_CONFIG.soldier.radius + bulletRadius;
         if (distanceToSegmentSquared(target.position, previous, projectile.position) > hitRadius * hitRadius) continue;
-        const killed = target.takeDamage(projectile.damage);
+        const sourceFormation = formations.find((candidate) => candidate.id === projectile.sourceFormationId);
+        const damage = sourceFormation?.squadClass === 'sharpshooter' && isMountedClass(formation.squadClass)
+          ? Math.max(projectile.damage, target.hp + 1)
+          : projectile.damage;
+        const killed = target.takeDamage(damage);
         formation.applyMoraleDamage(projectile.moraleDamage + (killed ? 1.8 : 0));
         projectile.life = 0;
         if (killed) {

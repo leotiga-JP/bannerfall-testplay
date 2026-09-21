@@ -442,7 +442,7 @@ kbd {
   box-shadow: 0 0 18px rgba(241, 212, 115, 0.25);
 }
 .class-card.recommended::after {
-  content: "RECOMMENDED";
+  content: "推奨";
   position: absolute;
   right: 7px;
   top: 7px;
