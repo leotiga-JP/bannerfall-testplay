@@ -5,7 +5,7 @@ import { Projectile } from '../entities/projectile';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
 import type { AxeStrike, GameSnapshot } from '../game/game';
-import { classShortLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Vec2, type WeaponType } from '../game/types';
+import { classShortLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { artilleryProfile } from '../game/classProfiles';
 import type { ArtilleryExplosion } from '../systems/artillerySystem';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
@@ -18,6 +18,28 @@ export class Renderer {
 
   setMinimapOpacity(value: number): void {
     this.minimapOpacity = Math.max(0.2, Math.min(1, value));
+  }
+
+  private routedPalette(team: Team): { body: string; skin: string; dark: string; label: string; morale: string; minimap: string; minimapLocal: string } {
+    return team === 'blue'
+      ? {
+          body: '#687b91',
+          skin: '#a6afb9',
+          dark: '#526578',
+          label: '#aebfd2',
+          morale: '#71869e',
+          minimap: '#7890aa',
+          minimapLocal: '#a9bfd8',
+        }
+      : {
+          body: '#8b6b70',
+          skin: '#b6a6a7',
+          dark: '#73565b',
+          label: '#d0afb2',
+          morale: '#9a747a',
+          minimap: '#ad7f84',
+          minimapLocal: '#d6a6aa',
+        };
   }
 
   render(
@@ -61,13 +83,17 @@ export class Renderer {
     this.drawMeleeStrikes(strikes, camera);
     this.drawAxeStrikes(axeStrikes, camera);
     if (snapshot.chargeAiming && snapshot.chargeAimTarget) {
-      const player = formations.find((formation) => formation.isPlayerControlled);
+      // Every human squad is marked as player-controlled in multiplayer.
+      // Bind the local charge preview to this client's own formation ID only.
+      const player = localFormationId
+        ? formations.find((formation) => formation.id === localFormationId)
+        : formations.find((formation) => formation.isPlayerControlled);
       if (player) this.drawChargeArrow(player.center, snapshot.chargeAimTarget);
     }
     if (snapshot.debugAi) this.drawAiDebug(formations, camera);
     ctx.restore();
 
-    this.drawMinimap(formations, banners, camera, snapshot);
+    this.drawMinimap(formations, banners, camera, snapshot, localFormationId);
     this.drawPlayerMode(snapshot);
     if (snapshot.introActive) this.drawIntro(snapshot);
     this.drawResult(snapshot);
@@ -268,11 +294,12 @@ export class Renderer {
     ctx.translate(position.x, position.y);
     ctx.rotate(direction);
 
-    const routedBody = '#777b80';
-    const routedSkin = '#aaa9a3';
+    const routedColors = this.routedPalette(team);
+    const routedBody = routedColors.body;
+    const routedSkin = routedColors.skin;
     const teamBody = routed ? routedBody : team === 'blue' ? '#315f99' : '#a43d3d';
     if (isChargeCavalryClass(squadClass) || squadClass === 'dragoon' || squadClass === 'horseArtillery') {
-      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : routed ? '#66686b' : '#5a4633';
+      ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : routed ? routedColors.dark : '#5a4633';
       ctx.beginPath();
       ctx.ellipse(0, 0, 15, 7, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -365,13 +392,14 @@ export class Renderer {
       ctx.rotate(formation.direction);
       const heavy = formation.squadClass === 'heavyArtillery';
       const horse = formation.squadClass === 'horseArtillery';
-      ctx.strokeStyle = routed ? '#5f6265' : '#2c2923';
+      const routedColors = this.routedPalette(formation.team);
+      ctx.strokeStyle = routed ? routedColors.dark : '#2c2923';
       ctx.lineWidth = (heavy ? 10 : horse ? 5 : 7) / Math.max(0.7, camera.zoom);
       ctx.beginPath();
       ctx.moveTo(-10, 0);
       ctx.lineTo(heavy ? 58 : horse ? 37 : 43, 0);
       ctx.stroke();
-      ctx.fillStyle = routed ? '#777a7d' : '#4b4032';
+      ctx.fillStyle = routed ? routedColors.body : '#4b4032';
       const wheel = heavy ? 13 : horse ? 8 : 10;
       ctx.beginPath();
       ctx.arc(-5, -10, wheel, 0, Math.PI * 2);
@@ -423,8 +451,9 @@ export class Renderer {
     ctx.font = `bold ${size}px ui-monospace, monospace`;
     const customLabel = formationLabels.get(formation.id);
     const isLocal = formation.id === localFormationId;
+    const routedColors = this.routedPalette(formation.team);
     ctx.fillStyle = formation.mode === 'routed'
-      ? '#b9bbbd'
+      ? routedColors.label
       : customLabel
         ? (isLocal ? '#ffe18a' : '#fff0b8')
         : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
@@ -440,7 +469,7 @@ export class Renderer {
     ctx.fillStyle = 'rgba(20,18,14,.72)';
     ctx.fillRect(formation.center.x - moraleWidth / 2, moraleY, moraleWidth, 4 / camera.zoom);
     ctx.fillStyle = formation.mode === 'routed'
-      ? '#9a9da1'
+      ? routedColors.morale
       : formation.morale < GAME_CONFIG.morale.routThreshold ? '#d45a55' : formation.morale < GAME_CONFIG.morale.shakenThreshold ? '#d8a64f' : '#7fc48d';
     ctx.fillRect(formation.center.x - moraleWidth / 2, moraleY, moraleWidth * formation.moraleRatio(), 4 / camera.zoom);
   }
@@ -628,12 +657,12 @@ export class Renderer {
     }
   }
 
-  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot): void {
+  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot, localFormationId: string | null): void {
     const { ctx } = this;
     const width = GAME_CONFIG.minimap.width;
     const height = GAME_CONFIG.minimap.height;
     const x = GAME_CONFIG.viewport.width - width - GAME_CONFIG.minimap.margin;
-    const y = GAME_CONFIG.viewport.height - height - GAME_CONFIG.minimap.margin;
+    const y = GAME_CONFIG.viewport.height - height - GAME_CONFIG.minimap.margin - GAME_CONFIG.minimap.controlHeight - GAME_CONFIG.minimap.controlGap;
     const sx = width / GAME_CONFIG.world.width;
     const sy = height / GAME_CONFIG.world.height;
 
@@ -647,14 +676,15 @@ export class Renderer {
 
     for (const formation of formations) {
       if (formation.aliveCount() === 0) continue;
+      const routedColors = this.routedPalette(formation.team);
       ctx.fillStyle = formation.mode === 'routed'
-        ? (formation.isPlayerControlled ? '#c7c9cb' : '#96999d')
-        : formation.isPlayerControlled
+        ? (formation.id === localFormationId ? routedColors.minimapLocal : routedColors.minimap)
+        : formation.id === localFormationId
           ? '#ffe073'
           : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
       const px = x + formation.center.x * sx;
       const py = y + formation.center.y * sy;
-      const size = formation.isPlayerControlled ? 7 : formation.mode === 'bannerAttack' ? 6 : 4;
+      const size = formation.id === localFormationId ? 7 : formation.mode === 'bannerAttack' ? 6 : 4;
       if (isChargeCavalryClass(formation.squadClass)) {
         ctx.beginPath();
         ctx.moveTo(px + size, py);

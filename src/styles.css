@@ -209,27 +209,34 @@ canvas {
 .minimap-opacity-control {
   position: absolute;
   right: 18px;
-  bottom: 178px;
+  bottom: 18px;
   z-index: 14;
+  box-sizing: border-box;
   width: 248px;
-  padding: 6px 8px 7px;
-  border: 1px solid rgba(224, 211, 170, 0.34);
-  background: rgba(18, 16, 12, 0.72);
-  pointer-events: auto;
-}
-.minimap-opacity-control > div {
-  display: flex;
+  height: 24px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
+  gap: 7px;
+  padding: 3px 7px;
+  border: 1px solid rgba(224, 211, 170, 0.28);
+  background: rgba(18, 16, 12, 0.68);
   color: #cfc3a5;
   font: 800 8px ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: .08em;
+  pointer-events: auto;
 }
-.minimap-opacity-control strong { color: #f0d880; font-size: 9px; }
+.minimap-opacity-control strong {
+  min-width: 30px;
+  color: #f0d880;
+  font-size: 8px;
+  text-align: right;
+}
 .minimap-opacity-control input {
   display: block;
   width: 100%;
+  min-width: 0;
+  height: 14px;
   margin: 0;
   accent-color: #d9bc67;
   cursor: pointer;
@@ -767,7 +774,7 @@ button.wide { width: 100%; margin-top: 10px; }
 .scoreboard-row.local { background: rgba(230, 199, 105, .08); color: #f2df9d; }
 .scoreboard-row span:nth-child(n+4), .scoreboard-columns span:nth-child(n+4) { text-align: right; }
 
-/* Phase 3.9.4 room browser / field recovery */
+/* Phase 3.9.4.2 room browser / field recovery / multiplayer hotfix */
 .field select {
   width: 100%;
   padding: 12px 13px;

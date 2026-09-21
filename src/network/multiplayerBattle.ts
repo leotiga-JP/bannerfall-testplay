@@ -125,9 +125,22 @@ export class MultiplayerBattle {
       localStorage.setItem('bannerfall.minimapOpacity', String(percent));
     };
 
+    const releaseSliderFocus = (): void => {
+      // Range inputs keep keyboard focus after mouse/touch interaction. That made
+      // the global game hotkeys intentionally ignore input until the player
+      // clicked elsewhere. Release the focus as soon as the adjustment ends.
+      slider.blur();
+    };
+
     apply();
     slider.addEventListener('input', apply);
+    slider.addEventListener('change', releaseSliderFocus);
+    slider.addEventListener('pointerup', releaseSliderFocus);
+    slider.addEventListener('pointercancel', releaseSliderFocus);
     this.cleanup.push(() => slider.removeEventListener('input', apply));
+    this.cleanup.push(() => slider.removeEventListener('change', releaseSliderFocus));
+    this.cleanup.push(() => slider.removeEventListener('pointerup', releaseSliderFocus));
+    this.cleanup.push(() => slider.removeEventListener('pointercancel', releaseSliderFocus));
   }
 
   private createHud(): Hud {
@@ -269,7 +282,7 @@ export class MultiplayerBattle {
     };
     const onMinimap = (point: Vec2): boolean => {
       const x = GAME_CONFIG.viewport.width - GAME_CONFIG.minimap.width - GAME_CONFIG.minimap.margin;
-      const y = GAME_CONFIG.viewport.height - GAME_CONFIG.minimap.height - GAME_CONFIG.minimap.margin;
+      const y = GAME_CONFIG.viewport.height - GAME_CONFIG.minimap.height - GAME_CONFIG.minimap.margin - GAME_CONFIG.minimap.controlHeight - GAME_CONFIG.minimap.controlGap;
       return point.x >= x && point.x <= x + GAME_CONFIG.minimap.width
         && point.y >= y && point.y <= y + GAME_CONFIG.minimap.height;
     };
