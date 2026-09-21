@@ -1,8 +1,8 @@
-# Bannerfall Phase 3.9.4 — Recall, Recovery & Respawn Reservation
+# Bannerfall Phase 3.9.4.2 — Charge Preview & Routed Team Tint
 
 Phase 3.9.3 の Room Browser / Battle Statistics / Morale / 9兵科 / Reinforcement Wave を維持しつつ、テストプレイで見つかった操作・復帰まわりの不具合とUXを修正した版です。
 
-## Phase 3.9.4 変更内容
+## Phase 3.9.4.2 変更内容
 
 ### Copy Invite 修正
 
@@ -15,7 +15,7 @@ Phase 3.9.3 の Room Browser / Battle Statistics / Morale / 9兵科 / Reinforcem
 
 - 戦闘中に `B` を押すと **4秒のRecall** を開始します。
 - Recall完了時、生存している兵士ごと自軍のリスポーン地点へ戻ります。
-- 移動、攻撃、Morale shock、ROUT / CHARGE / MELEE / BANNER ATTACK でRecallは中断されます。
+- 移動、攻撃、Recall開始後の新しい被弾、ROUT / CHARGE / MELEE / BANNER ATTACK でRecallは中断されます。開始前から残っていたMorale Shockだけでは中断されません。
 - Recall中はHUDに残り時間を表示します。
 
 ### リスポーン地点で部隊を補充
@@ -49,10 +49,11 @@ Reinforcement Wave終了直前に全滅すると、ほぼ即時に復活して�
 
 ### ミニマップ透明度
 
-- ミニマップ上部に `MAP OPACITY` スライダーを追加しました。
+- ミニマップ本体を少し上へ移動し、その真下にコンパクトな `MAP` 透明度スライダーを配置しました。
 - **20%〜100%** の範囲で調整できます。
 - 設定はブラウザのLocal Storageへ保存され、次回起動時も維持されます。
-- ミニマップのクリック移動機能はそのまま利用できます。
+- ミニマップとは重ならず、クリック移動機能もそのまま利用できます。
+- スライダー操作を終えた瞬間にフォーカスを解除するため、画面外をクリックせずWASD / B / Space等へ戻れます。
 
 ## 開発 / 本番サーバーのPORT分離
 
@@ -106,4 +107,19 @@ npm run start
 
 Cloudflare Tunnelがすでに `127.0.0.1:8788` を参照している場合、Tunnel側の再起動は不要です。
 
-Health checkで `version: "3.9.4"` を確認してください。
+Health checkで `version: "3.9.4.2"` を確認してください。
+
+
+## Phase 3.9.4.2 hotfix
+
+- Recall no longer fails because of morale shock that existed before pressing B. It is interrupted by movement, actions, rout/charge/melee, or new HP damage received after recall begins.
+- Existing remote movement is cleared when Recall starts to avoid an old movement packet cancelling it immediately.
+- The minimap is shifted upward and the opacity control is a compact one-line bar directly below it, with no overlap.
+- Releasing the opacity slider immediately blurs the range input so WASD/B/Space and other game hotkeys resume without another click.
+
+
+## Phase 3.9.4.2 multiplayer hotfix
+
+- 騎兵 / フッサーの突撃予測矢印を、各クライアント自身の `localFormationId` に固定しました。マルチプレイでは全Human部隊が `isPlayerControlled` になるため、従来は別プレイヤー騎兵へ自分の右クリック矢印が描画される場合がありました。
+- ROUT中の表示を単一グレーから陣営色つきグレーへ変更しました。BLUEは青みのあるグレー、REDは赤みのあるグレーです。兵士・騎兵・砲・部隊名・Moraleバー・ミニマップに適用しています。
+- ミニマップ上のローカル部隊強調も `localFormationId` 基準へ修正し、他プレイヤー部隊が自分と同じ強調表示になるケースを防止しました。

@@ -292,6 +292,14 @@ export class Formation {
     return true;
   }
 
+  totalAliveHp(): number {
+    let total = 0;
+    for (const soldier of this.soldiers) {
+      if (!soldier.dead) total += soldier.hp;
+    }
+    return total;
+  }
+
   applyMoraleDamage(amount: number): void {
     if (amount <= 0 || this.aliveCount() === 0 || this.spawnProtectionTimer > 0) return;
     this.morale = Math.max(0, this.morale - amount * moraleResistance(this.squadClass));

@@ -142,6 +142,7 @@ export class Game {
   private readonly respawnTimers = new Map<string, number>();
   private readonly plannedRespawnClasses = new Map<string, SquadClass>();
   private readonly recallTimers = new Map<string, number>();
+  private readonly recallHealthAtStart = new Map<string, number>();
   private readonly baseRecoveryTimers = new Map<string, number>();
   private readonly deferredRespawns = new Set<string>();
   private reinforcementWaveRemaining: Record<Team, number>;
@@ -234,6 +235,7 @@ export class Game {
     this.respawnTimers.clear();
     this.plannedRespawnClasses.clear();
     this.recallTimers.clear();
+    this.recallHealthAtStart.clear();
     this.baseRecoveryTimers.clear();
     this.deferredRespawns.clear();
     for (const formation of this.formations) {
@@ -554,8 +556,12 @@ export class Game {
       else this.respawnTimers.set(formation.id, net.respawnRemaining);
       if (net.plannedClass === null) this.plannedRespawnClasses.delete(formation.id);
       else this.plannedRespawnClasses.set(formation.id, net.plannedClass);
-      if (net.recallRemaining === null) this.recallTimers.delete(formation.id);
-      else this.recallTimers.set(formation.id, net.recallRemaining);
+      if (net.recallRemaining === null) {
+        this.recallTimers.delete(formation.id);
+        this.recallHealthAtStart.delete(formation.id);
+      } else {
+        this.recallTimers.set(formation.id, net.recallRemaining);
+      }
       if (net.baseRecoveryRemaining === null) this.baseRecoveryTimers.delete(formation.id);
       else this.baseRecoveryTimers.set(formation.id, Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - net.baseRecoveryRemaining));
 
@@ -580,6 +586,10 @@ export class Game {
         formation.center.x = net.x;
         formation.center.y = net.y;
         formation.direction = net.direction;
+      }
+
+      if (net.recallRemaining !== null && !this.recallHealthAtStart.has(formation.id)) {
+        this.recallHealthAtStart.set(formation.id, formation.totalAliveHp());
       }
 
       this.networkTargets.set(formation.id, {
@@ -791,7 +801,7 @@ export class Game {
     if (recallRemaining !== undefined) {
       this.cancelChargeAim();
       formation.debugIntent = 'RECALL';
-      this.setHint(`RECALLING... ${recallRemaining.toFixed(1)}s · 移動/攻撃でキャンセル`, 0.4);
+      this.setHint(`RECALLING... ${recallRemaining.toFixed(1)}s · 移動/攻撃/被弾でキャンセル`, 0.4);
       this.input.clearActionInputs();
       return;
     }
@@ -942,6 +952,11 @@ export class Game {
     }
     this.baseRecoveryTimers.delete(formation.id);
     this.recallTimers.set(formation.id, GAME_CONFIG.army.recallSeconds);
+    this.recallHealthAtStart.set(formation.id, formation.totalAliveHp());
+    const existingControl = this.remoteControls.get(formation.id);
+    if (existingControl) {
+      this.remoteControls.set(formation.id, { ...existingControl, moveX: 0, moveY: 0 });
+    }
     formation.debugIntent = 'RECALL';
     if (formation === this.playerFormation) this.setNotice(`RECALL STARTED — ${GAME_CONFIG.army.recallSeconds.toFixed(0)}s`, 'info', 2.2);
   }
@@ -949,6 +964,7 @@ export class Game {
   private cancelRecall(formationId: string): void {
     if (!this.recallTimers.has(formationId)) return;
     this.recallTimers.delete(formationId);
+    this.recallHealthAtStart.delete(formationId);
     const formation = this.formations.find((candidate) => candidate.id === formationId);
     if (formation && formation.isPlayerControlled) formation.debugIntent = formation === this.playerFormation ? 'PLAYER' : 'HUMAN';
   }
@@ -957,17 +973,20 @@ export class Game {
     for (const formation of this.formations) {
       if (formation.aliveCount() === 0) {
         this.recallTimers.delete(formation.id);
+        this.recallHealthAtStart.delete(formation.id);
         this.baseRecoveryTimers.delete(formation.id);
         continue;
       }
 
       const recalling = this.recallTimers.get(formation.id);
       if (recalling !== undefined) {
+        const recallStartHp = this.recallHealthAtStart.get(formation.id) ?? formation.totalAliveHp();
+        const tookDamageAfterRecall = formation.totalAliveHp() < recallStartHp - 0.01;
         const interrupted = formation.mode === 'routed'
           || formation.mode === 'charging'
           || formation.mode === 'melee'
           || formation.mode === 'bannerAttack'
-          || formation.moraleShockTimer > 0;
+          || tookDamageAfterRecall;
         if (interrupted) {
           this.cancelRecall(formation.id);
           if (formation === this.playerFormation) this.setNotice('RECALL INTERRUPTED', 'warning', 1.8);
@@ -978,6 +997,7 @@ export class Game {
             formation.debugIntent = 'RECALL';
           } else {
             this.recallTimers.delete(formation.id);
+            this.recallHealthAtStart.delete(formation.id);
             const index = this.teamIndexOf(formation);
             const spawn = this.respawnFor(formation.team, index);
             formation.relocate(spawn, formation.team === 'blue' ? 0 : Math.PI);
@@ -1038,6 +1058,7 @@ export class Game {
     this.remoteControls.delete(formationId);
     this.humanWeapons.delete(formationId);
     this.recallTimers.delete(formationId);
+    this.recallHealthAtStart.delete(formationId);
     this.baseRecoveryTimers.delete(formationId);
     const formation = this.formations.find((candidate) => candidate.id === formationId);
     if (formation) formation.isPlayerControlled = false;
@@ -1432,6 +1453,7 @@ export class Game {
         this.respawnTimers.set(formation.id, initialWait);
         this.applyNearbyMoraleShock(formation, GAME_CONFIG.morale.nearbyWipeDamage);
         this.recallTimers.delete(formation.id);
+        this.recallHealthAtStart.delete(formation.id);
         this.baseRecoveryTimers.delete(formation.id);
         if (formation.isPlayerControlled) {
           const planned = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
@@ -1859,7 +1881,7 @@ export class Game {
 
   private minimapWorldPoint(point: Vec2): Vec2 | null {
     const x = GAME_CONFIG.viewport.width - GAME_CONFIG.minimap.width - GAME_CONFIG.minimap.margin;
-    const y = GAME_CONFIG.viewport.height - GAME_CONFIG.minimap.height - GAME_CONFIG.minimap.margin;
+    const y = GAME_CONFIG.viewport.height - GAME_CONFIG.minimap.height - GAME_CONFIG.minimap.margin - GAME_CONFIG.minimap.controlHeight - GAME_CONFIG.minimap.controlGap;
     if (
       point.x < x || point.x > x + GAME_CONFIG.minimap.width
       || point.y < y || point.y > y + GAME_CONFIG.minimap.height

@@ -285,6 +285,8 @@ export const GAME_CONFIG = {
     width: 248,
     height: 154,
     margin: 18,
+    controlHeight: 24,
+    controlGap: 6,
   },
   intro: {
     ownHold: 0.9,
