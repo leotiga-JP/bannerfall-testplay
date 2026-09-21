@@ -517,7 +517,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'bannerfall-server',
-      version: '3.10',
+      version: '3.10.1',
       rooms: rooms.size,
       battles,
       players: sessions.size,

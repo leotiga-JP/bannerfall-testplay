@@ -146,6 +146,7 @@ export class Game {
   private readonly respawnTimers = new Map<string, number>();
   private readonly plannedRespawnClasses = new Map<string, SquadClass>();
   private readonly baseRecoveryTimers = new Map<string, number>();
+  private readonly fieldworkAxeReadyAt = new Map<string, number>();
   private readonly deferredRespawns = new Set<string>();
   private reinforcementWaveRemaining: Record<Team, number>;
   private readonly remoteControls = new Map<string, ContinuousControl>();
@@ -238,6 +239,7 @@ export class Game {
     this.respawnTimers.clear();
     this.plannedRespawnClasses.clear();
     this.baseRecoveryTimers.clear();
+    this.fieldworkAxeReadyAt.clear();
     this.deferredRespawns.clear();
     for (const formation of this.formations) {
       this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
@@ -543,7 +545,14 @@ export class Game {
       if (!formation) continue;
 
       const classChanged = formation.squadClass !== net.squadClass || formation.soldiers.length !== net.soldiers.length;
-      if (classChanged) formation.setClass(net.squadClass);
+      if (classChanged) {
+        formation.setClass(net.squadClass);
+        if (formation === this.playerFormation) {
+          this.cancelChargeAim();
+          this.selectedWeapon = canBannerAttackClass(net.squadClass) ? net.weapon : canVolleyClass(net.squadClass) ? 'musket' : 'bayonet';
+          this.humanWeapons.set(formation.id, this.selectedWeapon);
+        }
+      }
 
       const distanceToAuthoritative = Math.hypot(formation.center.x - net.x, formation.center.y - net.y);
       const snapImmediately = firstSnapshot || classChanged || distanceToAuthoritative >= teleportDistance;
@@ -1041,16 +1050,21 @@ export class Game {
       formation.beginReform(direction, undefined, GAME_CONFIG.reform.reloadPenalty);
       return;
     }
-    if (formation.mode !== 'line') return;
-
+    const utilityReady = formation.mode === 'line' || formation.mode === 'reforming';
     if (action.type === 'grenade') {
-      this.performGrenadeThrow(formation, action.target);
+      if (utilityReady) this.performGrenadeThrow(formation, action.target);
       return;
     }
     if (action.type === 'fieldwork') {
-      this.placeFieldwork(formation, action.target, action.direction);
+      if (utilityReady) this.placeFieldwork(formation, action.target, action.direction);
       return;
     }
+    if (action.type === 'fieldwork-attack') {
+      if (utilityReady) this.attackFieldworkWithAxe(formation, action.fieldworkId);
+      return;
+    }
+
+    if (formation.mode !== 'line') return;
 
     if (action.type === 'fire') {
       if (isArtilleryClass(formation.squadClass)) {
@@ -1859,11 +1873,15 @@ export class Game {
   }
 
   private performGrenadeThrow(formation: Formation, desiredTarget: Vec2): boolean {
-    if (formation.squadClass !== 'grenadier' || formation.mode !== 'line' || formation.grenadeCooldown > 0 || formation.aliveCount() === 0) return false;
-    const dx = desiredTarget.x - formation.center.x;
-    const dy = desiredTarget.y - formation.center.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < 20) return false;
+    if (formation.squadClass !== 'grenadier' || (formation.mode !== 'line' && formation.mode !== 'reforming') || formation.grenadeCooldown > 0 || formation.aliveCount() === 0) return false;
+    let dx = desiredTarget.x - formation.center.x;
+    let dy = desiredTarget.y - formation.center.y;
+    let distance = Math.hypot(dx, dy);
+    if (distance < 20) {
+      dx = Math.cos(formation.direction) * 170;
+      dy = Math.sin(formation.direction) * 170;
+      distance = 170;
+    }
     const scale = Math.min(1, GAME_CONFIG.grenade.range / distance);
     const target = { x: formation.center.x + dx * scale, y: formation.center.y + dy * scale };
     formation.direction = Math.atan2(target.y - formation.center.y, target.x - formation.center.x);
@@ -1884,19 +1902,69 @@ export class Game {
   }
 
   private placeFieldwork(formation: Formation, desiredTarget: Vec2, forcedDirection?: number): boolean {
-    if (formation.fieldworkKits <= 0 || formation.mode !== 'line' || formation.aliveCount() === 0) return false;
+    if (formation.fieldworkKits <= 0 || (formation.mode !== 'line' && formation.mode !== 'reforming') || formation.aliveCount() === 0) return false;
     const capacity = this.maxFieldworkKits(formation.squadClass);
     if (capacity <= 0) return false;
-    const dx = desiredTarget.x - formation.center.x;
-    const dy = desiredTarget.y - formation.center.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < 45 || distance > GAME_CONFIG.fieldworks.placementRange) return false;
-    const target = this.clampFormationPoint(desiredTarget);
-    if (this.fieldworks.some((f) => f.active && this.distance(f.position, target) < GAME_CONFIG.fieldworks.length * 0.65)) return false;
-    const direction = forcedDirection ?? Math.atan2(dy, dx) + Math.PI / 2;
+
+    let dx = desiredTarget.x - formation.center.x;
+    let dy = desiredTarget.y - formation.center.y;
+    let distance = Math.hypot(dx, dy);
+    if (distance < 1) {
+      dx = Math.cos(formation.direction);
+      dy = Math.sin(formation.direction);
+      distance = 1;
+    }
+    const placementDistance = Math.max(78, Math.min(GAME_CONFIG.fieldworks.placementRange, distance));
+    const nx = dx / distance;
+    const ny = dy / distance;
+    const baseTarget = this.clampFormationPoint({
+      x: formation.center.x + nx * placementDistance,
+      y: formation.center.y + ny * placementDistance,
+    });
+    const direction = forcedDirection ?? Math.atan2(ny, nx) + Math.PI / 2;
+    const rightX = Math.cos(direction);
+    const rightY = Math.sin(direction);
+    const offsets = [0, 72, -72, 144, -144];
+    let target: Vec2 | null = null;
+    for (const offset of offsets) {
+      const candidate = this.clampFormationPoint({ x: baseTarget.x + rightX * offset, y: baseTarget.y + rightY * offset });
+      const blocked = this.fieldworks.some((f) => f.active && this.distance(f.position, candidate) < GAME_CONFIG.fieldworks.length * 0.62);
+      if (!blocked) {
+        target = candidate;
+        break;
+      }
+    }
+    if (!target) return false;
+
     this.fieldworks.push(new Fieldwork(`FW-${Math.floor(this.time * 1000)}-${Math.random().toString(36).slice(2, 7)}`, formation.team, target, direction, formation.id));
     formation.fieldworkKits -= 1;
     if (formation === this.playerFormation) this.setNotice(`馬防柵を設置 · 残り ${formation.fieldworkKits}`, 'success', 1.6);
+    return true;
+  }
+
+  private attackFieldworkWithAxe(formation: Formation, fieldworkId: string): boolean {
+    if (!canBannerAttackClass(formation.squadClass) || this.weaponForFormation(formation) !== 'axe' || formation.aliveCount() === 0) return false;
+    const fieldwork = this.fieldworks.find((candidate) => candidate.id === fieldworkId && candidate.active && candidate.team !== formation.team);
+    if (!fieldwork) return false;
+    if (this.distancePointToFieldwork(formation.center, fieldwork) > GAME_CONFIG.fieldworks.axeAttackRange) return false;
+    const readyAt = this.fieldworkAxeReadyAt.get(formation.id) ?? 0;
+    if (this.time < readyAt) return false;
+
+    const damage = formation.squadClass === 'engineer' ? GAME_CONFIG.fieldworks.engineerAxeDamage : GAME_CONFIG.fieldworks.axeDamage;
+    fieldwork.takeDamage(damage);
+    this.fieldworkAxeReadyAt.set(formation.id, this.time + GAME_CONFIG.fieldworks.axeCooldownSeconds);
+    const attackers = formation.aliveSoldiers().slice(0, Math.min(4, formation.aliveCount()));
+    for (const soldier of attackers) {
+      this.axeStrikes.push({
+        start: { ...soldier.position },
+        end: { ...fieldwork.position },
+        team: formation.team,
+        life: GAME_CONFIG.effects.axeStrikeLifetime,
+      });
+    }
+    if (formation === this.playerFormation) {
+      this.setNotice(fieldwork.active ? `斧で馬防柵を破壊中 · HP ${Math.ceil(fieldwork.hp)}` : '馬防柵を破壊！', fieldwork.active ? 'info' : 'success', 1.2);
+    }
     return true;
   }
   private classLabel(squadClass: SquadClass): string {

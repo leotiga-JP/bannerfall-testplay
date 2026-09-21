@@ -22,6 +22,7 @@ export class MultiplayerBattle {
   private snapshotAccumulator = 0;
   private controlAccumulator = 0;
   private readonly cleanup: Array<() => void> = [];
+  private fieldworkPlacementArmed = false;
 
   constructor(
     private readonly network: NetworkClient,
@@ -46,14 +47,6 @@ export class MultiplayerBattle {
     }
 
     this.input = new InputManager(canvas);
-    for (const card of document.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
-      const click = (): void => {
-        const value = card.dataset.class;
-        if (isSquadClass(value)) this.input.queueClassSelection(value);
-      };
-      card.addEventListener('click', click);
-      this.cleanup.push(() => card.removeEventListener('click', click));
-    }
     this.game = new Game(this.input, {
       blueSquads: payload.room.settings.blueSquads,
       redSquads: payload.room.settings.redSquads,
@@ -202,6 +195,13 @@ export class MultiplayerBattle {
       this.localFormationId,
     );
     this.hud.update(snapshot);
+    if (this.fieldworkPlacementArmed) {
+      const hint = document.querySelector<HTMLElement>('#context-hint');
+      if (hint) {
+        hint.textContent = '馬防柵：設置したい位置を左クリック · 5 / Esc でキャンセル';
+        hint.classList.remove('hidden');
+      }
+    }
     if (!this.scoreboard.classList.contains('hidden')) this.renderScoreboard();
     requestAnimationFrame((time) => this.frame(time));
   }
@@ -271,6 +271,30 @@ export class MultiplayerBattle {
     this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon, forcedMarch: this.input.isForcedMarchHeld() });
   }
 
+
+  private nearestEnemyFieldwork(point: Vec2, team: Team): { id: string } | null {
+    let best: { id: string } | null = null;
+    let bestDistance = 95;
+    for (const fieldwork of this.game.fieldworks) {
+      if (!fieldwork.active || fieldwork.team === team) continue;
+      const { a, b } = fieldwork.endpoints();
+      const vx = b.x - a.x;
+      const vy = b.y - a.y;
+      const wx = point.x - a.x;
+      const wy = point.y - a.y;
+      const lengthSq = vx * vx + vy * vy;
+      const t = lengthSq <= 0.0001 ? 0 : Math.max(0, Math.min(1, (wx * vx + wy * vy) / lengthSq));
+      const px = a.x + vx * t;
+      const py = a.y + vy * t;
+      const distance = Math.hypot(point.x - px, point.y - py);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = { id: fieldwork.id };
+      }
+    }
+    return best;
+  }
+
   private installNetworkInputEvents(): void {
     if (this.network.isAuthority) return;
 
@@ -296,7 +320,23 @@ export class MultiplayerBattle {
       if (onMinimap(point)) return;
       const formation = this.game.playerFormation;
       if (event.button === 0) {
-        send({ type: 'fire', formationId: formation.id, target: worldAtEvent(event) });
+        const world = worldAtEvent(event);
+        if (this.fieldworkPlacementArmed && formation.aliveCount() > 0 && formation.fieldworkKits > 0) {
+          const direction = Math.atan2(world.y - formation.center.y, world.x - formation.center.x) + Math.PI / 2;
+          send({ type: 'fieldwork', formationId: formation.id, target: world, direction });
+          this.fieldworkPlacementArmed = false;
+          event.preventDefault();
+          return;
+        }
+        if (canBannerAttackClass(formation.squadClass) && formation.weapon === 'axe') {
+          const clicked = this.nearestEnemyFieldwork(world, formation.team);
+          if (clicked) {
+            send({ type: 'fieldwork-attack', formationId: formation.id, fieldworkId: clicked.id });
+            event.preventDefault();
+            return;
+          }
+        }
+        send({ type: 'fire', formationId: formation.id, target: world });
       } else if (event.button === 2 && (formation.mode === 'charging' || formation.mode === 'melee')) {
         suppressNextRightRelease = true;
         send({ type: 'reform', formationId: formation.id });
@@ -327,13 +367,26 @@ export class MultiplayerBattle {
       const key = event.key.toLowerCase();
       if (key === 'f') send({ type: 'reform', formationId: formation.id });
       if (key === 'n') this.hud.toggleClassReservation();
+      if (key === 'escape' && this.fieldworkPlacementArmed) {
+        this.fieldworkPlacementArmed = false;
+        event.preventDefault();
+        return;
+      }
       if (key === '4' && formation.aliveCount() > 0 && formation.squadClass === 'grenadier') {
-        send({ type: 'grenade', formationId: formation.id, target: this.game.camera.screenToWorld(this.input.getPointer()) });
+        this.fieldworkPlacementArmed = false;
+        const pointerTarget = this.game.camera.screenToWorld(this.input.getPointer());
+        const dx = pointerTarget.x - formation.center.x;
+        const dy = pointerTarget.y - formation.center.y;
+        const distance = Math.hypot(dx, dy);
+        const target = distance >= 20
+          ? pointerTarget
+          : { x: formation.center.x + Math.cos(formation.direction) * 170, y: formation.center.y + Math.sin(formation.direction) * 170 };
+        send({ type: 'grenade', formationId: formation.id, target });
+        event.preventDefault();
       }
       if (key === '5' && formation.aliveCount() > 0 && formation.fieldworkKits > 0) {
-        const target = this.game.camera.screenToWorld(this.input.getPointer());
-        const direction = Math.atan2(target.y - formation.center.y, target.x - formation.center.x) + Math.PI / 2;
-        send({ type: 'fieldwork', formationId: formation.id, target, direction });
+        this.fieldworkPlacementArmed = !this.fieldworkPlacementArmed;
+        event.preventDefault();
       }
       if (key >= '1' && key <= '9') {
         if (formation.aliveCount() === 0) {

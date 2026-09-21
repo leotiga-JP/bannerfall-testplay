@@ -75,6 +75,7 @@ export type PlayerAction =
   | { type: 'reform'; formationId: string }
   | { type: 'grenade'; formationId: string; target: Vec2 }
   | { type: 'fieldwork'; formationId: string; target: Vec2; direction: number }
+  | { type: 'fieldwork-attack'; formationId: string; fieldworkId: string }
   | { type: 'weapon'; formationId: string; weapon: WeaponType }
   | { type: 'class'; formationId: string; squadClass: SquadClass };
 
