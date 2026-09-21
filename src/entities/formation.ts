@@ -116,6 +116,31 @@ export class Formation {
     this.morale = GAME_CONFIG.morale.max;
   }
 
+  relocate(center: Vec2, direction: number): void {
+    const alive = this.aliveSoldiers();
+    if (alive.length === 0) return;
+    this.center = { ...center };
+    this.direction = direction;
+    this.layoutCount = alive.length;
+    this.assignCompactSlots(alive);
+    this.mode = 'line';
+    this.chargeTarget = null;
+    this.routTarget = null;
+    this.bannerTargetTeam = null;
+    this.bannerAttackTimer = 0;
+    this.artilleryDeployed = false;
+    this.artilleryDeployTimer = 0;
+    this.chargeMomentum = 0;
+    this.chargeVictims.clear();
+    this.movedThisFrame = false;
+    for (const soldier of alive) {
+      const target = this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
+      soldier.position = { ...target };
+      soldier.direction = direction;
+      soldier.knockback = { x: 0, y: 0 };
+    }
+  }
+
   markMoved(): void {
     this.movedThisFrame = true;
     if (isArtilleryClass(this.squadClass)) {

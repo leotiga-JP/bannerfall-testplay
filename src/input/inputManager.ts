@@ -21,7 +21,7 @@ export class InputManager {
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'f', 'p', 'r', 'c', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
+      if (['w', 'a', 's', 'd', 'f', 'b', 'n', 'p', 'r', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
         event.preventDefault();
       }
     }, { signal: this.eventController.signal });
@@ -97,7 +97,11 @@ export class InputManager {
   }
 
   consumeCenterCamera(): boolean {
-    return this.consumePressed('c');
+    return this.consumePressed(' ');
+  }
+
+  consumeRecall(): boolean {
+    return this.consumePressed('b');
   }
 
   consumeDebugToggle(): boolean {
@@ -118,12 +122,13 @@ export class InputManager {
     return null;
   }
 
-  consumeClassSelection(): SquadClass | null {
+  consumeClassSelection(includeNumberKeys = true): SquadClass | null {
     if (this.queuedClassSelection) {
       const selection = this.queuedClassSelection;
       this.queuedClassSelection = null;
       return selection;
     }
+    if (!includeNumberKeys) return null;
     if (this.consumePressed('1')) return 'infantry';
     if (this.consumePressed('2')) return 'lightInfantry';
     if (this.consumePressed('3')) return 'grenadier';
@@ -148,12 +153,11 @@ export class InputManager {
   }
 
   consumeChargeStart(): boolean {
-    const keyboard = this.consumePressed(' ');
     if (this.rightMousePressed) {
       this.rightMousePressed = false;
       return true;
     }
-    return keyboard;
+    return false;
   }
 
   consumeRightPress(): boolean {
@@ -167,17 +171,15 @@ export class InputManager {
   }
 
   consumeChargeRelease(): boolean {
-    const keyboard = this.released.has(' ');
-    if (keyboard) this.released.delete(' ');
     if (this.rightMouseReleased) {
       this.rightMouseReleased = false;
       return true;
     }
-    return keyboard;
+    return false;
   }
 
   isChargeHeld(): boolean {
-    return this.keys.has(' ') || this.rightMouseDown;
+    return this.rightMouseDown;
   }
 
   getPointer(): Vec2 {
@@ -200,7 +202,6 @@ export class InputManager {
     this.leftClickPoint = null;
     this.rightMousePressed = false;
     this.rightMouseReleased = false;
-    this.pressed.delete(' ');
     this.released.delete(' ');
   }
 

@@ -13,7 +13,7 @@ import type {
   RoomVisibility,
 } from '../src/network/protocol.ts';
 
-const PORT = Number(process.env.PORT || 8788);
+const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX_PLAYERS = 20;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -65,6 +65,7 @@ class HeadlessInput {
   consumeRestart(): boolean { return false; }
   consumeReform(): boolean { return false; }
   consumeCenterCamera(): boolean { return false; }
+  consumeRecall(): boolean { return false; }
   consumeDebugToggle(): boolean { return false; }
   consumeTimeScale(): number | null { return null; }
   consumeWeaponSelection(): WeaponType | null { return null; }
@@ -516,7 +517,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'bannerfall-server',
-      version: '3.9.3',
+      version: '3.9.4',
       rooms: rooms.size,
       battles,
       players: sessions.size,
@@ -529,7 +530,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Bannerfall Phase 3.9.3 Multiplayer Server');
+  res.end('Bannerfall Phase 3.9.4 Multiplayer Server');
 });
 
 const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: { threshold: 1024 }, maxPayload: 8 * 1024 * 1024 });

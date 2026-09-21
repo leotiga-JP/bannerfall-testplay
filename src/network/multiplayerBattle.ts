@@ -70,7 +70,14 @@ export class MultiplayerBattle {
     canvas.width = GAME_CONFIG.viewport.width;
     canvas.height = GAME_CONFIG.viewport.height;
     this.renderer = new Renderer(ctx);
+    this.installMinimapOpacityControl();
     this.hud = this.createHud();
+    const reserveToggle = document.querySelector<HTMLButtonElement>('#reserve-class-toggle');
+    if (reserveToggle) {
+      const click = (): void => this.hud.toggleClassReservation();
+      reserveToggle.addEventListener('click', click);
+      this.cleanup.push(() => reserveToggle.removeEventListener('click', click));
+    }
 
     this.network.onRemoteControl = (_playerId, control) => {
       if (this.network.isAuthority) this.game.setRemoteControl(control);
@@ -102,6 +109,27 @@ export class MultiplayerBattle {
     this.input.destroy();
   }
 
+  private installMinimapOpacityControl(): void {
+    const slider = document.querySelector<HTMLInputElement>('#minimap-opacity');
+    const value = document.querySelector<HTMLElement>('#minimap-opacity-value');
+    if (!slider || !value) return;
+
+    const stored = Number(localStorage.getItem('bannerfall.minimapOpacity') ?? '86');
+    const initial = Number.isFinite(stored) ? Math.max(20, Math.min(100, stored)) : 86;
+    slider.value = String(initial);
+
+    const apply = (): void => {
+      const percent = Math.max(20, Math.min(100, Number(slider.value) || 86));
+      this.renderer.setMinimapOpacity(percent / 100);
+      value.textContent = `${Math.round(percent)}%`;
+      localStorage.setItem('bannerfall.minimapOpacity', String(percent));
+    };
+
+    apply();
+    slider.addEventListener('input', apply);
+    this.cleanup.push(() => slider.removeEventListener('input', apply));
+  }
+
   private createHud(): Hud {
     const get = <T extends HTMLElement>(id: string): T => {
       const element = document.querySelector<T>(`#${id}`);
@@ -113,7 +141,8 @@ export class MultiplayerBattle {
       get('blue-banner-card'), get('red-banner-card'), get('blue-banner-hp'), get('red-banner-hp'),
       get('blue-banner-bar'), get('red-banner-bar'), get('player-state'), get('player-detail'), get('player-stats'),
       get('notice'), get('objective-progress'), get('context-hint'), get('hotbar'),
-      get('class-selector'), get('respawn-countdown'), get('army-composition'), get('class-recommendation'),
+      get('class-selector'), get('class-selector-title'), get('class-selector-description'), get<HTMLButtonElement>('reserve-class-toggle'),
+      get('army-composition'), get('class-recommendation'),
     );
   }
 
@@ -278,9 +307,13 @@ export class MultiplayerBattle {
     };
     const keyDown = (event: KeyboardEvent): void => {
       if (event.repeat) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
       const formation = this.game.playerFormation;
       const key = event.key.toLowerCase();
       if (key === 'f') send({ type: 'reform', formationId: formation.id });
+      if (key === 'b') send({ type: 'recall', formationId: formation.id });
+      if (key === 'n') this.hud.toggleClassReservation();
       if (key >= '1' && key <= '9') {
         if (formation.aliveCount() === 0) {
           const squadClass = SQUAD_CLASSES[Number(key) - 1];
@@ -291,22 +324,13 @@ export class MultiplayerBattle {
         }
       }
     };
-    const keyUp = (event: KeyboardEvent): void => {
-      if (event.key !== ' ') return;
-      const formation = this.game.playerFormation;
-      if (isArtilleryClass(formation.squadClass) || formation.squadClass === 'dragoon' || (canBannerAttackClass(formation.squadClass) && formation.weapon !== 'bayonet')) return;
-      const target = this.game.camera.screenToWorld(this.input.getPointer());
-      send({ type: 'charge', formationId: formation.id, target });
-    };
 
     this.canvas.addEventListener('mousedown', mouseDown);
     window.addEventListener('mouseup', mouseUp);
     window.addEventListener('keydown', keyDown);
-    window.addEventListener('keyup', keyUp);
     this.cleanup.push(() => this.canvas.removeEventListener('mousedown', mouseDown));
     this.cleanup.push(() => window.removeEventListener('mouseup', mouseUp));
     this.cleanup.push(() => window.removeEventListener('keydown', keyDown));
-    this.cleanup.push(() => window.removeEventListener('keyup', keyUp));
 
     for (const card of document.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
       const click = (): void => {
@@ -314,6 +338,7 @@ export class MultiplayerBattle {
         if (!isSquadClass(value)) return;
         const formation = this.game.playerFormation;
         send({ type: 'class', formationId: formation.id, squadClass: value });
+        if (formation.aliveCount() > 0) this.hud.closeClassReservation();
       };
       card.addEventListener('click', click);
       this.cleanup.push(() => card.removeEventListener('click', click));
