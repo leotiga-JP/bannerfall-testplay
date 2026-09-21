@@ -36,7 +36,7 @@ const required = [
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.9.3 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.9.4 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
@@ -65,6 +65,23 @@ function showError(message: string): void {
   menuError!.textContent = message;
   menuError!.classList.remove('hidden');
   window.setTimeout(() => menuError!.classList.add('hidden'), 5000);
+}
+
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard copy failed.');
 }
 
 function cleanPlayerName(): string {
@@ -368,7 +385,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Phase 3.9.3';
+  document.title = 'Bannerfall — Phase 3.9.4';
 }
 
 network.onConnection = (connected, text) => {
@@ -500,20 +517,20 @@ document.querySelector('#return-title')?.addEventListener('click', () => returnT
 document.querySelector('#copy-invite')?.addEventListener('click', async () => {
   if (!currentRoom) return;
   const server = serverUrlInput!.value.trim();
-  const url = new URL(window.location.href);
-  url.search = '';
-  url.searchParams.set('server', server);
+  const url = new URL(window.location.origin + window.location.pathname);
+  if (server) url.searchParams.set('server', server);
   url.searchParams.set('room', currentRoom.code);
+  const inviteText = `Bannerfall Room: ${currentRoom.code}\n${url.toString()}`;
   try {
-    await navigator.clipboard.writeText(url.toString());
+    await copyText(inviteText);
     const button = document.querySelector<HTMLButtonElement>('#copy-invite');
     if (button) {
-      const old = button.textContent;
-      button.textContent = 'COPIED';
-      window.setTimeout(() => { button.textContent = old; }, 1400);
+      const oldLabel = button.textContent;
+      button.textContent = `COPIED ${currentRoom.code}`;
+      window.setTimeout(() => { button.textContent = oldLabel; }, 1600);
     }
   } catch {
-    showError('Invite URLのコピーに失敗しました。');
+    showError(`Inviteのコピーに失敗しました。Room Code: ${currentRoom.code}`);
   }
 });
 

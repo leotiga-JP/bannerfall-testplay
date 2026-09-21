@@ -192,6 +192,49 @@ canvas {
 .player-panel span { color: #c9bea7; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .player-panel .player-stats { margin-top: 3px; padding-top: 5px; border-top: 1px solid rgba(224,210,171,.18); color: #e7d497; letter-spacing: .04em; }
 
+.reserve-class-toggle {
+  margin-top: 5px;
+  padding: 5px 7px;
+  border: 1px solid rgba(224, 210, 171, 0.32);
+  background: rgba(52, 45, 33, 0.86);
+  color: #d9c995;
+  font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.reserve-class-toggle:hover { border-color: rgba(241, 212, 115, 0.78); color: #f1d473; }
+.reserve-class-toggle.reserved { border-color: rgba(158, 200, 255, 0.72); color: #9ec8ff; }
+
+.minimap-opacity-control {
+  position: absolute;
+  right: 18px;
+  bottom: 178px;
+  z-index: 14;
+  width: 248px;
+  padding: 6px 8px 7px;
+  border: 1px solid rgba(224, 211, 170, 0.34);
+  background: rgba(18, 16, 12, 0.72);
+  pointer-events: auto;
+}
+.minimap-opacity-control > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  color: #cfc3a5;
+  font: 800 8px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .08em;
+}
+.minimap-opacity-control strong { color: #f0d880; font-size: 9px; }
+.minimap-opacity-control input {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: #d9bc67;
+  cursor: pointer;
+}
+
 .context-hint {
   position: absolute;
   left: 50%;
@@ -724,7 +767,7 @@ button.wide { width: 100%; margin-top: 10px; }
 .scoreboard-row.local { background: rgba(230, 199, 105, .08); color: #f2df9d; }
 .scoreboard-row span:nth-child(n+4), .scoreboard-columns span:nth-child(n+4) { text-align: right; }
 
-/* Phase 3.9.3 room browser */
+/* Phase 3.9.4 room browser / field recovery */
 .field select {
   width: 100%;
   padding: 12px 13px;

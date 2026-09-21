@@ -12,7 +12,13 @@ import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/comb
 import type { MeleeStrike } from '../systems/meleeSystem';
 
 export class Renderer {
+  private minimapOpacity = 0.86;
+
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
+
+  setMinimapOpacity(value: number): void {
+    this.minimapOpacity = Math.max(0.2, Math.min(1, value));
+  }
 
   render(
     formations: Formation[],
@@ -632,6 +638,7 @@ export class Renderer {
     const sy = height / GAME_CONFIG.world.height;
 
     ctx.save();
+    ctx.globalAlpha = this.minimapOpacity;
     ctx.fillStyle = 'rgba(19, 20, 15, 0.86)';
     ctx.fillRect(x, y, width, height);
     ctx.strokeStyle = snapshot.cameraFollow ? 'rgba(224, 211, 170, 0.65)' : 'rgba(255, 218, 115, 0.88)';

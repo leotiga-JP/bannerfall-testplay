@@ -72,6 +72,7 @@ export type PlayerAction =
   | { type: 'charge'; formationId: string; target: Vec2 }
   | { type: 'banner-attack'; formationId: string; targetTeam: Team }
   | { type: 'reform'; formationId: string }
+  | { type: 'recall'; formationId: string }
   | { type: 'weapon'; formationId: string; weapon: WeaponType }
   | { type: 'class'; formationId: string; squadClass: SquadClass };
 
@@ -104,6 +105,8 @@ export interface FormationNetState {
   bannerTargetTeam: Team | null;
   respawnRemaining: number | null;
   plannedClass: SquadClass | null;
+  recallRemaining: number | null;
+  baseRecoveryRemaining: number | null;
   soldiers: SoldierNetState[];
 }
 

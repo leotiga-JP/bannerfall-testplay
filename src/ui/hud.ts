@@ -4,6 +4,8 @@ import { canBannerAttackClass, classLabel as squadClassLabel, isArtilleryClass, 
 export class Hud {
   private readonly slots: HTMLElement[];
   private readonly classCards: HTMLElement[];
+  private reservationOpen = false;
+  private lastSnapshot: GameSnapshot | null = null;
 
   constructor(
     private readonly statusElement: HTMLElement,
@@ -23,7 +25,9 @@ export class Hud {
     private readonly contextHint: HTMLElement,
     hotbar: HTMLElement,
     private readonly classSelector: HTMLElement,
-    private readonly respawnCountdown: HTMLElement,
+    private readonly classSelectorTitle: HTMLElement,
+    private readonly classSelectorDescription: HTMLElement,
+    private readonly reserveClassToggle: HTMLButtonElement,
     private readonly armyComposition: HTMLElement,
     private readonly classRecommendation: HTMLElement,
   ) {
@@ -32,6 +36,7 @@ export class Hud {
   }
 
   update(snapshot: GameSnapshot): void {
+    this.lastSnapshot = snapshot;
     const ready = snapshot.playerReload <= 0;
     this.statusElement.textContent = snapshot.paused
       ? 'PAUSED'
@@ -39,7 +44,11 @@ export class Hud {
         ? snapshot.winner === 'blue' ? 'BLUE VICTORY' : 'RED VICTORY'
         : snapshot.playerRespawn !== null
           ? 'CHOOSE CLASS'
-          : snapshot.playerMode === 'bannerAttack'
+          : snapshot.playerRecallRemaining !== null
+            ? 'RECALLING'
+            : snapshot.playerBaseRecoveryRemaining !== null
+              ? 'REINFORCING'
+              : snapshot.playerMode === 'bannerAttack'
             ? snapshot.playerBannerInRange ? 'AXE ATTACK' : 'OBJECTIVE MOVE'
             : snapshot.chargeAiming
               ? 'AIM CHARGE'
@@ -88,7 +97,7 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall P3.9.3 — Blue ${bluePercent}% | Red ${redPercent}%`;
+    document.title = `Bannerfall P3.9.4 — Blue ${bluePercent}% | Red ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
@@ -98,6 +107,16 @@ export class Hud {
       this.playerDetail.textContent = `REINFORCEMENT WAVE ${snapshot.playerRespawn.toFixed(1)}s`;
       return;
     }
+    if (snapshot.playerRecallRemaining !== null) {
+      this.playerState.textContent = `${className} · RECALLING`;
+      this.playerDetail.textContent = `RETURN TO SPAWN ${snapshot.playerRecallRemaining.toFixed(1)}s · MOVE/ATTACK TO CANCEL`;
+      return;
+    }
+    if (snapshot.playerBaseRecoveryRemaining !== null) {
+      this.playerState.textContent = `${className} · REINFORCING`;
+      this.playerDetail.textContent = `MEN & MORALE RESTORE IN ${snapshot.playerBaseRecoveryRemaining.toFixed(1)}s`;
+      return;
+    }
 
     const mode = snapshot.playerMode === 'bannerAttack'
       ? snapshot.playerBannerInRange ? 'DESTROYING BANNER' : 'TO BANNER'
@@ -105,7 +124,7 @@ export class Hud {
     this.playerState.textContent = `${className} · ${snapshot.playerAlive}/${snapshot.playerMaxSoldiers} · ${mode} · MORALE ${Math.round(snapshot.playerMorale)}`;
 
     if (isChargeCavalryClass(snapshot.playerClass)) {
-      this.playerDetail.textContent = snapshot.playerMode === 'charging' ? 'MOMENTUM CHARGE' : snapshot.playerClass === 'hussar' ? 'MORALE SHOCK · RMB / SPACE TO CHARGE' : 'SABRE · RMB / SPACE TO CHARGE';
+      this.playerDetail.textContent = snapshot.playerMode === 'charging' ? 'MOMENTUM CHARGE' : snapshot.playerClass === 'hussar' ? 'MORALE SHOCK · RMB TO CHARGE' : 'SABRE · RMB TO CHARGE';
       return;
     }
     if (snapshot.playerClass === 'dragoon') {
@@ -147,11 +166,32 @@ export class Hud {
     }
   }
 
+  toggleClassReservation(): void {
+    if (!this.lastSnapshot || this.lastSnapshot.winner || this.lastSnapshot.playerRespawn !== null) return;
+    this.reservationOpen = !this.reservationOpen;
+    this.updateClassSelector(this.lastSnapshot);
+  }
+
+  closeClassReservation(): void {
+    if (!this.reservationOpen) return;
+    this.reservationOpen = false;
+    if (this.lastSnapshot) this.updateClassSelector(this.lastSnapshot);
+  }
+
   private updateClassSelector(snapshot: GameSnapshot): void {
-    const active = snapshot.playerRespawn !== null && !snapshot.winner;
+    const dead = snapshot.playerRespawn !== null && !snapshot.winner;
+    const active = dead || (this.reservationOpen && !snapshot.winner);
     this.classSelector.classList.toggle('hidden', !active);
-    if (!active || snapshot.playerRespawn === null) return;
-    this.respawnCountdown.textContent = snapshot.playerRespawn.toFixed(1);
+
+    this.reserveClassToggle.classList.toggle('reserved', snapshot.playerHasReservedClass);
+    this.reserveClassToggle.textContent = `NEXT CLASS · ${this.classLabel(snapshot.playerNextClass).toUpperCase()} [N]`;
+    this.reserveClassToggle.disabled = !!snapshot.winner;
+
+    if (!active) return;
+    this.classSelectorTitle.textContent = dead ? 'CHOOSE NEXT FORMATION' : 'RESERVE NEXT FORMATION';
+    this.classSelectorDescription.textContent = dead && snapshot.playerRespawn !== null
+      ? `Respawn in ${snapshot.playerRespawn.toFixed(1)}s · カードをクリック、または1〜9`
+      : '次に部隊が全滅した際の兵科を予約します · カードをクリック · Nで閉じる';
     this.armyComposition.textContent = `BLUE · INF ${snapshot.blueClasses.infantry} LGT ${snapshot.blueClasses.lightInfantry} GRN ${snapshot.blueClasses.grenadier} DRG ${snapshot.blueClasses.dragoon} CAV ${snapshot.blueClasses.cavalry} HUS ${snapshot.blueClasses.hussar} ART ${snapshot.blueClasses.artillery} H-A ${snapshot.blueClasses.heavyArtillery} HRS ${snapshot.blueClasses.horseArtillery}`;
     this.classRecommendation.textContent = `RECOMMENDED · ${this.classLabel(snapshot.playerRecommendedClass)}`;
     for (const card of this.classCards) {

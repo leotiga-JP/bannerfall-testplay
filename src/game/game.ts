@@ -70,6 +70,9 @@ export interface GameSnapshot {
   playerReload: number;
   playerReloadProgress: number;
   playerRespawn: number | null;
+  playerRecallRemaining: number | null;
+  playerBaseRecoveryRemaining: number | null;
+  playerHasReservedClass: boolean;
   playerArtilleryDeployed: boolean;
   playerArtilleryDeployProgress: number;
   selectedWeapon: WeaponType;
@@ -138,6 +141,9 @@ export class Game {
   private readonly meleeQuietTimers = new Map<string, number>();
   private readonly respawnTimers = new Map<string, number>();
   private readonly plannedRespawnClasses = new Map<string, SquadClass>();
+  private readonly recallTimers = new Map<string, number>();
+  private readonly baseRecoveryTimers = new Map<string, number>();
+  private readonly deferredRespawns = new Set<string>();
   private reinforcementWaveRemaining: Record<Team, number>;
   private readonly remoteControls = new Map<string, ContinuousControl>();
   private readonly humanWeapons = new Map<string, WeaponType>();
@@ -153,7 +159,6 @@ export class Game {
   private timeScale = 1;
   private debugAi = false;
   private selectedWeapon: WeaponType = 'musket';
-  private nextPlayerClass: SquadClass = 'infantry';
   private introElapsed = 0;
   private introActive = true;
   private introStage: IntroStage = 'own-banner';
@@ -182,7 +187,6 @@ export class Game {
     const player = this.formations.find((formation) => formation.id === localFormationId) ?? this.formations[0];
     if (!player) throw new Error('Player formation was not created.');
     this.playerFormation = player;
-    this.nextPlayerClass = player.squadClass;
     this.selectedWeapon = canVolleyClass(player.squadClass) ? 'musket' : 'bayonet';
     this.playerFormation.weapon = this.selectedWeapon;
     this.banners = [
@@ -229,6 +233,9 @@ export class Game {
     this.meleeQuietTimers.clear();
     this.respawnTimers.clear();
     this.plannedRespawnClasses.clear();
+    this.recallTimers.clear();
+    this.baseRecoveryTimers.clear();
+    this.deferredRespawns.clear();
     for (const formation of this.formations) {
       this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
     }
@@ -241,7 +248,6 @@ export class Game {
     this.chargeAimTarget = null;
     this.timeScale = 1;
     this.selectedWeapon = canVolleyClass(this.playerFormation.squadClass) ? 'musket' : 'bayonet';
-    this.nextPlayerClass = this.playerFormation.squadClass;
     this.playerFormation.weapon = this.selectedWeapon;
     this.introElapsed = 0;
     this.introActive = true;
@@ -288,18 +294,20 @@ export class Game {
     const dt = rawDt * this.timeScale;
     this.time += dt;
 
-    if (this.playerFormation.aliveCount() === 0) {
-      const classChoice = this.input.consumeClassSelection();
-      if (classChoice) {
-        this.nextPlayerClass = classChoice;
-        this.plannedRespawnClasses.set(this.playerFormation.id, classChoice);
-        this.setHint(`NEXT CLASS — ${this.classLabel(classChoice)}`, 2);
+    const classChoice = this.input.consumeClassSelection(this.playerFormation.aliveCount() === 0);
+    if (classChoice) {
+      this.plannedRespawnClasses.set(this.playerFormation.id, classChoice);
+      this.setHint(`NEXT CLASS RESERVED — ${this.classLabel(classChoice)}`, 2);
+    }
+
+    if (this.playerFormation.aliveCount() > 0) {
+      if (canBannerAttackClass(this.playerFormation.squadClass)) {
+        const weapon = this.input.consumeWeaponSelection();
+        if (weapon) this.selectPlayerWeapon(weapon);
+      } else {
+        this.input.consumeWeaponSelection();
       }
-    } else if (canBannerAttackClass(this.playerFormation.squadClass)) {
-      const weapon = this.input.consumeWeaponSelection();
-      if (weapon) this.selectPlayerWeapon(weapon);
-    } else {
-      this.input.consumeWeaponSelection();
+      if (this.input.consumeRecall()) this.startRecall(this.playerFormation);
     }
 
     this.updatePlayerControl(dt, clickConsumedByMap ? null : primaryClick);
@@ -341,6 +349,7 @@ export class Game {
     }
 
     this.updateMoraleAndRouts(dt);
+    this.updateRecallAndBaseRecovery(dt);
     this.updateRespawns(dt);
     this.updateEffects(dt);
     this.updateWinner();
@@ -352,6 +361,11 @@ export class Game {
 
   snapshot(): GameSnapshot {
     const playerRespawn = this.respawnTimers.get(this.playerFormation.id) ?? null;
+    const playerRecallRemaining = this.recallTimers.get(this.playerFormation.id) ?? null;
+    const playerBaseRecoveryRemaining = this.baseRecoveryTimers.has(this.playerFormation.id)
+      ? Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - (this.baseRecoveryTimers.get(this.playerFormation.id) ?? 0))
+      : null;
+    const playerNextClass = this.plannedRespawnClasses.get(this.playerFormation.id) ?? this.playerFormation.squadClass;
     const playerTarget = this.playerFormation.bannerTargetTeam;
     const targetBanner = playerTarget ? this.bannerFor(playerTarget) : null;
     const playerBannerInRange = !!targetBanner
@@ -375,7 +389,7 @@ export class Game {
       chargeAimTarget: this.chargeAimTarget ? { ...this.chargeAimTarget } : null,
       playerMode: this.playerFormation.mode,
       playerClass: this.playerFormation.squadClass,
-      playerNextClass: this.nextPlayerClass,
+      playerNextClass,
       playerRecommendedClass,
       playerAlive: this.playerFormation.aliveCount(),
       playerMaxSoldiers: this.playerFormation.maxSoldiers(),
@@ -386,6 +400,9 @@ export class Game {
       playerReload: this.playerFormation.reloadTimer,
       playerReloadProgress: this.playerFormation.reloadProgress(),
       playerRespawn,
+      playerRecallRemaining,
+      playerBaseRecoveryRemaining,
+      playerHasReservedClass: this.plannedRespawnClasses.has(this.playerFormation.id),
       playerArtilleryDeployed: this.playerFormation.artilleryDeployed,
       playerArtilleryDeployProgress: isArtilleryClass(this.playerFormation.squadClass)
         ? Math.min(1, this.playerFormation.artilleryDeployTimer / artilleryProfile(this.playerFormation.squadClass).deploySeconds)
@@ -439,6 +456,10 @@ export class Game {
       bannerTargetTeam: formation.bannerTargetTeam,
       respawnRemaining: this.respawnTimers.get(formation.id) ?? null,
       plannedClass: this.plannedRespawnClasses.get(formation.id) ?? null,
+      recallRemaining: this.recallTimers.get(formation.id) ?? null,
+      baseRecoveryRemaining: this.baseRecoveryTimers.has(formation.id)
+        ? Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - (this.baseRecoveryTimers.get(formation.id) ?? 0))
+        : null,
       soldiers: formation.soldiers.map((soldier) => ({
         x: soldier.position.x,
         y: soldier.position.y,
@@ -533,6 +554,10 @@ export class Game {
       else this.respawnTimers.set(formation.id, net.respawnRemaining);
       if (net.plannedClass === null) this.plannedRespawnClasses.delete(formation.id);
       else this.plannedRespawnClasses.set(formation.id, net.plannedClass);
+      if (net.recallRemaining === null) this.recallTimers.delete(formation.id);
+      else this.recallTimers.set(formation.id, net.recallRemaining);
+      if (net.baseRecoveryRemaining === null) this.baseRecoveryTimers.delete(formation.id);
+      else this.baseRecoveryTimers.set(formation.id, Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - net.baseRecoveryRemaining));
 
       const soldiers: NetworkSoldierTarget[] = [];
       for (let i = 0; i < formation.soldiers.length; i += 1) {
@@ -745,7 +770,7 @@ export class Game {
       const world = this.minimapWorldPoint(primaryClick);
       if (world) {
         this.camera.jumpTo(world);
-        this.setHint('FREE CAMERA · C で自部隊へ戻る', 2.5);
+        this.setHint('FREE CAMERA · SPACE で自部隊追従へ戻る', 2.5);
         return true;
       }
     }
@@ -761,6 +786,15 @@ export class Game {
     formation.debugIntent = 'PLAYER';
     formation.debugTargetId = null;
     const pointer = this.camera.screenToWorld(this.input.getPointer());
+
+    const recallRemaining = this.recallTimers.get(formation.id);
+    if (recallRemaining !== undefined) {
+      this.cancelChargeAim();
+      formation.debugIntent = 'RECALL';
+      this.setHint(`RECALLING... ${recallRemaining.toFixed(1)}s · 移動/攻撃でキャンセル`, 0.4);
+      this.input.clearActionInputs();
+      return;
+    }
 
     if (formation.mode === 'routed') {
       this.cancelChargeAim();
@@ -841,7 +875,7 @@ export class Game {
       } else {
         this.movePlayerFormation(dt);
       }
-      if (primaryClick) this.setHint(`${this.classLabel(formation.squadClass)} — 射撃不可。右クリック / Spaceで突撃`, 2.4);
+      if (primaryClick) this.setHint(`${this.classLabel(formation.squadClass)} — 射撃不可。右クリックで突撃`, 2.4);
       return;
     }
 
@@ -888,8 +922,113 @@ export class Game {
         this.performVolley(formation, volleyProfile(formation.squadClass).playerReload);
       } else if (primaryClick && this.selectedWeapon !== 'musket') {
         this.setHint(this.selectedWeapon === 'bayonet'
-          ? '銃剣：右クリック / Space 長押し → 離して突撃'
+          ? '銃剣：右クリック長押し → 離して突撃'
           : '斧：敵旗を右クリックして破壊命令', 2.2);
+      }
+    }
+  }
+
+
+  private startRecall(formation: Formation): void {
+    if (this.winner || formation.aliveCount() === 0) return;
+    if (formation.mode === 'routed' || formation.mode === 'charging' || formation.mode === 'melee' || formation.mode === 'bannerAttack') {
+      if (formation === this.playerFormation) this.setHint('RECALL unavailable during ROUT / CHARGE / MELEE / BANNER ATTACK', 2.2);
+      return;
+    }
+    if (this.recallTimers.has(formation.id)) {
+      this.cancelRecall(formation.id);
+      if (formation === this.playerFormation) this.setHint('RECALL CANCELLED', 1.4);
+      return;
+    }
+    this.baseRecoveryTimers.delete(formation.id);
+    this.recallTimers.set(formation.id, GAME_CONFIG.army.recallSeconds);
+    formation.debugIntent = 'RECALL';
+    if (formation === this.playerFormation) this.setNotice(`RECALL STARTED — ${GAME_CONFIG.army.recallSeconds.toFixed(0)}s`, 'info', 2.2);
+  }
+
+  private cancelRecall(formationId: string): void {
+    if (!this.recallTimers.has(formationId)) return;
+    this.recallTimers.delete(formationId);
+    const formation = this.formations.find((candidate) => candidate.id === formationId);
+    if (formation && formation.isPlayerControlled) formation.debugIntent = formation === this.playerFormation ? 'PLAYER' : 'HUMAN';
+  }
+
+  private updateRecallAndBaseRecovery(dt: number): void {
+    for (const formation of this.formations) {
+      if (formation.aliveCount() === 0) {
+        this.recallTimers.delete(formation.id);
+        this.baseRecoveryTimers.delete(formation.id);
+        continue;
+      }
+
+      const recalling = this.recallTimers.get(formation.id);
+      if (recalling !== undefined) {
+        const interrupted = formation.mode === 'routed'
+          || formation.mode === 'charging'
+          || formation.mode === 'melee'
+          || formation.mode === 'bannerAttack'
+          || formation.moraleShockTimer > 0;
+        if (interrupted) {
+          this.cancelRecall(formation.id);
+          if (formation === this.playerFormation) this.setNotice('RECALL INTERRUPTED', 'warning', 1.8);
+        } else {
+          const remaining = Math.max(0, recalling - dt);
+          if (remaining > 0) {
+            this.recallTimers.set(formation.id, remaining);
+            formation.debugIntent = 'RECALL';
+          } else {
+            this.recallTimers.delete(formation.id);
+            const index = this.teamIndexOf(formation);
+            const spawn = this.respawnFor(formation.team, index);
+            formation.relocate(spawn, formation.team === 'blue' ? 0 : Math.PI);
+            formation.reloadTimer = Math.max(formation.reloadTimer, 0.8);
+            formation.reloadDuration = Math.max(formation.reloadDuration, formation.reloadTimer);
+            this.baseRecoveryTimers.set(formation.id, 0);
+            if (formation === this.playerFormation) {
+              this.camera.centerOn(spawn);
+              this.setNotice('RECALLED — HOLD POSITION TO REINFORCE', 'success', 2.8);
+            }
+          }
+        }
+      }
+
+      if (this.recallTimers.has(formation.id)) continue;
+
+      const needsRecovery = formation.aliveCount() < formation.maxSoldiers()
+        || formation.morale < GAME_CONFIG.morale.max - 0.1;
+      if (!needsRecovery) {
+        this.baseRecoveryTimers.delete(formation.id);
+        continue;
+      }
+
+      const index = this.teamIndexOf(formation);
+      const spawn = this.respawnFor(formation.team, index);
+      const inRecoveryZone = this.distance(formation.center, spawn) <= GAME_CONFIG.army.baseRecoveryRadius;
+      const stable = formation.mode === 'line' || formation.mode === 'reforming';
+      if (!inRecoveryZone || !stable || formation.moraleShockTimer > 0) {
+        this.baseRecoveryTimers.delete(formation.id);
+        continue;
+      }
+
+      const elapsed = (this.baseRecoveryTimers.get(formation.id) ?? 0) + dt;
+      this.baseRecoveryTimers.set(formation.id, elapsed);
+      formation.debugIntent = 'REINFORCE';
+      if (formation === this.playerFormation) {
+        const remaining = Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - elapsed);
+        this.setHint(`REINFORCING AT SPAWN... ${remaining.toFixed(1)}s`, 0.4);
+      }
+      if (elapsed < GAME_CONFIG.army.baseRecoverySeconds) continue;
+
+      const preservedWeapon = canBannerAttackClass(formation.squadClass)
+        ? this.weaponForFormation(formation)
+        : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
+      formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, formation.squadClass);
+      formation.weapon = preservedWeapon;
+      this.humanWeapons.set(formation.id, preservedWeapon);
+      this.baseRecoveryTimers.delete(formation.id);
+      if (formation === this.playerFormation) {
+        this.selectedWeapon = preservedWeapon;
+        this.setNotice('SQUAD REINFORCED — MEN & MORALE RESTORED', 'success', 3);
       }
     }
   }
@@ -898,6 +1037,8 @@ export class Game {
     this.humanFormationIds.delete(formationId);
     this.remoteControls.delete(formationId);
     this.humanWeapons.delete(formationId);
+    this.recallTimers.delete(formationId);
+    this.baseRecoveryTimers.delete(formationId);
     const formation = this.formations.find((candidate) => candidate.id === formationId);
     if (formation) formation.isPlayerControlled = false;
     this.aiSystem.reset(this.formations);
@@ -905,6 +1046,9 @@ export class Game {
 
   setRemoteControl(control: ContinuousControl): void {
     if (!this.humanFormationIds.has(control.formationId)) return;
+    if (this.recallTimers.has(control.formationId) && Math.hypot(control.moveX, control.moveY) > 0.05) {
+      this.cancelRecall(control.formationId);
+    }
     this.remoteControls.set(control.formationId, control);
     this.humanWeapons.set(control.formationId, control.weapon);
   }
@@ -921,7 +1065,12 @@ export class Game {
       this.plannedRespawnClasses.set(formation.id, action.squadClass);
       return;
     }
+    if (action.type === 'recall') {
+      this.startRecall(formation);
+      return;
+    }
     if (formation.aliveCount() === 0 || this.winner) return;
+    if (this.recallTimers.has(formation.id)) this.cancelRecall(formation.id);
 
     if (action.type === 'weapon') {
       if (!canBannerAttackClass(formation.squadClass)) return;
@@ -972,6 +1121,7 @@ export class Game {
     for (const [formationId, control] of this.remoteControls) {
       const formation = this.formations.find((candidate) => candidate.id === formationId);
       if (!formation || !formation.isPlayerControlled || formation.aliveCount() === 0) continue;
+      if (this.recallTimers.has(formation.id)) continue;
       if (formation.mode !== 'line') continue;
       formation.direction = Math.atan2(control.aim.y - formation.center.y, control.aim.x - formation.center.x);
       if (canBannerAttackClass(formation.squadClass)) formation.weapon = this.weaponForFormation(formation);
@@ -1000,7 +1150,7 @@ export class Game {
     if (this.playerFormation.mode === 'bannerAttack' && weapon !== 'axe') this.playerFormation.cancelBannerAttack();
     if (this.playerFormation.mode === 'line' || this.playerFormation.mode === 'reforming') this.playerFormation.weapon = weapon;
     const label = weapon === 'musket' ? 'MUSKET — 左クリックで一斉射撃'
-      : weapon === 'bayonet' ? 'BAYONET — 右クリック / Spaceで突撃'
+      : weapon === 'bayonet' ? 'BAYONET — 右クリックで突撃'
         : 'AXE — 敵旗を右クリックして破壊';
     this.setHint(label, 2.5);
   }
@@ -1273,15 +1423,26 @@ export class Game {
 
       for (const formation of dead) {
         if (this.respawnTimers.has(formation.id)) continue;
-        this.respawnTimers.set(formation.id, this.reinforcementWaveRemaining[team]);
+        const lateForWave = this.reinforcementWaveRemaining[team] < Math.min(
+          GAME_CONFIG.army.respawnJoinCutoffSeconds,
+          this.respawnSeconds * 0.35,
+        );
+        if (lateForWave) this.deferredRespawns.add(formation.id);
+        const initialWait = this.reinforcementWaveRemaining[team] + (lateForWave ? this.respawnSeconds : 0);
+        this.respawnTimers.set(formation.id, initialWait);
         this.applyNearbyMoraleShock(formation, GAME_CONFIG.morale.nearbyWipeDamage);
+        this.recallTimers.delete(formation.id);
+        this.baseRecoveryTimers.delete(formation.id);
         if (formation.isPlayerControlled) {
           const planned = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
           this.plannedRespawnClasses.set(formation.id, planned);
           if (formation === this.playerFormation) {
             this.cancelChargeAim();
-            this.nextPlayerClass = planned;
-            this.setNotice('YOUR SQUAD WAS WIPED — NEXT REINFORCEMENT WAVE', 'warning', 4);
+            this.setNotice(
+              lateForWave ? 'SQUAD WIPED — QUEUED FOR THE FOLLOWING WAVE' : 'YOUR SQUAD WAS WIPED — NEXT REINFORCEMENT WAVE',
+              'warning',
+              4,
+            );
           }
         } else {
           const chosen = this.aiSystem.chooseRespawnClass(formation, this.formations, this.banners, this.plannedRespawnClasses);
@@ -1290,10 +1451,14 @@ export class Game {
       }
 
       this.reinforcementWaveRemaining[team] = Math.max(0, this.reinforcementWaveRemaining[team] - dt);
-      for (const formation of dead) this.respawnTimers.set(formation.id, this.reinforcementWaveRemaining[team]);
+      for (const formation of dead) {
+        const wait = this.reinforcementWaveRemaining[team] + (this.deferredRespawns.has(formation.id) ? this.respawnSeconds : 0);
+        this.respawnTimers.set(formation.id, wait);
+      }
       if (this.reinforcementWaveRemaining[team] > 0) continue;
 
       for (const formation of dead) {
+        if (this.deferredRespawns.has(formation.id)) continue;
         let chosenClass = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
         if (!formation.isPlayerControlled) {
           this.plannedRespawnClasses.delete(formation.id);
@@ -1308,12 +1473,19 @@ export class Game {
           this.humanWeapons.set(formation.id, nextWeapon);
           formation.weapon = nextWeapon;
           if (formation === this.playerFormation) {
-            this.nextPlayerClass = chosenClass;
             this.selectedWeapon = nextWeapon;
             this.camera.centerOn(formation.center);
             this.setNotice(`${this.classLabel(chosenClass)} REDEPLOYED — REINFORCEMENT WAVE`, 'success', 3.2);
           }
         }
+      }
+
+      // Squads destroyed in the final seconds of a wave must wait for the next
+      // full wave instead of appearing again almost immediately.
+      for (const formation of dead) {
+        if (!this.deferredRespawns.has(formation.id)) continue;
+        this.deferredRespawns.delete(formation.id);
+        if (formation.aliveCount() === 0) this.respawnTimers.set(formation.id, this.respawnSeconds);
       }
       this.reinforcementWaveRemaining[team] = this.respawnSeconds;
     }

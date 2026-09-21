@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.9.3 - Room Browser" />
-    <title>Bannerfall - Phase 3.9.3 Room Browser</title>
+    <meta name="description" content="Bannerfall Phase 3.9.4 - Recall & Recovery" />
+    <title>Bannerfall - Phase 3.9.4 Recall & Recovery</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">PHASE 3.9.3 · ROOM BROWSER</span>
+            <span class="eyebrow">PHASE 3.9.4 · FIELD RECOVERY</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
@@ -157,7 +157,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Phase 3.9.3 — Room Browser</p>
+            <p id="battle-subtitle">Phase 3.9.4 — Recall & Recovery</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
@@ -188,6 +188,7 @@
             <strong id="player-state">PLAYER</strong>
             <span id="player-detail">READY</span>
             <span id="player-stats" class="player-stats">KILLS 0 · DEATHS 0 · BANNER DMG 0</span>
+            <button id="reserve-class-toggle" class="reserve-class-toggle" type="button">NEXT CLASS · CURRENT [N]</button>
           </div>
 
 
@@ -206,6 +207,11 @@
 
           <div id="context-hint" class="context-hint hidden"></div>
 
+          <div class="minimap-opacity-control" aria-label="Minimap opacity">
+            <div><span>MAP OPACITY</span><strong id="minimap-opacity-value">86%</strong></div>
+            <input id="minimap-opacity" type="range" min="20" max="100" step="2" value="86" aria-label="Minimap opacity" />
+          </div>
+
           <div id="hotbar" class="hotbar" aria-label="Action hotbar">
             <div class="slot" data-slot="1"><span class="key">1</span><span class="icon">━</span><small>MUSKET</small></div>
             <div class="slot" data-slot="2"><span class="key">2</span><span class="icon">†</span><small>BAYONET</small></div>
@@ -220,8 +226,8 @@
 
           <div id="class-selector" class="class-selector hidden" aria-label="Respawn class selection">
             <div class="class-selector-header">
-              <h2>CHOOSE NEXT FORMATION</h2>
-              <p>Respawn in <strong id="respawn-countdown">20.0</strong>s · カードをクリック、または1〜9</p>
+              <h2 id="class-selector-title">CHOOSE NEXT FORMATION</h2>
+              <p id="class-selector-description">Respawn wave pending · カードをクリック、または1〜9</p>
             </div>
             <div class="class-cards">
               <div class="class-card" data-class="infantry"><span class="class-key">1</span><strong>LINE INFANTRY</strong><small>20兵 · 標準戦列</small><em>Musket / Bayonet / Axe</em></div>
@@ -243,13 +249,15 @@
         <footer class="controls">
           <span><kbd>WASD</kbd> 部隊移動</span>
           <span><kbd>1/2/3</kbd> 歩兵装備</span><span><kbd>1-9</kbd> リスポーン兵科</span>
-          <span><kbd>RMB / Space</kbd> 突撃</span>
+          <span><kbd>RMB</kbd> 突撃</span>
           <span><kbd>LMB</kbd> 射撃 / 砲撃</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>
+          <span><kbd>B</kbd> リコール</span>
+          <span><kbd>N</kbd> 次回兵科を予約</span>
           <span><kbd>Enter</kbd> チャット</span>
           <span><kbd>Wheel</kbd> ズーム</span>
           <span><kbd>Minimap Click</kbd> カメラ移動</span>
-          <span><kbd>C</kbd> 自部隊へ戻る</span>
+          <span><kbd>Space</kbd> 自部隊追従へ戻る</span>
           <span><kbd>F3</kbd> AIデバッグ</span>
         </footer>
       </section>
