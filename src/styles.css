@@ -658,7 +658,7 @@ button.wide { width: 100%; margin-top: 10px; }
 .spawn-point.selected { border-color: #f1d473; color: #f1d473; box-shadow: 0 0 18px rgba(241,212,115,.35); z-index: 3; }
 .spawn-point.occupied { opacity: .45; background: #34201e; }
 .lobby-class-section { margin-top: 14px; }
-.lobby-class-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 7px; }
+.lobby-class-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 7px; max-height: 370px; overflow-y: auto; padding-right: 4px; position: relative; z-index: 2; }
 .lobby-class-card {
   min-height: 86px;
   padding: 10px;
@@ -666,7 +666,11 @@ button.wide { width: 100%; margin-top: 10px; }
   gap: 4px;
   text-align: left;
   align-content: center;
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
 }
+
 .lobby-class-card strong { color: #e5dac0; font-size: 10px; }
 .lobby-class-card small { color: #b9ae98; font-size: 9px; line-height: 1.4; }
 .lobby-class-card em { color: #8fbaa2; font-size: 8px; font-style: normal; }

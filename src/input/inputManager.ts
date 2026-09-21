@@ -132,12 +132,12 @@ export class InputManager {
     if (this.consumePressed('1')) return 'infantry';
     if (this.consumePressed('2')) return 'lightInfantry';
     if (this.consumePressed('3')) return 'grenadier';
-    if (this.consumePressed('4')) return 'dragoon';
-    if (this.consumePressed('5')) return 'cavalry';
-    if (this.consumePressed('6')) return 'hussar';
-    if (this.consumePressed('7')) return 'artillery';
-    if (this.consumePressed('8')) return 'heavyArtillery';
-    if (this.consumePressed('9')) return 'horseArtillery';
+    if (this.consumePressed('4')) return 'sharpshooter';
+    if (this.consumePressed('5')) return 'engineer';
+    if (this.consumePressed('6')) return 'dragoon';
+    if (this.consumePressed('7')) return 'cavalry';
+    if (this.consumePressed('8')) return 'hussar';
+    if (this.consumePressed('9')) return 'cuirassier';
     return null;
   }
 

@@ -1,5 +1,5 @@
 import './styles.css';
-import { classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
+import { SQUAD_CLASSES, classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
 import { NetworkClient } from './network/networkClient';
 import { MultiplayerBattle } from './network/multiplayerBattle';
 import type { ChatMessage, MatchStartPayload, RoomBrowserEntry, RoomState, RoomVisibility } from './network/protocol';
@@ -41,6 +41,54 @@ if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.10
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
 let currentBattle: MultiplayerBattle | null = null;
+
+const CLASS_UI: Record<SquadClass, { summary: string; role: string }> = {
+  infantry: { summary: '20兵 · マスケット / 銃剣 / 斧', role: '標準戦列・旗破壊・馬防柵2' },
+  lightInfantry: { summary: '15兵 · 高機動 / 散開射撃', role: '側面・牽制・旗破壊・馬防柵2' },
+  grenadier: { summary: '16兵 · 高士気 / 手榴弾', role: '近距離爆破・正面突破・馬防柵2' },
+  sharpshooter: { summary: '6兵 · 超長射程 / 高精度', role: '対騎兵・遠距離狙撃・馬防柵1' },
+  engineer: { summary: '12兵 · 高機動 / 馬防柵6', role: '陣地構築・旗破壊特化' },
+  dragoon: { summary: '14騎 · 高機動 / カービン', role: '突撃不可・機動火力' },
+  cavalry: { summary: '12騎 · 高速 / 突撃', role: '突破・砲兵狩り' },
+  hussar: { summary: '10騎 · 衝撃突撃', role: '士気破壊・追撃' },
+  cuirassier: { summary: '10騎 · 高HP / 重騎兵', role: '耐久戦・戦列拘束' },
+  artillery: { summary: '6兵 · 2門 · 長射程', role: '継続砲撃・馬防柵2' },
+  heavyArtillery: { summary: '7兵 · 1門 · 巨大爆発', role: '超火力・長い再装填・馬防柵2' },
+  horseArtillery: { summary: '6兵 · 3門 · 高速展開', role: '前線追従砲撃・馬防柵2' },
+};
+
+function renderClassCatalogs(): void {
+  const lobby = document.querySelector<HTMLElement>('#lobby-class-cards');
+  const respawn = document.querySelector<HTMLElement>('#class-selector .class-cards');
+  if (!lobby || !respawn) return;
+  lobby.innerHTML = '';
+  respawn.innerHTML = '';
+  SQUAD_CLASSES.forEach((squadClass, index) => {
+    const info = CLASS_UI[squadClass];
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'lobby-class-card';
+    button.dataset.lobbyClass = squadClass;
+    button.innerHTML = `<strong></strong><small></small><em></em>`;
+    button.querySelector('strong')!.textContent = classLabel(squadClass);
+    button.querySelector('small')!.textContent = info.summary;
+    button.querySelector('em')!.textContent = info.role;
+    lobby.appendChild(button);
+
+    const card = document.createElement('div');
+    card.className = 'class-card';
+    card.dataset.class = squadClass;
+    const key = index < 9 ? String(index + 1) : 'CLICK';
+    card.innerHTML = `<span class="class-key"></span><strong></strong><small></small><em></em>`;
+    card.querySelector('.class-key')!.textContent = key;
+    card.querySelector('strong')!.textContent = classLabel(squadClass);
+    card.querySelector('small')!.textContent = info.summary;
+    card.querySelector('em')!.textContent = info.role;
+    respawn.appendChild(card);
+  });
+}
+
+renderClassCatalogs();
 let chatMessages: ChatMessage[] = [];
 let countdownInterval: number | null = null;
 
@@ -492,12 +540,13 @@ document.querySelector('#join-room')?.addEventListener('click', async () => {
 
 document.querySelector('#join-blue')?.addEventListener('click', () => network.changeTeam('blue'));
 document.querySelector('#join-red')?.addEventListener('click', () => network.changeTeam('red'));
-for (const card of document.querySelectorAll<HTMLButtonElement>('[data-lobby-class]')) {
-  card.addEventListener('click', () => {
-    const value = card.dataset.lobbyClass;
-    if (isSquadClass(value)) network.selectClass(value);
-  });
-}
+document.querySelector('#lobby-class-cards')?.addEventListener('click', (event) => {
+  const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-lobby-class]') : null;
+  const value = target?.dataset.lobbyClass;
+  if (!isSquadClass(value)) return;
+  event.preventDefault();
+  network.selectClass(value);
+});
 readyButton!.addEventListener('click', () => {
   const local = currentRoom?.players.find((player) => player.id === network.clientId);
   if (local) network.setReady(!local.ready);
