@@ -13,7 +13,7 @@ import type {
   RoomVisibility,
 } from '../src/network/protocol.ts';
 
-const PORT = Number(process.env.PORT || 8787);
+const PORT = Number(process.env.PORT || 8788);
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX_PLAYERS = 20;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
