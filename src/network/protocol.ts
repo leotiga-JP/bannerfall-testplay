@@ -65,6 +65,7 @@ export interface ContinuousControl {
   moveY: number;
   aim: Vec2;
   weapon: WeaponType;
+  forcedMarch: boolean;
 }
 
 export type PlayerAction =
@@ -72,7 +73,8 @@ export type PlayerAction =
   | { type: 'charge'; formationId: string; target: Vec2 }
   | { type: 'banner-attack'; formationId: string; targetTeam: Team }
   | { type: 'reform'; formationId: string }
-  | { type: 'recall'; formationId: string }
+  | { type: 'grenade'; formationId: string; target: Vec2 }
+  | { type: 'fieldwork'; formationId: string; target: Vec2; direction: number }
   | { type: 'weapon'; formationId: string; weapon: WeaponType }
   | { type: 'class'; formationId: string; squadClass: SquadClass };
 
@@ -105,7 +107,9 @@ export interface FormationNetState {
   bannerTargetTeam: Team | null;
   respawnRemaining: number | null;
   plannedClass: SquadClass | null;
-  recallRemaining: number | null;
+  forcedMarch: boolean;
+  fieldworkKits: number;
+  grenadeCooldown: number;
   baseRecoveryRemaining: number | null;
   soldiers: SoldierNetState[];
 }
@@ -146,6 +150,18 @@ export interface ShellNetState {
   moraleDamage: number;
 }
 
+
+export interface FieldworkNetState {
+  id: string;
+  team: Team;
+  sourceFormationId: string;
+  x: number;
+  y: number;
+  direction: number;
+  hp: number;
+  maxHp: number;
+}
+
 export interface BattleNetSnapshot {
   seq: number;
   time: number;
@@ -160,6 +176,7 @@ export interface BattleNetSnapshot {
   formations: FormationNetState[];
   projectiles: ProjectileNetState[];
   shells: ShellNetState[];
+  fieldworks: FieldworkNetState[];
 }
 
 export type ClientMessage =

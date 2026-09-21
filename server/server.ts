@@ -65,7 +65,7 @@ class HeadlessInput {
   consumeRestart(): boolean { return false; }
   consumeReform(): boolean { return false; }
   consumeCenterCamera(): boolean { return false; }
-  consumeRecall(): boolean { return false; }
+  isForcedMarchHeld(): boolean { return false; }
   consumeDebugToggle(): boolean { return false; }
   consumeTimeScale(): number | null { return null; }
   consumeWeaponSelection(): WeaponType | null { return null; }
@@ -517,7 +517,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
       ok: true,
       service: 'bannerfall-server',
-      version: '3.9.4.2',
+      version: '3.10',
       rooms: rooms.size,
       battles,
       players: sessions.size,
@@ -530,7 +530,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Bannerfall Phase 3.9.4.2 Multiplayer Server');
+  res.end('Bannerfall Phase 3.10 Multiplayer Server');
 });
 
 const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: { threshold: 1024 }, maxPayload: 8 * 1024 * 1024 });

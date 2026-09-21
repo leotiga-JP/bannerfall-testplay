@@ -3,81 +3,81 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.9.4.2 - Recall & Recovery" />
-    <title>Bannerfall - Phase 3.9.4.2 Recall & Recovery</title>
+    <meta name="description" content="Bannerfall Phase 3.10 - Field Doctrine Expansion" />
+    <title>Bannerfall - Phase 3.10 Field Doctrine Expansion</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">PHASE 3.9.4.2 · FIELD RECOVERY</span>
+            <span class="eyebrow">PHASE 3.10 · 戦闘教義拡張</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
 
           <label class="field">
-            <span>PLAYER NAME</span>
-            <input id="player-name" maxlength="24" autocomplete="nickname" placeholder="Your name" />
+            <span>プレイヤー名</span>
+            <input id="player-name" maxlength="24" autocomplete="nickname" placeholder="名前を入力" />
           </label>
 
           <details class="advanced" open>
-            <summary>SERVER</summary>
+            <summary>接続サーバー</summary>
             <label class="field">
-              <span>QUICK TUNNEL URL</span>
+              <span>サーバーURL</span>
               <input id="server-url" spellcheck="false" placeholder="https://xxxxx.trycloudflare.com" />
             </label>
-            <div class="connection-line"><span id="connection-dot" class="dot"></span><strong id="connection-status">OFFLINE</strong></div>
+            <div class="connection-line"><span id="connection-dot" class="dot"></span><strong id="connection-status">未接続</strong></div>
           </details>
 
           <div class="menu-actions title-actions">
-            <button id="show-create" class="primary">CREATE ROOM</button>
-            <button id="show-browser">ROOM LIST</button>
-            <button id="show-join">JOIN BY CODE</button>
+            <button id="show-create" class="primary">部屋を作成</button>
+            <button id="show-browser">部屋一覧</button>
+            <button id="show-join">コードで参加</button>
           </div>
         </div>
 
         <p id="menu-error" class="menu-error menu-error-global hidden"></p>
 
         <div class="menu-panel hidden" id="create-screen">
-          <button class="back-button" data-back="title">← BACK</button>
-          <h2>CREATE BATTLE</h2>
+          <button class="back-button" data-back="title">← 戻る</button>
+          <h2>部屋を作成</h2>
           <div class="settings-grid">
-            <label class="field"><span>BLUE SQUADS</span><input id="blue-squads" type="number" min="1" max="50" value="20" /></label>
-            <label class="field"><span>RED SQUADS</span><input id="red-squads" type="number" min="1" max="50" value="20" /></label>
-            <label class="field"><span>RESPAWN</span><input id="respawn-seconds" type="number" min="5" max="60" value="20" /></label>
-            <label class="field"><span>PASSWORD · OPTIONAL</span><input id="create-password" maxlength="32" type="password" placeholder="No password" /></label>
-            <label class="field"><span>VISIBILITY</span><select id="create-visibility"><option value="public" selected>PUBLIC · Room Listに表示</option><option value="unlisted">UNLISTED · Code参加のみ</option></select></label>
+            <label class="field"><span>BLUE 部隊数</span><input id="blue-squads" type="number" min="1" max="50" value="20" /></label>
+            <label class="field"><span>RED 部隊数</span><input id="red-squads" type="number" min="1" max="50" value="20" /></label>
+            <label class="field"><span>援軍ウェーブ間隔</span><input id="respawn-seconds" type="number" min="5" max="60" value="20" /></label>
+            <label class="field"><span>パスワード · 任意</span><input id="create-password" maxlength="32" type="password" placeholder="パスワードなし" /></label>
+            <label class="field"><span>公開設定</span><select id="create-visibility"><option value="public" selected>公開 · 部屋一覧に表示</option><option value="unlisted">非公開 · コード参加のみ</option></select></label>
           </div>
           <p class="muted">総部隊数です。人間プレイヤーが入った分だけAI部隊が置き換わります。1 vs 1〜50 vs 50。</p>
-          <button id="create-room" class="primary wide">CREATE ROOM</button>
+          <button id="create-room" class="primary wide">部屋を作成</button>
         </div>
 
         <div class="menu-panel hidden" id="join-screen">
-          <button class="back-button" data-back="title">← BACK</button>
-          <h2>JOIN BATTLE</h2>
-          <label class="field"><span>ROOM CODE</span><input id="join-code" maxlength="6" spellcheck="false" placeholder="K7PX4D" /></label>
-          <label class="field"><span>PASSWORD · IF REQUIRED</span><input id="join-password" maxlength="32" type="password" /></label>
-          <button id="join-room" class="primary wide">JOIN ROOM</button>
+          <button class="back-button" data-back="title">← 戻る</button>
+          <h2>部屋に参加</h2>
+          <label class="field"><span>ルームコード</span><input id="join-code" maxlength="6" spellcheck="false" placeholder="K7PX4D" /></label>
+          <label class="field"><span>パスワード · 必要な場合</span><input id="join-password" maxlength="32" type="password" /></label>
+          <button id="join-room" class="primary wide">参加する</button>
         </div>
 
         <div class="menu-panel room-browser-panel hidden" id="browser-screen">
           <div class="room-browser-head">
             <div>
-              <button class="back-button" data-back="title">← BACK</button>
-              <h2>ROOM LIST</h2>
+              <button class="back-button" data-back="title">← 戻る</button>
+              <h2>部屋一覧</h2>
             </div>
-            <button id="refresh-room-list">REFRESH</button>
+            <button id="refresh-room-list">更新</button>
           </div>
           <p class="muted">PUBLIC Roomのみ表示されます。UNLISTED RoomはRoom Codeから参加してください。</p>
-          <div id="room-browser-summary" class="room-browser-summary">CONNECTING...</div>
+          <div id="room-browser-summary" class="room-browser-summary">接続中...</div>
           <div id="room-browser-list" class="room-browser-list"></div>
         </div>
 
         <div class="menu-panel lobby-panel deployment-lobby hidden" id="lobby-screen">
           <div class="lobby-head">
             <div><span class="eyebrow">ROOM</span><h2 id="lobby-code">------</h2></div>
-            <div class="lobby-buttons"><button id="copy-invite">COPY INVITE</button><button id="leave-room">LEAVE</button></div>
+            <div class="lobby-buttons"><button id="copy-invite">招待をコピー</button><button id="leave-room">退出</button></div>
           </div>
           <div id="lobby-settings" class="lobby-settings"></div>
 
@@ -85,69 +85,72 @@
             <section class="deployment-column">
               <div class="deployment-toolbar">
                 <div class="team-switch">
-                  <span>TEAM</span>
+                  <span>陣営</span>
                   <button id="join-blue" class="team-choice blue-choice">BLUE</button>
                   <button id="join-red" class="team-choice red-choice">RED</button>
                 </div>
                 <div class="deployment-summary">
-                  <strong id="deployment-status">SELECT A DEPLOYMENT POINT</strong>
-                  <span>選択枠は早い者勝ち。変更するとREADYが解除されます。</span>
+                  <strong id="deployment-status">出撃地点を選択</strong>
+                  <span>選択枠は早い者勝ち。変更すると準備完了が解除されます。</span>
                 </div>
               </div>
 
               <div id="deployment-map" class="deployment-map" aria-label="Deployment map">
-                <div class="deployment-zone blue-zone"><span>BLUE DEPLOYMENT</span></div>
-                <div class="deployment-front">NO MAN'S LAND</div>
-                <div class="deployment-zone red-zone"><span>RED DEPLOYMENT</span></div>
+                <div class="deployment-zone blue-zone"><span>BLUE 出撃区域</span></div>
+                <div class="deployment-front">中立地帯</div>
+                <div class="deployment-zone red-zone"><span>RED 出撃区域</span></div>
                 <div class="map-banner blue-banner-marker">⚑</div>
                 <div class="map-banner red-banner-marker">⚑</div>
                 <div id="spawn-points" class="spawn-points"></div>
               </div>
 
               <div class="lobby-class-section">
-                <span class="section-label">STARTING FORMATION</span>
+                <span class="section-label">開始兵科</span>
                 <div id="lobby-class-cards" class="lobby-class-cards">
-                  <button class="lobby-class-card selected" data-lobby-class="infantry"><strong>LINE INFANTRY</strong><small>20兵 · Musket / Bayonet / Axe</small><em>標準戦列・旗破壊</em></button>
-                  <button class="lobby-class-card" data-lobby-class="lightInfantry"><strong>LIGHT INFANTRY</strong><small>15兵 · 高機動 / 散開射撃</small><em>側面・牽制・旗破壊</em></button>
-                  <button class="lobby-class-card" data-lobby-class="grenadier"><strong>GRENADIERS</strong><small>16兵 · 高Morale / 強近接</small><em>正面突破・旗破壊</em></button>
-                  <button class="lobby-class-card" data-lobby-class="dragoon"><strong>DRAGOONS</strong><small>14騎 · 高機動 / 射撃</small><em>突撃不可・機動火力</em></button>
-                  <button class="lobby-class-card" data-lobby-class="cavalry"><strong>CAVALRY</strong><small>12騎 · 高速 / Charge</small><em>突破・砲兵狩り</em></button>
-                  <button class="lobby-class-card" data-lobby-class="hussar"><strong>HUSSARS</strong><small>10騎 · Shock Charge</small><em>Morale破壊・追撃</em></button>
-                  <button class="lobby-class-card" data-lobby-class="artillery"><strong>FIELD ARTILLERY</strong><small>6兵 · 2門 · 長射程</small><em>継続的な戦線削り</em></button>
-                  <button class="lobby-class-card" data-lobby-class="heavyArtillery"><strong>HEAVY ARTILLERY</strong><small>7兵 · 1門 · 巨大爆発</small><em>超火力・長Reload</em></button>
-                  <button class="lobby-class-card" data-lobby-class="horseArtillery"><strong>HORSE ARTILLERY</strong><small>6兵 · 3門 · 高速展開</small><em>前線追従砲撃</em></button>
+                  <button class="lobby-class-card selected" data-lobby-class="infantry"><strong>戦列歩兵</strong><small>20兵 · マスケット / 銃剣 / 斧</small><em>標準戦列・旗破壊</em></button>
+                  <button class="lobby-class-card" data-lobby-class="lightInfantry"><strong>軽歩兵</strong><small>15兵 · 高機動 / 散開射撃</small><em>側面・牽制・旗破壊</em></button>
+                  <button class="lobby-class-card" data-lobby-class="grenadier"><strong>擲弾兵</strong><small>16兵 · 高士気 / 手榴弾</small><em>近距離爆破・正面突破</em></button>
+                  <button class="lobby-class-card" data-lobby-class="sharpshooter"><strong>狙撃兵</strong><small>6兵 · 超長射程 / 高精度</small><em>対騎兵・遠距離狙撃</em></button>
+                  <button class="lobby-class-card" data-lobby-class="engineer"><strong>工兵</strong><small>12兵 · 高機動 / 馬防柵6個</small><em>陣地構築・旗破壊特化</em></button>
+                  <button class="lobby-class-card" data-lobby-class="dragoon"><strong>竜騎兵</strong><small>14騎 · 高機動 / カービン</small><em>突撃不可・機動火力</em></button>
+                  <button class="lobby-class-card" data-lobby-class="cavalry"><strong>騎兵</strong><small>12騎 · 高速 / 突撃</small><em>突破・砲兵狩り</em></button>
+                  <button class="lobby-class-card" data-lobby-class="hussar"><strong>フッサー</strong><small>10騎 · 衝撃突撃</small><em>士気破壊・追撃</em></button>
+                  <button class="lobby-class-card" data-lobby-class="cuirassier"><strong>胸甲騎兵</strong><small>10騎 · 高HP / 重騎兵</small><em>耐久戦・戦列拘束</em></button>
+                  <button class="lobby-class-card" data-lobby-class="artillery"><strong>野戦砲兵</strong><small>6兵 · 2門 · 長射程</small><em>継続的な戦線削り</em></button>
+                  <button class="lobby-class-card" data-lobby-class="heavyArtillery"><strong>重砲兵</strong><small>7兵 · 1門 · 巨大爆発</small><em>超火力・長い再装填</em></button>
+                  <button class="lobby-class-card" data-lobby-class="horseArtillery"><strong>騎馬砲兵</strong><small>6兵 · 3門 · 高速展開</small><em>前線追従砲撃</em></button>
                 </div>
               </div>
 
               <div class="team-columns compact-team-columns">
                 <section class="team-card blue-team">
-                  <div class="team-title"><h3>BLUE</h3><span id="blue-ready-count">0 READY</span></div>
+                  <div class="team-title"><h3>BLUE</h3><span id="blue-ready-count">準備 0</span></div>
                   <div id="blue-players" class="player-list"></div>
                 </section>
                 <section class="team-card red-team">
-                  <div class="team-title"><h3>RED</h3><span id="red-ready-count">0 READY</span></div>
+                  <div class="team-title"><h3>RED</h3><span id="red-ready-count">準備 0</span></div>
                   <div id="red-players" class="player-list"></div>
                 </section>
               </div>
 
               <div class="ready-row">
-                <button id="toggle-ready" class="ready-button">READY</button>
-                <button id="start-match" class="primary">WAITING FOR READY</button>
+                <button id="toggle-ready" class="ready-button">準備完了</button>
+                <button id="start-match" class="primary">WAITING FOR 準備完了</button>
               </div>
             </section>
 
             <aside class="lobby-chat-panel">
-              <div class="chat-head"><strong>ROOM CHAT</strong><span>Enter to send</span></div>
+              <div class="chat-head"><strong>ルームチャット</strong><span>Enterで送信</span></div>
               <div id="lobby-chat-log" class="chat-log"></div>
               <div class="chat-compose">
                 <input id="lobby-chat-input" maxlength="220" placeholder="作戦を相談…" />
-                <button id="lobby-chat-send">SEND</button>
+                <button id="lobby-chat-send">送信</button>
               </div>
             </aside>
           </div>
 
           <div id="lobby-countdown" class="lobby-countdown hidden">
-            <span>BATTLE STARTING</span>
+            <span>戦闘開始</span>
             <strong id="lobby-countdown-number">3</strong>
           </div>
         </div>
@@ -157,13 +160,13 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Phase 3.9.4.2 — Recall & Recovery</p>
+            <p id="battle-subtitle">Phase 3.10 — 戦闘教義拡張</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
-            <span id="status">BATTLE</span>
+            <span id="status">戦闘</span>
             <span id="camera-status">CAM FOLLOW · 0.55x</span>
-            <button id="return-title" class="topbar-button" type="button">TITLE</button>
+            <button id="return-title" class="topbar-button" type="button">タイトルへ</button>
           </div>
         </header>
 
@@ -172,11 +175,11 @@
 
           <div class="banner-hud" aria-label="Banner health">
             <div id="blue-banner-card" class="banner-card blue">
-              <div class="banner-card-head"><span>BLUE BANNER</span><strong id="blue-banner-hp">100%</strong></div>
+              <div class="banner-card-head"><span>BLUE 旗</span><strong id="blue-banner-hp">100%</strong></div>
               <div class="hp-track"><div id="blue-banner-bar" class="hp-fill"></div></div>
             </div>
             <div id="red-banner-card" class="banner-card red">
-              <div class="banner-card-head"><span>RED BANNER</span><strong id="red-banner-hp">100%</strong></div>
+              <div class="banner-card-head"><span>RED 旗</span><strong id="red-banner-hp">100%</strong></div>
               <div class="hp-track"><div id="red-banner-bar" class="hp-fill"></div></div>
             </div>
           </div>
@@ -186,16 +189,16 @@
 
           <div id="player-panel" class="player-panel">
             <strong id="player-state">PLAYER</strong>
-            <span id="player-detail">READY</span>
-            <span id="player-stats" class="player-stats">KILLS 0 · DEATHS 0 · BANNER DMG 0</span>
-            <button id="reserve-class-toggle" class="reserve-class-toggle" type="button">NEXT CLASS · CURRENT [N]</button>
+            <span id="player-detail">準備完了</span>
+            <span id="player-stats" class="player-stats">撃破 0 · 損失 0 · 旗ダメージ 0</span>
+            <button id="reserve-class-toggle" class="reserve-class-toggle" type="button">次回兵科 · 現在の兵科 [N]</button>
           </div>
 
 
           <div id="scoreboard" class="scoreboard hidden" aria-label="Battle statistics">
             <div class="scoreboard-card">
-              <div class="scoreboard-head"><strong>BATTLE STATISTICS</strong><span>Hold TAB</span></div>
-              <div class="scoreboard-columns"><span>PLAYER / SQUAD</span><span>TEAM</span><span>CLASS</span><span>KILLS</span><span>DEATHS</span><span>BANNER DMG</span></div>
+              <div class="scoreboard-head"><strong>戦闘統計</strong><span>TAB長押し</span></div>
+              <div class="scoreboard-columns"><span>プレイヤー / 部隊</span><span>陣営</span><span>兵科</span><span>撃破</span><span>損失</span><span>旗ダメージ</span></div>
               <div id="scoreboard-body" class="scoreboard-body"></div>
             </div>
           </div>
@@ -227,11 +230,23 @@
 
           <div id="class-selector" class="class-selector hidden" aria-label="Respawn class selection">
             <div class="class-selector-header">
-              <h2 id="class-selector-title">CHOOSE NEXT FORMATION</h2>
-              <p id="class-selector-description">Respawn wave pending · カードをクリック、または1〜9</p>
+              <h2 id="class-selector-title">次の兵科を選択</h2>
+              <p id="class-selector-description">援軍待機中 · カードをクリックして兵科を選択</p>
             </div>
             <div class="class-cards">
-              <div class="class-card" data-class="infantry"><span class="class-key">1</span><strong>LINE INFANTRY</strong><small>20兵 · 標準戦列</small><em>Musket / Bayonet / Axe</em></div>
+              <div class="class-card" data-class="infantry"><span class="class-key">1</span><strong>戦列歩兵</strong><small>20兵 · 標準戦列</small><em>射撃 / 銃剣 / 斧 / 馬防柵2</em></div>
+              <div class="class-card" data-class="lightInfantry"><span class="class-key">2</span><strong>軽歩兵</strong><small>15兵 · 高機動</small><em>散開射撃 / 斧 / 馬防柵2</em></div>
+              <div class="class-card" data-class="grenadier"><span class="class-key">3</span><strong>擲弾兵</strong><small>16兵 · 高士気</small><em>4:手榴弾 / 馬防柵2</em></div>
+              <div class="class-card" data-class="sharpshooter"><span class="class-key">4</span><strong>狙撃兵</strong><small>6兵 · 射程約2倍</small><em>騎兵へ高威力 / 馬防柵1</em></div>
+              <div class="class-card" data-class="engineer"><span class="class-key">5</span><strong>工兵</strong><small>12兵 · 高機動</small><em>旗特効 / 馬防柵6</em></div>
+              <div class="class-card" data-class="dragoon"><span class="class-key">6</span><strong>竜騎兵</strong><small>14騎 · 機動射撃</small><em>突撃不可</em></div>
+              <div class="class-card" data-class="cavalry"><span class="class-key">7</span><strong>騎兵</strong><small>12騎 · 長距離突撃</small><em>突破 / 砲兵狩り</em></div>
+              <div class="class-card" data-class="hussar"><span class="class-key">8</span><strong>フッサー</strong><small>10騎 · 衝撃突撃</small><em>士気ダメージ特大</em></div>
+              <div class="class-card" data-class="cuirassier"><span class="class-key">9</span><strong>胸甲騎兵</strong><small>10騎 · 高HP</small><em>低火力 / 高耐久</em></div>
+              <div class="class-card" data-class="artillery"><span class="class-key">↙</span><strong>野戦砲兵</strong><small>2門 · 長射程</small><em>馬防柵2</em></div>
+              <div class="class-card" data-class="heavyArtillery"><span class="class-key">↙</span><strong>重砲兵</strong><small>1門 · 超火力</small><em>巨大爆発 / 馬防柵2</em></div>
+              <div class="class-card" data-class="horseArtillery"><span class="class-key">↙</span><strong>騎馬砲兵</strong><small>3門 · 高速展開</small><em>高機動 / 馬防柵2</em></div>
+            </div>
               <div class="class-card" data-class="lightInfantry"><span class="class-key">2</span><strong>LIGHT INFANTRY</strong><small>15兵 · 高機動</small><em>散開射撃 / Axe</em></div>
               <div class="class-card" data-class="grenadier"><span class="class-key">3</span><strong>GRENADIERS</strong><small>16兵 · 高Morale</small><em>強近接 / Axe</em></div>
               <div class="class-card" data-class="dragoon"><span class="class-key">4</span><strong>DRAGOONS</strong><small>14騎 · 機動射撃</small><em>Charge不可</em></div>
@@ -244,16 +259,18 @@
             <div class="class-intel"><span id="army-composition"></span><span id="class-recommendation"></span></div>
           </div>
 
-          <div class="overlay hidden" id="pause-overlay"><div class="overlay-card"><h2>PAUSED</h2><p>Esc / P で再開。</p></div></div>
+          <div class="overlay hidden" id="pause-overlay"><div class="overlay-card"><h2>一時停止</h2><p>Esc / P で再開</p></div></div>
         </div>
 
         <footer class="controls">
           <span><kbd>WASD</kbd> 部隊移動</span>
-          <span><kbd>1/2/3</kbd> 歩兵装備</span><span><kbd>1-9</kbd> リスポーン兵科</span>
+          <span><kbd>1/2/3</kbd> 歩兵装備</span><span><kbd>兵科カード</kbd> 次回兵科</span>
           <span><kbd>RMB</kbd> 突撃</span>
           <span><kbd>LMB</kbd> 射撃 / 砲撃</span>
+          <span><kbd>4</kbd> 擲弾兵：手榴弾</span>
+          <span><kbd>5</kbd> 馬防柵を設置</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>
-          <span><kbd>B</kbd> リコール</span>
+          <span><kbd>Shift</kbd> 強行軍（士気消費・1で停止）</span>
           <span><kbd>N</kbd> 次回兵科を予約</span>
           <span><kbd>Enter</kbd> チャット</span>
           <span><kbd>Wheel</kbd> ズーム</span>

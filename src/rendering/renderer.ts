@@ -2,6 +2,7 @@ import { ArtilleryShell } from '../entities/artilleryShell';
 import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
+import { Fieldwork } from '../entities/fieldwork';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
 import type { AxeStrike, GameSnapshot } from '../game/game';
@@ -48,6 +49,7 @@ export class Renderer {
     projectiles: Projectile[],
     artilleryShells: ArtilleryShell[],
     artilleryExplosions: ArtilleryExplosion[],
+    fieldworks: Fieldwork[],
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
     corpses: CorpseParticle[],
@@ -78,6 +80,7 @@ export class Renderer {
     this.drawProjectiles(projectiles, camera);
     this.drawArtilleryShells(artilleryShells, camera);
     this.drawArtilleryExplosions(artilleryExplosions, camera);
+    this.drawFieldworks(fieldworks, camera);
     this.drawFormations(formations, camera, formationLabels, localFormationId);
     this.drawMuzzleFlashes(flashes, camera);
     this.drawMeleeStrikes(strikes, camera);
@@ -166,6 +169,47 @@ export class Renderer {
     ctx.textAlign = 'center';
     ctx.fillText('REINFORCEMENT CAMP', point.x, point.y - 1700);
     ctx.restore();
+  }
+
+  private drawFieldworks(fieldworks: Fieldwork[], camera: Camera): void {
+    const { ctx } = this;
+    for (const fieldwork of fieldworks) {
+      if (!fieldwork.active || !this.pointVisible(fieldwork.position, camera, 180)) continue;
+      const { a, b } = fieldwork.endpoints();
+      ctx.save();
+      ctx.strokeStyle = fieldwork.team === 'blue' ? '#77889b' : '#9b7777';
+      ctx.lineWidth = 12 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.strokeStyle = '#4c3a28';
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy) || 1;
+      const nx = -dy / length;
+      const ny = dx / length;
+      for (let i = 0; i <= 6; i += 1) {
+        const t = i / 6;
+        const x = a.x + dx * t;
+        const y = a.y + dy * t;
+        ctx.beginPath();
+        ctx.moveTo(x - nx * 18, y - ny * 18);
+        ctx.lineTo(x + nx * 18, y + ny * 18);
+        ctx.stroke();
+      }
+      const hpWidth = 90 / camera.zoom;
+      ctx.fillStyle = 'rgba(15,15,15,0.65)';
+      ctx.fillRect(fieldwork.position.x - hpWidth / 2, fieldwork.position.y - 30 / camera.zoom, hpWidth, 5 / camera.zoom);
+      ctx.fillStyle = '#c7b27c';
+      ctx.fillRect(fieldwork.position.x - hpWidth / 2, fieldwork.position.y - 30 / camera.zoom, hpWidth * fieldwork.ratio(), 5 / camera.zoom);
+      ctx.restore();
+    }
   }
 
   private drawBanners(banners: Banner[], camera: Camera, selectedWeapon: WeaponType): void {

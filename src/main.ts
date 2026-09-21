@@ -36,7 +36,7 @@ const required = [
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.9.4.2 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.10 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
@@ -385,7 +385,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Phase 3.9.4.2';
+  document.title = 'Bannerfall — Phase 3.10';
 }
 
 network.onConnection = (connected, text) => {

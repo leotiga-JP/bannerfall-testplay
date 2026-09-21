@@ -5,9 +5,12 @@ export const SQUAD_CLASSES = [
   'infantry',
   'lightInfantry',
   'grenadier',
+  'sharpshooter',
+  'engineer',
   'dragoon',
   'cavalry',
   'hussar',
+  'cuirassier',
   'artillery',
   'heavyArtillery',
   'horseArtillery',
@@ -25,7 +28,11 @@ export function isSquadClass(value: unknown): value is SquadClass {
 }
 
 export function isFootInfantryClass(value: SquadClass): boolean {
-  return value === 'infantry' || value === 'lightInfantry' || value === 'grenadier';
+  return value === 'infantry'
+    || value === 'lightInfantry'
+    || value === 'grenadier'
+    || value === 'sharpshooter'
+    || value === 'engineer';
 }
 
 export function canVolleyClass(value: SquadClass): boolean {
@@ -33,7 +40,7 @@ export function canVolleyClass(value: SquadClass): boolean {
 }
 
 export function canBannerAttackClass(value: SquadClass): boolean {
-  return isFootInfantryClass(value);
+  return value === 'infantry' || value === 'lightInfantry' || value === 'grenadier' || value === 'engineer';
 }
 
 export function isArtilleryClass(value: SquadClass): boolean {
@@ -41,7 +48,7 @@ export function isArtilleryClass(value: SquadClass): boolean {
 }
 
 export function isChargeCavalryClass(value: SquadClass): boolean {
-  return value === 'cavalry' || value === 'hussar';
+  return value === 'cavalry' || value === 'hussar' || value === 'cuirassier';
 }
 
 export function isMountedClass(value: SquadClass): boolean {
@@ -50,28 +57,34 @@ export function isMountedClass(value: SquadClass): boolean {
 
 export function classShortLabel(value: SquadClass): string {
   switch (value) {
-    case 'infantry': return 'INF';
-    case 'lightInfantry': return 'LGT';
-    case 'grenadier': return 'GRN';
-    case 'dragoon': return 'DRG';
-    case 'cavalry': return 'CAV';
-    case 'hussar': return 'HUS';
-    case 'artillery': return 'ART';
-    case 'heavyArtillery': return 'HART';
-    case 'horseArtillery': return 'HARTY';
+    case 'infantry': return '戦列';
+    case 'lightInfantry': return '軽歩';
+    case 'grenadier': return '擲弾';
+    case 'sharpshooter': return '狙撃';
+    case 'engineer': return '工兵';
+    case 'dragoon': return '竜騎';
+    case 'cavalry': return '騎兵';
+    case 'hussar': return '軽騎';
+    case 'cuirassier': return '胸甲';
+    case 'artillery': return '野砲';
+    case 'heavyArtillery': return '重砲';
+    case 'horseArtillery': return '騎砲';
   }
 }
 
 export function classLabel(value: SquadClass): string {
   switch (value) {
-    case 'infantry': return 'LINE INFANTRY';
-    case 'lightInfantry': return 'LIGHT INFANTRY';
-    case 'grenadier': return 'GRENADIERS';
-    case 'dragoon': return 'DRAGOONS';
-    case 'cavalry': return 'CAVALRY';
-    case 'hussar': return 'HUSSARS';
-    case 'artillery': return 'FIELD ARTILLERY';
-    case 'heavyArtillery': return 'HEAVY ARTILLERY';
-    case 'horseArtillery': return 'HORSE ARTILLERY';
+    case 'infantry': return '戦列歩兵';
+    case 'lightInfantry': return '軽歩兵';
+    case 'grenadier': return '擲弾兵';
+    case 'sharpshooter': return '狙撃兵';
+    case 'engineer': return '工兵';
+    case 'dragoon': return '竜騎兵';
+    case 'cavalry': return '騎兵';
+    case 'hussar': return 'フッサー';
+    case 'cuirassier': return '胸甲騎兵';
+    case 'artillery': return '野戦砲兵';
+    case 'heavyArtillery': return '重砲兵';
+    case 'horseArtillery': return '騎馬砲兵';
   }
 }

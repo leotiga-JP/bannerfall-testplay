@@ -21,7 +21,7 @@ export class InputManager {
       const key = event.key.toLowerCase();
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'f', 'b', 'n', 'p', 'r', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
+      if (['w', 'a', 's', 'd', 'f', 'shift', 'n', 'p', 'r', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
         event.preventDefault();
       }
     }, { signal: this.eventController.signal });
@@ -100,8 +100,8 @@ export class InputManager {
     return this.consumePressed(' ');
   }
 
-  consumeRecall(): boolean {
-    return this.consumePressed('b');
+  isForcedMarchHeld(): boolean {
+    return this.isDown('shift');
   }
 
   consumeDebugToggle(): boolean {

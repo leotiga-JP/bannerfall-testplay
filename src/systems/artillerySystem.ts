@@ -1,5 +1,6 @@
 import { ArtilleryShell } from '../entities/artilleryShell';
 import { Formation } from '../entities/formation';
+import { Fieldwork } from '../entities/fieldwork';
 import { GAME_CONFIG } from '../game/config';
 import { artilleryProfile } from '../game/classProfiles';
 import type { Team, Vec2 } from '../game/types';
@@ -46,6 +47,7 @@ export function createArtilleryShells(formation: Formation, target: Vec2): Artil
 export function updateArtilleryShells(
   shells: ArtilleryShell[],
   formations: Formation[],
+  fieldworks: Fieldwork[],
   dt: number,
   explosions: ArtilleryExplosion[],
   onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
@@ -62,6 +64,16 @@ export function updateArtilleryShells(
       team: shell.team,
       radius: shell.blastRadius,
     });
+
+    for (const fieldwork of fieldworks) {
+      if (!fieldwork.active || fieldwork.team === shell.team) continue;
+      const dx = fieldwork.position.x - shell.position.x;
+      const dy = fieldwork.position.y - shell.position.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > shell.blastRadius + GAME_CONFIG.fieldworks.length * 0.45) continue;
+      const falloff = Math.max(0.25, 1 - distance / Math.max(1, shell.blastRadius + GAME_CONFIG.fieldworks.length * 0.45));
+      fieldwork.takeDamage(shell.blastDamage * GAME_CONFIG.fieldworks.artilleryDamageMultiplier * falloff);
+    }
 
     for (const formation of formations) {
       if (formation.team === shell.team || formation.aliveCount() === 0 || formation.spawnProtectionTimer > 0) continue;

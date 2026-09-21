@@ -1,125 +1,97 @@
-# Bannerfall Phase 3.9.4.2 — Charge Preview & Routed Team Tint
+# Bannerfall Phase 3.10 — 戦闘教義拡張
 
-Phase 3.9.3 の Room Browser / Battle Statistics / Morale / 9兵科 / Reinforcement Wave を維持しつつ、テストプレイで見つかった操作・復帰まわりの不具合とUXを修正した版です。
+Phase3終盤の大規模戦闘アップデートです。Phase3.9.4.2をベースに、強行軍、新兵科、手榴弾、馬防柵、砲兵挙動修正、日本語UIをまとめています。
 
-## Phase 3.9.4.2 変更内容
+## 主な変更
 
-### Copy Invite 修正
+### Shift — 強行軍
+- Recall機能は廃止しました。
+- `Shift` を押しながら移動すると高速移動します。
+- 歩兵 +45%、騎兵系 +25%、砲兵 +30% を基準にしています。
+- 強行軍中は士気を毎秒消費します。
+- **強行軍だけでは士気0にならず、士気1で自動停止します。**
+- そのため、早く前線へ到着する代わりに非常に弱った状態で戦うリスクがあります。
+- AIも遠距離の前進時に強行軍を使います。
 
-- `COPY INVITE` が **Room Codeを明示的に含むテキスト**をクリップボードへコピーするようになりました。
-- コピー内容は `Bannerfall Room: ABC123` + 招待URLです。
-- Clipboard API が使えない環境向けにフォールバックコピーも追加しています。
-- 成功時はボタンに `COPIED ABC123` と表示します。
+### 擲弾兵 — 手榴弾
+- 擲弾兵は `4` で照準方向へ手榴弾を投げます。
+- 最大3発の小規模爆発を起こし、近距離の密集歩兵と士気に強いです。
+- 再使用待ち時間があります。
 
-### B — Recall
+### 馬防柵 / Fieldworks
+- `5` で照準方向近くへ馬防柵を設置します。
+- 戦列歩兵 / 軽歩兵 / 擲弾兵: 2個
+- 狙撃兵: 1個
+- 工兵: 6個
+- 野戦砲兵 / 重砲兵 / 騎馬砲兵: 2個
+- 騎兵系と竜騎兵は設置できません。
+- 敵の銃弾を遮り、被弾するとHPが減ります。
+- 砲撃には弱く、大砲で効率よく破壊できます。
+- 騎兵の突撃が接触すると突撃を止め、騎兵側へ士気ダメージを与えます。
+- 歩兵の通常移動は完全には塞がない設計です。
+- Phase4ではこの無料Kitを資源生産品へ置き換えられる構造です。
 
-- 戦闘中に `B` を押すと **4秒のRecall** を開始します。
-- Recall完了時、生存している兵士ごと自軍のリスポーン地点へ戻ります。
-- 移動、攻撃、Recall開始後の新しい被弾、ROUT / CHARGE / MELEE / BANNER ATTACK でRecallは中断されます。開始前から残っていたMorale Shockだけでは中断されません。
-- Recall中はHUDに残り時間を表示します。
+### 新兵科
+- **狙撃兵**: 6兵。戦列歩兵の約2倍の射程。高精度・長い再装填。騎兵系への命中は極めて致命的です。
+- **工兵**: 12兵。軽歩兵に近い機動力。馬防柵6個。敵旗への斧ダメージが約2.4倍です。
+- **胸甲騎兵**: 10騎。通常騎兵より遅く低火力ですがHPが非常に高い重騎兵です。
 
-### リスポーン地点で部隊を補充
+既存兵科も含め、ロビーと次回兵科選択画面の兵科名を日本語化しました。
 
-- 自軍のリスポーン地点付近で一定時間（標準6秒）安全に待機すると、部隊を再補充できます。
-- 回復対象は **兵数 + Morale** です。
-- 途中で離れる、戦闘状態になる、Morale shockを受けるとカウントはリセットされます。
-- Recall後、そのまま待機すれば補充へ移行できます。
+### 砲兵
+- 野戦砲兵: 2門
+- 重砲兵: 1門・巨大爆発。射程を旧値から約20%短縮しました。
+- 騎馬砲兵: 3門・高速展開
+- 砲弾の再装填と展開状態は別扱いです。
+- **再装填後に移動しても装填状態は失われません。** 停止後に再展開が完了すれば即射撃できます。
+- 再装填途中で移動してもリロード進行はリセットされません。
 
-### Spaceキー変更
+### AI
+- 12兵科から戦況に応じてリスポーン兵科を選択します。
+- 敵騎兵が多い場合は狙撃兵、旗攻撃機会では工兵などを評価します。
+- 擲弾兵AIは近距離で手榴弾を使います。
+- 工兵と砲兵AIは防衛状況で馬防柵を設置します。
+- 遠距離前進時は士気に余裕があれば強行軍を使います。
 
-- `Space` から突撃操作を削除しました。
-- 突撃は **右クリック長押し → 離す** のみです。
-- `Space` は **プレイヤー部隊へのカメラ追従復帰** に変更しました。
-- ミニマップをクリックしてFree Cameraにした後、Spaceで即座に自部隊へ戻れます。
+### 拠点回復
+- Recall廃止後も、自軍リスポーン地点へ自力で戻り一定時間待機すると兵員・士気・Fieldworks Kitを回復できます。
 
-### 次回兵科の予約
+### 日本語UI
+テスト参加者が説明なしでも始めやすいよう、兵科名・兵科説明・主要操作表示を日本語中心へ変更しています。
 
-- 生存中でも左下の `NEXT CLASS` ボタン、または `N` から **次回リスポーン兵科を予約**できます。
-- 予約画面のカードをクリックすると予約確定です。
-- 部隊全滅後も従来どおり1〜9またはカードから変更できます。
-- リスポーンした時点で予約は消費されます。
+## 操作
+- `WASD` — 移動
+- `Shift` — 強行軍（士気消費、士気1で停止）
+- `1 / 2 / 3` — 歩兵のマスケット / 銃剣 / 斧
+- `4` — 擲弾兵: 手榴弾
+- `5` — 馬防柵設置（所持兵科のみ）
+- `右クリック長押し → 離す` — 突撃
+- `F` — 再整列 / 白兵戦離脱
+- `Space` — 自部隊へカメラ追従
+- `N` — 次回兵科予約画面
+- `Tab` — 戦闘統計
+- マウスホイール — ズーム
+- ミニマップクリック — フリーカメラ移動
 
-### 即時リスポーン対策
+## 開発 / 本番ポート
+サーバーは環境変数 `PORT` に対応しています。
 
-Reinforcement Wave終了直前に全滅すると、ほぼ即時に復活してしまうケースを修正しました。
-
-- Wave残り時間が短すぎる状態で全滅した部隊は、そのWaveへ滑り込みません。
-- 次の完全なReinforcement Waveへ回されます。
-- これにより「全滅直後に即復活」が起こりにくくなります。
-
-### ミニマップ透明度
-
-- ミニマップ本体を少し上へ移動し、その真下にコンパクトな `MAP` 透明度スライダーを配置しました。
-- **20%〜100%** の範囲で調整できます。
-- 設定はブラウザのLocal Storageへ保存され、次回起動時も維持されます。
-- ミニマップとは重ならず、クリック移動機能もそのまま利用できます。
-- スライダー操作を終えた瞬間にフォーカスを解除するため、画面外をクリックせずWASD / B / Space等へ戻れます。
-
-## 開発 / 本番サーバーのPORT分離
-
-サーバーは環境変数 `PORT` を利用できます。未指定時は従来どおり `8787` です。
-
-本番:
-
+本番（未指定なら8787）:
 ```powershell
 npm run start
 ```
 
 開発:
-
 ```powershell
 $env:PORT=8788
 npm run start
 ```
 
-`HOST` も未指定時は `127.0.0.1` です。
+## 更新手順
+1. ZIP内容を `bannerfall-dev` のプロジェクトルートへ上書き
+2. `develop` でテスト
+3. サーバーを再起動
+4. `/health` で `version: "3.10"` を確認
+5. 問題なければ `develop -> main` へMergeし、本番側でPull
 
-## Controls
-
-- `WASD` — 部隊移動
-- `LMB` — 射撃 / 砲撃
-- `RMB Hold → Release` — 突撃
-- `1 / 2 / 3` — 歩兵装備
-- `F` — 再整列 / 離脱
-- `B` — Recall
-- `N` — 次回兵科予約を開く / 閉じる
-- `Space` — プレイヤーへのカメラ追従復帰
-- `Middle Mouse Drag` — Free Camera
-- `Mouse Wheel` — Zoom
-- `Minimap Click` — カメラジャンプ
-- `Tab` — Battle Statistics
-- `Enter` — Chat
-- `F3` — AI Debug
-
-## 更新方法
-
-`.github/workflows/deploy.yml` の変更は**不要**です。
-
-開発環境ではZIPの中身を `develop` 側Cloneへ上書きし、Commit / Pushしてください。
-
-共有ゲームロジックと `server/` を変更しているため、開発Serverは再起動が必要です。
-
-```powershell
-cd <bannerfall-dev>\server
-$env:PORT=8788
-npm run start
-```
-
-Cloudflare Tunnelがすでに `127.0.0.1:8788` を参照している場合、Tunnel側の再起動は不要です。
-
-Health checkで `version: "3.9.4.2"` を確認してください。
-
-
-## Phase 3.9.4.2 hotfix
-
-- Recall no longer fails because of morale shock that existed before pressing B. It is interrupted by movement, actions, rout/charge/melee, or new HP damage received after recall begins.
-- Existing remote movement is cleared when Recall starts to avoid an old movement packet cancelling it immediately.
-- The minimap is shifted upward and the opacity control is a compact one-line bar directly below it, with no overlap.
-- Releasing the opacity slider immediately blurs the range input so WASD/B/Space and other game hotkeys resume without another click.
-
-
-## Phase 3.9.4.2 multiplayer hotfix
-
-- 騎兵 / フッサーの突撃予測矢印を、各クライアント自身の `localFormationId` に固定しました。マルチプレイでは全Human部隊が `isPlayerControlled` になるため、従来は別プレイヤー騎兵へ自分の右クリック矢印が描画される場合がありました。
-- ROUT中の表示を単一グレーから陣営色つきグレーへ変更しました。BLUEは青みのあるグレー、REDは赤みのあるグレーです。兵士・騎兵・砲・部隊名・Moraleバー・ミニマップに適用しています。
-- ミニマップ上のローカル部隊強調も `localFormationId` 基準へ修正し、他プレイヤー部隊が自分と同じ強調表示になるケースを防止しました。
+`deploy.yml` の変更は不要です。
