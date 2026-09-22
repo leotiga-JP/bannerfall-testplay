@@ -89,6 +89,7 @@ export class Renderer {
     this.drawArtilleryShells(artilleryShells, camera);
     this.drawArtilleryExplosions(artilleryExplosions, camera);
     this.drawFieldworks(fieldworks, camera);
+    this.drawPlayerArtilleryRange(formations, snapshot, camera, localFormationId);
     this.drawFormations(formations, camera, formationLabels, localFormationId);
     this.drawMuzzleFlashes(flashes, camera);
     this.drawMeleeStrikes(strikes, camera);
@@ -797,6 +798,43 @@ export class Renderer {
     ctx.restore();
   }
 
+  private drawPlayerArtilleryRange(
+    formations: Formation[],
+    snapshot: GameSnapshot,
+    camera: Camera,
+    localFormationId: string | null,
+  ): void {
+    if (!isArtilleryClass(snapshot.playerClass)) return;
+    const player = localFormationId
+      ? formations.find((formation) => formation.id === localFormationId)
+      : formations.find((formation) => formation.isPlayerControlled);
+    if (!player || player.aliveCount() === 0) return;
+
+    const profile = artilleryProfile(snapshot.playerClass);
+    const { ctx } = this;
+    ctx.save();
+
+    // Maximum range: solid outer ring. Keep line thickness stable regardless of zoom.
+    ctx.strokeStyle = 'rgba(255, 224, 115, 0.78)';
+    ctx.lineWidth = 3 / camera.zoom;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(player.center.x, player.center.y, profile.range, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Minimum range: dashed inner ring. Shots inside this circle are invalid.
+    if (profile.minRange > 0) {
+      ctx.strokeStyle = 'rgba(255, 132, 104, 0.72)';
+      ctx.lineWidth = 2.5 / camera.zoom;
+      ctx.setLineDash([14 / camera.zoom, 10 / camera.zoom]);
+      ctx.beginPath();
+      ctx.arc(player.center.x, player.center.y, profile.minRange, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
   private drawAiDebug(formations: Formation[], camera: Camera): void {
     const { ctx } = this;
     const byId = new Map(formations.map((formation) => [formation.id, formation]));
@@ -843,6 +881,31 @@ export class Renderer {
     ctx.strokeStyle = snapshot.cameraFollow ? 'rgba(224, 211, 170, 0.65)' : 'rgba(255, 218, 115, 0.88)';
     ctx.lineWidth = 1.5;
     ctx.strokeRect(x, y, width, height);
+
+    if (isArtilleryClass(snapshot.playerClass)) {
+      const player = localFormationId
+        ? formations.find((formation) => formation.id === localFormationId)
+        : formations.find((formation) => formation.isPlayerControlled);
+      if (player && player.aliveCount() > 0) {
+        const profile = artilleryProfile(snapshot.playerClass);
+        const px = x + player.center.x * sx;
+        const py = y + player.center.y * sy;
+        ctx.strokeStyle = 'rgba(255, 224, 115, 0.82)';
+        ctx.lineWidth = 1.25;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.ellipse(px, py, profile.range * sx, profile.range * sy, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        if (profile.minRange > 0) {
+          ctx.strokeStyle = 'rgba(255, 132, 104, 0.76)';
+          ctx.setLineDash([3, 2]);
+          ctx.beginPath();
+          ctx.ellipse(px, py, profile.minRange * sx, profile.minRange * sy, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+    }
 
     for (const formation of formations) {
       if (formation.aliveCount() === 0) continue;
