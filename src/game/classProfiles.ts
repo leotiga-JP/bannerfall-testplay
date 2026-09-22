@@ -1,5 +1,5 @@
 import { GAME_CONFIG } from './config';
-import type { SquadClass } from './types';
+import type { SquadClass, Vec2 } from './types';
 import { isArtilleryClass, isChargeCavalryClass } from './types';
 
 export interface VolleyProfile {
@@ -84,13 +84,32 @@ export function volleyProfile(squadClass: SquadClass): VolleyProfile {
   }
 }
 
+export type ArtilleryTargetIssue = 'too-far' | 'too-close' | null;
+
+export function artilleryTargetIssue(
+  squadClass: SquadClass,
+  origin: Vec2,
+  target: Vec2,
+  tolerance = 0,
+): ArtilleryTargetIssue {
+  const profile = artilleryProfile(squadClass);
+  const distance = Math.hypot(target.x - origin.x, target.y - origin.y);
+  if (distance > profile.range + Math.max(0, tolerance)) return 'too-far';
+  if (distance < Math.max(0, profile.minRange - Math.max(0, tolerance))) return 'too-close';
+  return null;
+}
+
+export function artilleryTargetDistance(origin: Vec2, target: Vec2): number {
+  return Math.hypot(target.x - origin.x, target.y - origin.y);
+}
+
 export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
   if (squadClass === 'heavyArtillery') {
     return {
       guns: 1,
       deploySeconds: 4.2,
-      range: 6300,
-      minRange: 480,
+      range: GAME_CONFIG.heavyArtillery.range,
+      minRange: GAME_CONFIG.heavyArtillery.minRange,
       playerReload: 12.8,
       aiReloadMin: 12.5,
       aiReloadMax: 14.5,
@@ -101,7 +120,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
       moraleDamage: 44,
       targetJitter: 48,
       threatRetreatRange: 720,
-      preferredRange: 4950,
+      preferredRange: GAME_CONFIG.heavyArtillery.preferredRange,
       smokeScale: 2.0,
       shakeScale: 1.65,
     };
@@ -110,8 +129,8 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
     return {
       guns: 3,
       deploySeconds: 0.9,
-      range: 5325,
-      minRange: 230,
+      range: GAME_CONFIG.horseArtillery.range,
+      minRange: GAME_CONFIG.horseArtillery.minRange,
       playerReload: 4.7,
       aiReloadMin: 4.7,
       aiReloadMax: 5.7,
@@ -122,7 +141,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
       moraleDamage: 9,
       targetJitter: 90,
       threatRetreatRange: 430,
-      preferredRange: 3750,
+      preferredRange: GAME_CONFIG.horseArtillery.preferredRange,
       smokeScale: 0.75,
       shakeScale: 0.72,
     };

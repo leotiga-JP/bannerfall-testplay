@@ -214,6 +214,9 @@ export const GAME_CONFIG = {
     playerMoveSpeed: 96,
     aiMoveSpeed: 78,
     aiRetreatSpeed: 88,
+    range: 11000,
+    minRange: 480,
+    preferredRange: 8500,
   },
   horseArtillery: {
     soldiers: 6,
@@ -224,6 +227,9 @@ export const GAME_CONFIG = {
     playerMoveSpeed: 184,
     aiMoveSpeed: 158,
     aiRetreatSpeed: 178,
+    range: 5325,
+    minRange: 230,
+    preferredRange: 3750,
   },
   grenade: {
     range: 290,

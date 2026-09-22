@@ -16,7 +16,7 @@ import { GAME_CONFIG } from './config';
 import { BATTLEFIELD_MAP } from './battlefieldMap';
 import { minimapRect, type MinimapPosition } from './minimapLayout';
 import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, classLabel as squadClassLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from './types';
-import { artilleryProfile, chargeProfile, fieldworkKitCapacity, volleyProfile } from './classProfiles';
+import { artilleryProfile, artilleryTargetDistance, artilleryTargetIssue, chargeProfile, fieldworkKitCapacity, volleyProfile, type ArtilleryTargetIssue } from './classProfiles';
 import { ArtilleryShell } from '../entities/artilleryShell';
 import { Projectile } from '../entities/projectile';
 import { Fieldwork } from '../entities/fieldwork';
@@ -85,6 +85,9 @@ export interface GameSnapshot {
   playerHasReservedSpawn: boolean;
   playerArtilleryDeployed: boolean;
   playerArtilleryDeployProgress: number;
+  playerArtilleryRangeOrigin: Vec2 | null;
+  playerArtilleryAimDistance: number | null;
+  playerArtilleryAimIssue: ArtilleryTargetIssue;
   selectedWeapon: WeaponType;
   playerBannerTargetTeam: Team | null;
   playerBannerInRange: boolean;
@@ -402,6 +405,18 @@ export class Game {
     const targetBanner = playerTarget ? this.bannerFor(playerTarget) : null;
     const playerBannerInRange = !!targetBanner
       && this.distance(this.playerFormation.center, targetBanner.position) <= GAME_CONFIG.banner.approachDistance + 16;
+    const artilleryRangeOrigin = isArtilleryClass(this.playerFormation.squadClass)
+      ? this.playerArtilleryRangeOrigin()
+      : null;
+    const artilleryAimTarget = artilleryRangeOrigin
+      ? this.camera.screenToWorld(this.input.getPointer())
+      : null;
+    const artilleryAimDistance = artilleryRangeOrigin && artilleryAimTarget
+      ? artilleryTargetDistance(artilleryRangeOrigin, artilleryAimTarget)
+      : null;
+    const artilleryAimIssue = artilleryRangeOrigin && artilleryAimTarget
+      ? artilleryTargetIssue(this.playerFormation.squadClass, artilleryRangeOrigin, artilleryAimTarget)
+      : null;
     const playerRecommendedClass = this.aiSystem.recommendClass(
       this.playerFormation.team,
       this.formations,
@@ -443,6 +458,9 @@ export class Game {
       playerArtilleryDeployProgress: isArtilleryClass(this.playerFormation.squadClass)
         ? Math.min(1, this.playerFormation.artilleryDeployTimer / artilleryProfile(this.playerFormation.squadClass).deploySeconds)
         : 0,
+      playerArtilleryRangeOrigin: artilleryRangeOrigin ? { ...artilleryRangeOrigin } : null,
+      playerArtilleryAimDistance: artilleryAimDistance,
+      playerArtilleryAimIssue: artilleryAimIssue,
       selectedWeapon: this.selectedWeapon,
       playerBannerTargetTeam: playerTarget,
       playerBannerInRange,
@@ -909,7 +927,7 @@ export class Game {
         } else if (formation.reloadTimer > 0) {
           this.setHint(`CANNON RELOAD ${formation.reloadTimer.toFixed(1)}s`, 1.4);
         } else {
-          const issue = this.artilleryTargetIssue(formation, pointer);
+          const issue = artilleryTargetIssue(formation.squadClass, this.playerArtilleryRangeOrigin(), pointer);
           if (issue === 'too-far') {
             this.setHint(`射程外です — 最大射程 ${Math.round(profile.range).toLocaleString()}`, 1.8);
           } else if (issue === 'too-close') {
@@ -1008,12 +1026,11 @@ export class Game {
         this.baseRecoveryTimers.delete(formation.id);
         continue;
       }
-      const index = this.teamIndexOf(formation);
       const areaIndex = BATTLEFIELD_MAP.nearestSpawnAreaIndex(formation.team, formation.center);
       const inRecoveryZone = BATTLEFIELD_MAP.inSpawnArea(formation.team, formation.center, GAME_CONFIG.army.baseRecoveryRadius);
-      const spawn = this.respawnFor(formation.team, index, areaIndex);
       const stable = formation.mode === 'line' || formation.mode === 'reforming';
-      if (!inRecoveryZone || !stable || formation.moraleShockTimer > 0) {
+      const waiting = !formation.movedRecently() && !formation.forcedMarch;
+      if (!inRecoveryZone || !stable || !waiting || formation.moraleShockTimer > 0) {
         this.baseRecoveryTimers.delete(formation.id);
         continue;
       }
@@ -1029,7 +1046,9 @@ export class Game {
         ? this.weaponForFormation(formation)
         : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
       this.formationSpawnAreas.set(formation.id, areaIndex);
-      formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, formation.squadClass);
+      const recoveryCenter = { ...formation.center };
+      const recoveryDirection = formation.direction;
+      formation.reset(recoveryCenter, recoveryDirection, formation.squadClass);
       formation.weapon = preservedWeapon;
       this.humanWeapons.set(formation.id, preservedWeapon);
       this.baseRecoveryTimers.delete(formation.id);
@@ -1730,12 +1749,10 @@ export class Game {
     }
   }
 
-  private artilleryTargetIssue(formation: Formation, desiredTarget: Vec2): 'too-far' | 'too-close' | null {
-    const profile = artilleryProfile(formation.squadClass);
-    const distance = Math.hypot(desiredTarget.x - formation.center.x, desiredTarget.y - formation.center.y);
-    if (distance > profile.range) return 'too-far';
-    if (distance < profile.minRange) return 'too-close';
-    return null;
+  playerArtilleryRangeOrigin(): Vec2 {
+    const target = this.networkTargets.get(this.playerFormation.id);
+    if (target) return { x: target.x, y: target.y };
+    return { ...this.playerFormation.center };
   }
 
   private performArtilleryShot(formation: Formation, desiredTarget: Vec2, reloadSeconds: number): void {
@@ -1743,7 +1760,7 @@ export class Game {
     const profile = artilleryProfile(formation.squadClass);
     const dx = desiredTarget.x - formation.center.x;
     const dy = desiredTarget.y - formation.center.y;
-    const issue = this.artilleryTargetIssue(formation, desiredTarget);
+    const issue = artilleryTargetIssue(formation.squadClass, formation.center, desiredTarget, 48);
     if (issue === 'too-far') {
       if (formation === this.playerFormation) this.setHint(`射程外です — 最大射程 ${Math.round(profile.range).toLocaleString()}`, 1.8);
       return;

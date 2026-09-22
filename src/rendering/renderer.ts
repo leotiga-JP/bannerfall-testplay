@@ -811,15 +811,17 @@ export class Renderer {
     if (!player || player.aliveCount() === 0) return;
 
     const profile = artilleryProfile(snapshot.playerClass);
+    const origin = snapshot.playerArtilleryRangeOrigin ?? player.center;
     const { ctx } = this;
     ctx.save();
 
-    // Maximum range: solid outer ring. Keep line thickness stable regardless of zoom.
-    ctx.strokeStyle = 'rgba(255, 224, 115, 0.78)';
+    // Maximum range: solid outer ring. The origin comes from the latest authoritative snapshot
+    // in multiplayer so the ring matches the coordinates used for firing validation.
+    ctx.strokeStyle = snapshot.playerArtilleryAimIssue ? 'rgba(255, 164, 104, 0.82)' : 'rgba(255, 224, 115, 0.82)';
     ctx.lineWidth = 3 / camera.zoom;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.arc(player.center.x, player.center.y, profile.range, 0, Math.PI * 2);
+    ctx.arc(origin.x, origin.y, profile.range, 0, Math.PI * 2);
     ctx.stroke();
 
     // Minimum range: dashed inner ring. Shots inside this circle are invalid.
@@ -828,7 +830,7 @@ export class Renderer {
       ctx.lineWidth = 2.5 / camera.zoom;
       ctx.setLineDash([14 / camera.zoom, 10 / camera.zoom]);
       ctx.beginPath();
-      ctx.arc(player.center.x, player.center.y, profile.minRange, 0, Math.PI * 2);
+      ctx.arc(origin.x, origin.y, profile.minRange, 0, Math.PI * 2);
       ctx.stroke();
     }
 
@@ -888,8 +890,9 @@ export class Renderer {
         : formations.find((formation) => formation.isPlayerControlled);
       if (player && player.aliveCount() > 0) {
         const profile = artilleryProfile(snapshot.playerClass);
-        const px = x + player.center.x * sx;
-        const py = y + player.center.y * sy;
+        const origin = snapshot.playerArtilleryRangeOrigin ?? player.center;
+        const px = x + origin.x * sx;
+        const py = y + origin.y * sy;
         ctx.strokeStyle = 'rgba(255, 224, 115, 0.82)';
         ctx.lineWidth = 1.25;
         ctx.setLineDash([]);

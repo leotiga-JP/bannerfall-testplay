@@ -59,6 +59,7 @@ export class Formation {
 
   private layoutCount = 0;
   private movedThisFrame = false;
+  private movedLastUpdate = false;
 
   constructor(
     id: string,
@@ -104,6 +105,7 @@ export class Formation {
     this.chargeMomentum = 0;
     this.chargeVictims.clear();
     this.movedThisFrame = false;
+    this.movedLastUpdate = false;
     this.morale = GAME_CONFIG.morale.max;
     this.moraleShockTimer = 0;
     this.routTravelled = 0;
@@ -145,6 +147,7 @@ export class Formation {
     this.chargeMomentum = 0;
     this.chargeVictims.clear();
     this.movedThisFrame = false;
+    this.movedLastUpdate = false;
     for (const soldier of alive) {
       const target = this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
       soldier.position = { ...target };
@@ -159,6 +162,10 @@ export class Formation {
       this.artilleryDeployed = false;
       this.artilleryDeployTimer = 0;
     }
+  }
+
+  movedRecently(): boolean {
+    return this.movedLastUpdate;
   }
 
   beginCharge(target: Vec2): boolean {
@@ -345,6 +352,7 @@ export class Formation {
       this.morale = Math.min(GAME_CONFIG.morale.max, this.morale + recovery * dt);
     }
 
+    this.movedLastUpdate = this.movedThisFrame;
     this.movedThisFrame = false;
 
     if (this.mode === 'melee') {

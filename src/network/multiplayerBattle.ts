@@ -2,7 +2,7 @@ import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
 import { canBannerAttackClass, canVolleyClass, classLabel, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
-import { artilleryProfile } from '../game/classProfiles';
+import { artilleryTargetIssue } from '../game/classProfiles';
 import { InputManager } from '../input/inputManager';
 import { Renderer } from '../rendering/renderer';
 import { Hud } from '../ui/hud';
@@ -412,11 +412,10 @@ export class MultiplayerBattle {
           }
         }
         if (isArtilleryClass(formation.squadClass)) {
-          const profile = artilleryProfile(formation.squadClass);
-          const distance = Math.hypot(world.x - formation.center.x, world.y - formation.center.y);
-          // Avoid sending obviously invalid artillery shots. Game.update() still consumes the click
-          // locally so the player gets the range/deploy/reload hint immediately.
-          if (!formation.artilleryDeployed || formation.reloadTimer > 0 || distance > profile.range || distance < profile.minRange) {
+          const issue = artilleryTargetIssue(formation.squadClass, this.game.playerArtilleryRangeOrigin(), world);
+          // Display, client pre-check and authoritative firing all share artilleryProfile()/artilleryTargetIssue().
+          // Game.update() consumes invalid clicks locally so the player receives an immediate range hint.
+          if (!formation.artilleryDeployed || formation.reloadTimer > 0 || issue) {
             event.preventDefault();
             return;
           }

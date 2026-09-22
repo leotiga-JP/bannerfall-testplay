@@ -100,7 +100,7 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall V4.0.6 — BLUE ${bluePercent}% | RED ${redPercent}%`;
+    document.title = `Bannerfall V4.0.7 — BLUE ${bluePercent}% | RED ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
@@ -137,8 +137,11 @@ export class Hud {
     if (isArtilleryClass(snapshot.playerClass)) {
       const profile = artilleryProfile(snapshot.playerClass);
       const rangeText = `射程 ${Math.round(profile.minRange).toLocaleString()}–${Math.round(profile.range).toLocaleString()}`;
-      if (!snapshot.playerArtilleryDeployed) this.playerDetail.textContent = `CANNON · DEPLOY ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}% · ${rangeText}`;
-      else this.playerDetail.textContent = ready ? `CANNON · READY · ${rangeText}` : `CANNON · RELOAD ${snapshot.playerReload.toFixed(1)}s · ${rangeText}`;
+      const aimText = snapshot.playerArtilleryAimDistance === null
+        ? ''
+        : ` · 照準 ${Math.round(snapshot.playerArtilleryAimDistance).toLocaleString()}${snapshot.playerArtilleryAimIssue ? '（射程外）' : '（射程内）'}`;
+      if (!snapshot.playerArtilleryDeployed) this.playerDetail.textContent = `CANNON · DEPLOY ${Math.round(snapshot.playerArtilleryDeployProgress * 100)}% · ${rangeText}${aimText}`;
+      else this.playerDetail.textContent = ready ? `CANNON · READY · ${rangeText}${aimText}` : `CANNON · RELOAD ${snapshot.playerReload.toFixed(1)}s · ${rangeText}${aimText}`;
       return;
     }
 
