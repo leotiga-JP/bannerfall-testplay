@@ -37,7 +37,7 @@ const required = [
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.0.4 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.0.5 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
@@ -439,7 +439,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Version 4.0.4';
+  document.title = 'Bannerfall — Version 4.0.5';
 }
 
 network.onConnection = (connected, text) => {

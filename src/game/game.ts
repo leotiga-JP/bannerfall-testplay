@@ -33,6 +33,8 @@ export interface GameOptions {
   introEnabled?: boolean;
   initialClasses?: Record<string, SquadClass>;
   initialSpawnAreas?: Record<string, number>;
+  // Multiplayer clients wait for the authoritative server snapshot before creating cannon shells.
+  predictArtilleryShots?: boolean;
 }
 
 export interface AxeStrike {
@@ -182,6 +184,7 @@ export class Game {
   private contextualHint = '';
   private hintTimer = 0;
   private minimapPosition: MinimapPosition = 'bottom-right';
+  private readonly predictArtilleryShots: boolean;
 
   constructor(private readonly input: InputManager, options: GameOptions = {}) {
     const legacyCount = options.squadsPerTeam ?? GAME_CONFIG.army.squadsPerTeam;
@@ -195,6 +198,7 @@ export class Game {
     this.humanFormationIds.add(localFormationId);
     this.initialClasses = { ...(options.initialClasses ?? {}) };
     this.initialSpawnAreas = { ...(options.initialSpawnAreas ?? {}) };
+    this.predictArtilleryShots = options.predictArtilleryShots ?? true;
     this.formations = this.createArmies();
     for (const formation of this.formations) {
       this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
@@ -905,7 +909,14 @@ export class Game {
         } else if (formation.reloadTimer > 0) {
           this.setHint(`CANNON RELOAD ${formation.reloadTimer.toFixed(1)}s`, 1.4);
         } else {
-          this.performArtilleryShot(formation, pointer, profile.playerReload);
+          const issue = this.artilleryTargetIssue(formation, pointer);
+          if (issue === 'too-far') {
+            this.setHint(`射程外です — 最大射程 ${Math.round(profile.range).toLocaleString()}`, 1.8);
+          } else if (issue === 'too-close') {
+            this.setHint(`近すぎます — 最低射程 ${Math.round(profile.minRange).toLocaleString()}`, 1.8);
+          } else if (this.predictArtilleryShots) {
+            this.performArtilleryShot(formation, pointer, profile.playerReload);
+          }
         }
       }
       return;
@@ -1719,18 +1730,26 @@ export class Game {
     }
   }
 
+  private artilleryTargetIssue(formation: Formation, desiredTarget: Vec2): 'too-far' | 'too-close' | null {
+    const profile = artilleryProfile(formation.squadClass);
+    const distance = Math.hypot(desiredTarget.x - formation.center.x, desiredTarget.y - formation.center.y);
+    if (distance > profile.range) return 'too-far';
+    if (distance < profile.minRange) return 'too-close';
+    return null;
+  }
+
   private performArtilleryShot(formation: Formation, desiredTarget: Vec2, reloadSeconds: number): void {
     if (!formation.canArtilleryFire()) return;
     const profile = artilleryProfile(formation.squadClass);
     const dx = desiredTarget.x - formation.center.x;
     const dy = desiredTarget.y - formation.center.y;
-    const distance = Math.hypot(dx, dy) || 1;
-    if (distance > profile.range) {
-      if (formation === this.playerFormation) this.setHint('TARGET OUT OF ARTILLERY RANGE', 1.8);
+    const issue = this.artilleryTargetIssue(formation, desiredTarget);
+    if (issue === 'too-far') {
+      if (formation === this.playerFormation) this.setHint(`射程外です — 最大射程 ${Math.round(profile.range).toLocaleString()}`, 1.8);
       return;
     }
-    if (distance < profile.minRange) {
-      if (formation === this.playerFormation) this.setHint('TARGET TOO CLOSE FOR CANNON', 1.8);
+    if (issue === 'too-close') {
+      if (formation === this.playerFormation) this.setHint(`近すぎます — 最低射程 ${Math.round(profile.minRange).toLocaleString()}`, 1.8);
       return;
     }
     formation.direction = Math.atan2(dy, dx);

@@ -2,6 +2,7 @@ import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
 import { canBannerAttackClass, canVolleyClass, classLabel, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
+import { artilleryProfile } from '../game/classProfiles';
 import { InputManager } from '../input/inputManager';
 import { Renderer } from '../rendering/renderer';
 import { Hud } from '../ui/hud';
@@ -64,6 +65,8 @@ export class MultiplayerBattle {
       initialClasses,
       initialSpawnAreas,
       introEnabled: !payload.joinInProgress,
+      // Cannon fire is confirmed by the authoritative server before shells/audio appear.
+      predictArtilleryShots: false,
     });
 
     const ctx = canvas.getContext('2d');
@@ -404,6 +407,16 @@ export class MultiplayerBattle {
           const clicked = this.nearestEnemyFieldwork(world, formation.team);
           if (clicked) {
             send({ type: 'fieldwork-attack', formationId: formation.id, fieldworkId: clicked.id });
+            event.preventDefault();
+            return;
+          }
+        }
+        if (isArtilleryClass(formation.squadClass)) {
+          const profile = artilleryProfile(formation.squadClass);
+          const distance = Math.hypot(world.x - formation.center.x, world.y - formation.center.y);
+          // Avoid sending obviously invalid artillery shots. Game.update() still consumes the click
+          // locally so the player gets the range/deploy/reload hint immediately.
+          if (!formation.artilleryDeployed || formation.reloadTimer > 0 || distance > profile.range || distance < profile.minRange) {
             event.preventDefault();
             return;
           }

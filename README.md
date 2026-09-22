@@ -1,3 +1,16 @@
+# Bannerfall Version 4.0.5 — Artillery / Musket Audio Hotfix
+
+Version 4.0.5 は Version 4.0.4 を基準にした小規模Hotfixです。
+
+- 重砲兵を含む砲兵で、射程限界付近のクリック時にClientだけ砲声が鳴りServerでは発射されないことがある問題を修正。
+- Multiplayerでは砲弾生成と砲声をAuthoritative ServerのSnapshot確定後に行う。
+- 射程外・最低射程内クリック時に日本語Hintを表示。
+- マスケット発射音をユーザー提供の `大型狙撃銃を発射.mp3` に差し替え。
+- Game Version: `4.0.5`
+- Protocol Version: `403`（変更なし）
+
+---
+
 # Bannerfall Version 4.0.4 — Navigation / Deployment Foundation
 
 Version 4.0.4 は、Version 4.0.3 のテスト結果を受けた基盤更新です。山岳を避けるAI Navigation、3つのSpawn Area、途中参戦、再接続、Esc設定画面、移動速度とMorale復帰テンポの調整をまとめています。

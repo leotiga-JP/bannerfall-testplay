@@ -1,4 +1,4 @@
-export const GAME_VERSION = '4.0.4';
+export const GAME_VERSION = '4.0.5';
 export const PROTOCOL_VERSION = 403;
 
 import type { FormationMode } from '../entities/formation';

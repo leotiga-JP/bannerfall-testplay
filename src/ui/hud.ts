@@ -100,7 +100,7 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall V4.0.4 — BLUE ${bluePercent}% | RED ${redPercent}%`;
+    document.title = `Bannerfall V4.0.5 — BLUE ${bluePercent}% | RED ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
