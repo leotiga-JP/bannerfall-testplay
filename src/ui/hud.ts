@@ -5,6 +5,7 @@ import { fieldworkKitCapacity } from '../game/classProfiles';
 export class Hud {
   private readonly slots: HTMLElement[];
   private readonly classCards: HTMLElement[];
+  private readonly spawnButtons: HTMLButtonElement[];
   private reservationOpen = false;
   private lastSnapshot: GameSnapshot | null = null;
 
@@ -34,6 +35,7 @@ export class Hud {
   ) {
     this.slots = Array.from(hotbar.querySelectorAll<HTMLElement>('.slot[data-slot]'));
     this.classCards = Array.from(classSelector.querySelectorAll<HTMLElement>('.class-card[data-class]'));
+    this.spawnButtons = Array.from(classSelector.querySelectorAll<HTMLButtonElement>('[data-respawn-spawn]'));
   }
 
   update(snapshot: GameSnapshot): void {
@@ -98,13 +100,13 @@ export class Hud {
     this.contextHint.textContent = snapshot.contextualHint;
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
-    document.title = `Bannerfall P3.10 — BLUE ${bluePercent}% | RED ${redPercent}%`;
+    document.title = `Bannerfall V4.0.4 — BLUE ${bluePercent}% | RED ${redPercent}%`;
   }
 
   private updatePlayerPanel(snapshot: GameSnapshot, ready: boolean): void {
     const className = this.classLabel(snapshot.playerClass);
     if (snapshot.playerRespawn !== null) {
-      this.playerState.textContent = `部隊壊滅 · 次回 ${this.classLabel(snapshot.playerNextClass)}`;
+      this.playerState.textContent = `部隊壊滅 · 次回 ${this.classLabel(snapshot.playerNextClass)} / Spawn ${String.fromCharCode(65 + snapshot.playerNextSpawn)}`;
       this.playerDetail.textContent = `援軍到着まで ${snapshot.playerRespawn.toFixed(1)}秒`;
       return;
     }
@@ -149,6 +151,9 @@ export class Hud {
       this.configureSlot(0, '1', '━', 'マスケット', snapshot.selectedWeapon === 'musket', snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
       this.configureSlot(1, '2', '†', '銃剣', snapshot.selectedWeapon === 'bayonet');
       this.configureSlot(2, '3', '⌁', '斧', snapshot.selectedWeapon === 'axe');
+    } else if (snapshot.playerClass === 'sharpshooter') {
+      this.configureSlot(0, 'LMB', '━', '狙撃銃', true, snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
+      this.configureSlot(1, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
     } else if (snapshot.playerClass === 'dragoon') {
       this.configureSlot(0, 'LMB', '━', 'カービン', true, snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
       this.configureSlot(1, '—', '↯', '機動射撃', false);
@@ -193,20 +198,24 @@ export class Hud {
     this.classSelector.classList.toggle('hidden', !active);
 
     this.reserveClassToggle.classList.toggle('reserved', snapshot.playerHasReservedClass);
-    this.reserveClassToggle.textContent = `次回兵科 · ${this.classLabel(snapshot.playerNextClass)} [N]`;
+    this.reserveClassToggle.textContent = `次回出撃 · ${this.classLabel(snapshot.playerNextClass)} / Spawn ${String.fromCharCode(65 + snapshot.playerNextSpawn)} [N]`;
     this.reserveClassToggle.disabled = !!snapshot.winner;
 
     if (!active) return;
-    this.classSelectorTitle.textContent = dead ? '次の兵科を選択' : '次回兵科を予約';
+    this.classSelectorTitle.textContent = dead ? '次の出撃を選択' : '次回出撃を予約';
     this.classSelectorDescription.textContent = dead && snapshot.playerRespawn !== null
-      ? `援軍到着まで ${snapshot.playerRespawn.toFixed(1)}秒 · カードをクリック`
-      : '次に部隊が全滅した際の兵科を予約します · カードをクリック · Nで閉じる';
-    this.armyComposition.textContent = `BLUE · 戦列${snapshot.blueClasses.infantry} 軽歩${snapshot.blueClasses.lightInfantry} 擲弾${snapshot.blueClasses.grenadier} 狙撃${snapshot.blueClasses.sharpshooter} 工兵${snapshot.blueClasses.engineer} 竜騎${snapshot.blueClasses.dragoon} 騎兵${snapshot.blueClasses.cavalry} 軽騎${snapshot.blueClasses.hussar} 胸甲${snapshot.blueClasses.cuirassier} 野砲${snapshot.blueClasses.artillery} 重砲${snapshot.blueClasses.heavyArtillery} 騎砲${snapshot.blueClasses.horseArtillery}`;
+      ? `援軍到着まで ${snapshot.playerRespawn.toFixed(1)}秒 · 兵科とSpawnを選択`
+      : '次に部隊が全滅した際の兵科とSpawnを予約します · Nで閉じる';
+    this.armyComposition.textContent = `BLUE · 戦列${snapshot.blueClasses.infantry} 軽歩${snapshot.blueClasses.lightInfantry} 擲弾${snapshot.blueClasses.grenadier} 狙撃${snapshot.blueClasses.sharpshooter} 工兵${snapshot.blueClasses.engineer} 竜騎${snapshot.blueClasses.dragoon} 騎兵${snapshot.blueClasses.cavalry} フッサー${snapshot.blueClasses.hussar} 胸甲${snapshot.blueClasses.cuirassier} 野砲${snapshot.blueClasses.artillery} 重砲${snapshot.blueClasses.heavyArtillery} 騎砲${snapshot.blueClasses.horseArtillery}`;
     this.classRecommendation.textContent = `推奨 · ${this.classLabel(snapshot.playerRecommendedClass)}`;
     for (const card of this.classCards) {
       const value = card.dataset.class as SquadClass | undefined;
       card.classList.toggle('selected', value === snapshot.playerNextClass);
       card.classList.toggle('recommended', value === snapshot.playerRecommendedClass);
+    }
+    for (const button of this.spawnButtons) {
+      const value = Number(button.dataset.respawnSpawn);
+      button.classList.toggle('selected', value === snapshot.playerNextSpawn);
     }
   }
 

@@ -89,7 +89,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
     return {
       guns: 1,
       deploySeconds: 4.2,
-      range: 4200,
+      range: 6300,
       minRange: 480,
       playerReload: 12.8,
       aiReloadMin: 12.5,
@@ -101,7 +101,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
       moraleDamage: 44,
       targetJitter: 48,
       threatRetreatRange: 720,
-      preferredRange: 3300,
+      preferredRange: 4950,
       smokeScale: 2.0,
       shakeScale: 1.65,
     };
@@ -110,7 +110,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
     return {
       guns: 3,
       deploySeconds: 0.9,
-      range: 3550,
+      range: 5325,
       minRange: 230,
       playerReload: 4.7,
       aiReloadMin: 4.7,
@@ -122,7 +122,7 @@ export function artilleryProfile(squadClass: SquadClass): ArtilleryProfile {
       moraleDamage: 9,
       targetJitter: 90,
       threatRetreatRange: 430,
-      preferredRange: 2500,
+      preferredRange: 3750,
       smokeScale: 0.75,
       shakeScale: 0.72,
     };

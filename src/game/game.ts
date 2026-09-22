@@ -13,6 +13,8 @@ import { type ArtilleryExplosion, createArtilleryShells, updateArtilleryShells }
 import { MeleeSystem, type MeleeStrike } from '../systems/meleeSystem';
 import { Camera } from './camera';
 import { GAME_CONFIG } from './config';
+import { BATTLEFIELD_MAP } from './battlefieldMap';
+import { minimapRect, type MinimapPosition } from './minimapLayout';
 import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, classLabel as squadClassLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from './types';
 import { artilleryProfile, chargeProfile, fieldworkKitCapacity, volleyProfile } from './classProfiles';
 import { ArtilleryShell } from '../entities/artilleryShell';
@@ -30,6 +32,7 @@ export interface GameOptions {
   humanFormationIds?: string[];
   introEnabled?: boolean;
   initialClasses?: Record<string, SquadClass>;
+  initialSpawnAreas?: Record<string, number>;
 }
 
 export interface AxeStrike {
@@ -61,6 +64,7 @@ export interface GameSnapshot {
   playerMode: FormationMode;
   playerClass: SquadClass;
   playerNextClass: SquadClass;
+  playerNextSpawn: number;
   playerRecommendedClass: SquadClass;
   playerAlive: number;
   playerMaxSoldiers: number;
@@ -76,6 +80,7 @@ export interface GameSnapshot {
   playerGrenadeCooldown: number;
   playerBaseRecoveryRemaining: number | null;
   playerHasReservedClass: boolean;
+  playerHasReservedSpawn: boolean;
   playerArtilleryDeployed: boolean;
   playerArtilleryDeployProgress: number;
   selectedWeapon: WeaponType;
@@ -140,11 +145,15 @@ export class Game {
   readonly combatStats = new Map<string, FormationCombatStats>();
 
   private readonly initialClasses: Record<string, SquadClass>;
+  private readonly initialSpawnAreas: Record<string, number>;
   private readonly aiSystem = new BattleAiSystem();
   private readonly meleeSystem = new MeleeSystem();
   private readonly meleeQuietTimers = new Map<string, number>();
   private readonly respawnTimers = new Map<string, number>();
   private readonly plannedRespawnClasses = new Map<string, SquadClass>();
+  private readonly plannedRespawnAreas = new Map<string, number>();
+  private readonly formationSpawnAreas = new Map<string, number>();
+  private readonly respawnSerial = new Map<string, number>();
   private readonly baseRecoveryTimers = new Map<string, number>();
   private readonly fieldworkAxeReadyAt = new Map<string, number>();
   private readonly deferredRespawns = new Set<string>();
@@ -172,6 +181,7 @@ export class Game {
   private noticeTimer = 0;
   private contextualHint = '';
   private hintTimer = 0;
+  private minimapPosition: MinimapPosition = 'bottom-right';
 
   constructor(private readonly input: InputManager, options: GameOptions = {}) {
     const legacyCount = options.squadsPerTeam ?? GAME_CONFIG.army.squadsPerTeam;
@@ -184,6 +194,7 @@ export class Game {
     this.humanFormationIds = new Set(options.humanFormationIds ?? [localFormationId]);
     this.humanFormationIds.add(localFormationId);
     this.initialClasses = { ...(options.initialClasses ?? {}) };
+    this.initialSpawnAreas = { ...(options.initialSpawnAreas ?? {}) };
     this.formations = this.createArmies();
     for (const formation of this.formations) {
       this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
@@ -194,8 +205,8 @@ export class Game {
     this.selectedWeapon = canVolleyClass(player.squadClass) ? 'musket' : 'bayonet';
     this.playerFormation.weapon = this.selectedWeapon;
     this.banners = [
-      new Banner('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.y }),
-      new Banner('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.y }),
+      new Banner('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.blueY }),
+      new Banner('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.redY }),
     ];
     this.camera = new Camera(this.blueBanner.position);
     this.introActive = options.introEnabled ?? true;
@@ -221,7 +232,9 @@ export class Game {
       const formation = this.formations[i];
       const teamIndex = this.teamIndexOf(formation);
       const squadClass = this.initialClassForFormation(formation.id, teamIndex, this.squadCountFor(formation.team));
-      const spawn = this.initialSpawnFor(formation.team, teamIndex);
+      const areaIndex = this.initialSpawnAreas[formation.id] ?? (teamIndex % 3);
+      this.formationSpawnAreas.set(formation.id, areaIndex);
+      const spawn = this.initialSpawnFor(formation.team, teamIndex, areaIndex);
       formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, squadClass);
       formation.spawnProtectionTimer = 0;
     }
@@ -238,6 +251,8 @@ export class Game {
     this.meleeQuietTimers.clear();
     this.respawnTimers.clear();
     this.plannedRespawnClasses.clear();
+    this.plannedRespawnAreas.clear();
+    this.respawnSerial.clear();
     this.baseRecoveryTimers.clear();
     this.fieldworkAxeReadyAt.clear();
     this.deferredRespawns.clear();
@@ -265,6 +280,11 @@ export class Game {
     this.camera.reset(this.blueBanner.position);
     this.camera.setCinematic(this.blueBanner.position, 0.76);
     this.aiSystem.reset(this.formations);
+  }
+
+
+  setMinimapPosition(position: MinimapPosition): void {
+    this.minimapPosition = position;
   }
 
   update(rawDt: number): void {
@@ -299,7 +319,7 @@ export class Game {
     const dt = rawDt * this.timeScale;
     this.time += dt;
 
-    const classChoice = this.input.consumeClassSelection(this.playerFormation.aliveCount() === 0);
+    const classChoice = this.input.consumeClassSelection(false);
     if (classChoice) {
       this.plannedRespawnClasses.set(this.playerFormation.id, classChoice);
       this.setHint(`NEXT CLASS RESERVED — ${this.classLabel(classChoice)}`, 2);
@@ -319,7 +339,6 @@ export class Game {
     this.applyAiCommands(dt);
     this.updateCharges(dt);
     this.updateBannerAttacks(dt);
-    this.resolveFriendlyFormationSeparation();
 
     for (const formation of this.formations) formation.update(dt);
     for (const banner of this.banners) banner.update(dt);
@@ -355,6 +374,7 @@ export class Game {
     }
 
     this.updateMoraleAndRouts(dt);
+    this.rescueFormationsFromMountains();
     this.updateBaseRecovery(dt);
     this.updateRespawns(dt);
     this.updateEffects(dt);
@@ -371,6 +391,9 @@ export class Game {
       ? Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - (this.baseRecoveryTimers.get(this.playerFormation.id) ?? 0))
       : null;
     const playerNextClass = this.plannedRespawnClasses.get(this.playerFormation.id) ?? this.playerFormation.squadClass;
+    const playerNextSpawn = this.plannedRespawnAreas.get(this.playerFormation.id)
+      ?? this.formationSpawnAreas.get(this.playerFormation.id)
+      ?? 0;
     const playerTarget = this.playerFormation.bannerTargetTeam;
     const targetBanner = playerTarget ? this.bannerFor(playerTarget) : null;
     const playerBannerInRange = !!targetBanner
@@ -395,6 +418,7 @@ export class Game {
       playerMode: this.playerFormation.mode,
       playerClass: this.playerFormation.squadClass,
       playerNextClass,
+      playerNextSpawn,
       playerRecommendedClass,
       playerAlive: this.playerFormation.aliveCount(),
       playerMaxSoldiers: this.playerFormation.maxSoldiers(),
@@ -410,6 +434,7 @@ export class Game {
       playerGrenadeCooldown: this.playerFormation.grenadeCooldown,
       playerBaseRecoveryRemaining,
       playerHasReservedClass: this.plannedRespawnClasses.has(this.playerFormation.id),
+      playerHasReservedSpawn: this.plannedRespawnAreas.has(this.playerFormation.id),
       playerArtilleryDeployed: this.playerFormation.artilleryDeployed,
       playerArtilleryDeployProgress: isArtilleryClass(this.playerFormation.squadClass)
         ? Math.min(1, this.playerFormation.artilleryDeployTimer / artilleryProfile(this.playerFormation.squadClass).deploySeconds)
@@ -463,6 +488,8 @@ export class Game {
       bannerTargetTeam: formation.bannerTargetTeam,
       respawnRemaining: this.respawnTimers.get(formation.id) ?? null,
       plannedClass: this.plannedRespawnClasses.get(formation.id) ?? null,
+      plannedSpawnIndex: this.plannedRespawnAreas.get(formation.id) ?? null,
+      spawnAreaIndex: this.formationSpawnAreas.get(formation.id) ?? 0,
       forcedMarch: formation.forcedMarch,
       fieldworkKits: formation.fieldworkKits,
       grenadeCooldown: formation.grenadeCooldown,
@@ -571,6 +598,9 @@ export class Game {
       else this.respawnTimers.set(formation.id, net.respawnRemaining);
       if (net.plannedClass === null) this.plannedRespawnClasses.delete(formation.id);
       else this.plannedRespawnClasses.set(formation.id, net.plannedClass);
+      if (net.plannedSpawnIndex === null) this.plannedRespawnAreas.delete(formation.id);
+      else this.plannedRespawnAreas.set(formation.id, net.plannedSpawnIndex);
+      this.formationSpawnAreas.set(formation.id, net.spawnAreaIndex);
       formation.forcedMarch = net.forcedMarch;
       formation.fieldworkKits = net.fieldworkKits;
       formation.grenadeCooldown = net.grenadeCooldown;
@@ -685,10 +715,12 @@ export class Game {
         const id = `${team === 'blue' ? 'B' : 'R'}${String(i + 1).padStart(2, '0')}`;
         const isPlayer = this.humanFormationIds.has(id);
         const squadClass = this.initialClassForFormation(id, i, count);
+        const areaIndex = this.initialSpawnAreas[id] ?? (i % 3);
+        this.formationSpawnAreas.set(id, areaIndex);
         formations.push(new Formation(
           id,
           team,
-          this.initialSpawnFor(team, i),
+          this.initialSpawnFor(team, i, areaIndex),
           team === 'blue' ? 0 : Math.PI,
           isPlayer,
           squadClass,
@@ -720,27 +752,23 @@ export class Game {
     return 'horseArtillery';
   }
 
-  private formationGrid(index: number, count: number, rear: boolean): Vec2 {
-    const columns = count <= 20 ? Math.min(4, count) : count <= 35 ? 5 : 6;
-    const rows = Math.ceil(count / columns);
-    const row = Math.floor(index / columns);
-    const column = index % columns;
-    const yMin = rear ? 500 : 520;
-    const yMax = rear ? GAME_CONFIG.world.height - 500 : GAME_CONFIG.world.height - 520;
-    const y = rows <= 1 ? GAME_CONFIG.world.height / 2 : yMin + (row / (rows - 1)) * (yMax - yMin);
-    const xBase = rear ? GAME_CONFIG.army.respawnX : GAME_CONFIG.army.initialSpawnX;
-    const gap = rear ? GAME_CONFIG.army.respawnColumnGap : GAME_CONFIG.army.initialColumnGap;
-    return { x: xBase + column * gap, y };
+  private initialSpawnFor(team: Team, index: number, areaIndex = index % 3): Vec2 {
+    return this.clampFormationPoint(BATTLEFIELD_MAP.spawnPoint(team, areaIndex, index * 5 + areaIndex));
   }
 
-  private initialSpawnFor(team: Team, index: number): Vec2 {
-    const point = this.formationGrid(index, this.squadCountFor(team), false);
-    return { x: team === 'blue' ? point.x : GAME_CONFIG.world.width - point.x, y: point.y };
+  private respawnFor(team: Team, index: number, areaIndex?: number): Vec2 {
+    const id = `${team === 'blue' ? 'B' : 'R'}${String(index + 1).padStart(2, '0')}`;
+    const selectedArea = areaIndex ?? this.plannedRespawnAreas.get(id) ?? this.formationSpawnAreas.get(id) ?? (index % 3);
+    const serial = this.respawnSerial.get(id) ?? 0;
+    return this.clampFormationPoint(BATTLEFIELD_MAP.spawnPoint(team, selectedArea, index * 7 + serial * 11 + selectedArea));
   }
 
-  private respawnFor(team: Team, index: number): Vec2 {
-    const point = this.formationGrid(index, this.squadCountFor(team), true);
-    return { x: team === 'blue' ? point.x : GAME_CONFIG.world.width - point.x, y: point.y };
+  private nextRespawnPoint(formation: Formation, areaIndex: number): Vec2 {
+    const index = this.teamIndexOf(formation);
+    const serial = (this.respawnSerial.get(formation.id) ?? 0) + 1;
+    this.respawnSerial.set(formation.id, serial);
+    this.formationSpawnAreas.set(formation.id, areaIndex);
+    return this.clampFormationPoint(BATTLEFIELD_MAP.spawnPoint(formation.team, areaIndex, index * 7 + serial * 11 + areaIndex));
   }
 
   private updateIntro(rawDt: number): void {
@@ -970,8 +998,9 @@ export class Game {
         continue;
       }
       const index = this.teamIndexOf(formation);
-      const spawn = this.respawnFor(formation.team, index);
-      const inRecoveryZone = this.distance(formation.center, spawn) <= GAME_CONFIG.army.baseRecoveryRadius;
+      const areaIndex = BATTLEFIELD_MAP.nearestSpawnAreaIndex(formation.team, formation.center);
+      const inRecoveryZone = BATTLEFIELD_MAP.inSpawnArea(formation.team, formation.center, GAME_CONFIG.army.baseRecoveryRadius);
+      const spawn = this.respawnFor(formation.team, index, areaIndex);
       const stable = formation.mode === 'line' || formation.mode === 'reforming';
       if (!inRecoveryZone || !stable || formation.moraleShockTimer > 0) {
         this.baseRecoveryTimers.delete(formation.id);
@@ -988,6 +1017,7 @@ export class Game {
       const preservedWeapon = canBannerAttackClass(formation.squadClass)
         ? this.weaponForFormation(formation)
         : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
+      this.formationSpawnAreas.set(formation.id, areaIndex);
       formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, formation.squadClass);
       formation.weapon = preservedWeapon;
       this.humanWeapons.set(formation.id, preservedWeapon);
@@ -997,6 +1027,35 @@ export class Game {
         this.setNotice('補充完了 — 兵員・士気・資材を回復', 'success', 3);
       }
     }
+  }
+
+  claimHumanFormation(
+    formationId: string,
+    squadClass?: SquadClass,
+    spawnAreaIndex?: number,
+    resetForDeployment = false,
+    clearStats = false,
+  ): boolean {
+    const formation = this.formations.find((candidate) => candidate.id === formationId);
+    if (!formation) return false;
+    this.humanFormationIds.add(formationId);
+    formation.isPlayerControlled = true;
+    this.remoteControls.delete(formationId);
+    if (clearStats) this.combatStats.set(formationId, { kills: 0, losses: 0, bannerDamage: 0 });
+    if (resetForDeployment) {
+      const area = Math.max(0, Math.min(2, Math.floor(spawnAreaIndex ?? this.teamIndexOf(formation) % 3)));
+      const selectedClass = squadClass ?? formation.squadClass;
+      formation.reset(this.nextRespawnPoint(formation, area), formation.team === 'blue' ? 0 : Math.PI, selectedClass);
+      this.respawnTimers.delete(formationId);
+      this.deferredRespawns.delete(formationId);
+      this.plannedRespawnClasses.delete(formationId);
+      this.plannedRespawnAreas.delete(formationId);
+    }
+    const weapon: WeaponType = canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
+    formation.weapon = weapon;
+    this.humanWeapons.set(formationId, weapon);
+    this.aiSystem.reset(this.formations);
+    return true;
   }
 
   releaseHumanFormation(formationId: string): void {
@@ -1025,6 +1084,11 @@ export class Game {
 
     if (action.type === 'class') {
       this.plannedRespawnClasses.set(formation.id, action.squadClass);
+      return;
+    }
+    if (action.type === 'spawn') {
+      const spawnIndex = Math.max(0, Math.min(2, Math.floor(action.spawnIndex)));
+      this.plannedRespawnAreas.set(formation.id, spawnIndex);
       return;
     }
     if (formation.aliveCount() === 0 || this.winner) return;
@@ -1104,12 +1168,9 @@ export class Game {
         && formation.mode === 'line';
       if (length > 0.001) {
         const multiplier = formation.forcedMarch ? formation.forcedMarchMultiplier() : 1;
-        const speed = formation.movementSpeed(true) * multiplier * this.fieldworkMovementMultiplier(formation) * dt;
-        formation.center.x += (control.moveX / length) * speed;
-        formation.center.y += (control.moveY / length) * speed;
-        formation.markMoved();
-        if (formation.forcedMarch) formation.applyForcedMarch(dt);
-        this.clampFormationCenter(formation);
+        const speed = formation.movementSpeed(true) * multiplier * dt;
+        const moved = this.moveFormationWithTerrain(formation, control.moveX, control.moveY, speed);
+        if (moved && formation.forcedMarch) formation.applyForcedMarch(dt);
       } else formation.forcedMarch = false;
     }
   }
@@ -1203,12 +1264,9 @@ export class Game {
             && this.distanceToNearestEnemy(formation) > 950;
           formation.forcedMarch = wantsForcedMarch;
           const multiplier = wantsForcedMarch ? formation.forcedMarchMultiplier() : 1;
-          const speed = formation.movementSpeed(false, formation.debugIntent === 'RETREAT') * multiplier * this.fieldworkMovementMultiplier(formation);
-          formation.center.x += (command.move.x / length) * speed * dt;
-          formation.center.y += (command.move.y / length) * speed * dt;
-          formation.markMoved();
-          if (wantsForcedMarch) formation.applyForcedMarch(dt);
-          this.clampFormationCenter(formation);
+          const speed = formation.movementSpeed(false, formation.debugIntent === 'RETREAT') * multiplier * dt;
+          const moved = this.moveFormationWithTerrain(formation, command.move.x, command.move.y, speed);
+          if (moved && wantsForcedMarch) formation.applyForcedMarch(dt);
         } else formation.forcedMarch = false;
       }
     }
@@ -1229,19 +1287,36 @@ export class Game {
       && formation.mode === 'line';
     if (length > 0) {
       const multiplier = formation.forcedMarch ? formation.forcedMarchMultiplier() : 1;
-      const speed = formation.movementSpeed(true) * multiplier * this.fieldworkMovementMultiplier(formation) * dt;
-      formation.center.x += (x / length) * speed;
-      formation.center.y += (y / length) * speed;
-      formation.markMoved();
-      if (formation.forcedMarch) formation.applyForcedMarch(dt);
-      this.clampFormationCenter(formation);
+      const speed = formation.movementSpeed(true) * multiplier * dt;
+      const moved = this.moveFormationWithTerrain(formation, x, y, speed);
+      if (moved && formation.forcedMarch) formation.applyForcedMarch(dt);
     }
   }
 
   private updateCharges(dt: number): void {
     for (const charger of this.formations) {
       if (charger.mode !== 'charging' || charger.aliveCount() === 0) continue;
-      const reached = charger.advanceCharge(dt);
+      if (isChargeCavalryClass(charger.squadClass) && BATTLEFIELD_MAP.isWater(charger.center) && !BATTLEFIELD_MAP.isBridge(charger.center)) {
+        charger.chargeMomentum = 0;
+        charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
+        if (charger === this.playerFormation) this.setNotice('渡河中は騎兵突撃できません', 'warning', 2);
+        continue;
+      }
+      const beforeCharge = { ...charger.center };
+      const terrainMultiplier = Math.max(0.28, BATTLEFIELD_MAP.movementMultiplier(charger.center, charger.squadClass));
+      const reached = charger.advanceCharge(dt * terrainMultiplier);
+      if (!BATTLEFIELD_MAP.isPassable(charger.center)) {
+        charger.center = beforeCharge;
+        charger.chargeMomentum = 0;
+        charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
+        continue;
+      }
+      if (isChargeCavalryClass(charger.squadClass) && BATTLEFIELD_MAP.isWater(charger.center) && !BATTLEFIELD_MAP.isBridge(charger.center)) {
+        charger.chargeMomentum = 0;
+        charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
+        if (charger === this.playerFormation) this.setNotice('渡河で突撃が止まりました', 'warning', 2);
+        continue;
+      }
       this.clampFormationCenter(charger);
       const enemies = this.formations.filter((formation) => formation.team !== charger.team && formation.aliveCount() > 0);
 
@@ -1350,10 +1425,7 @@ export class Game {
 
       if (moveDistance > 8) {
         const step = Math.min(moveDistance, GAME_CONFIG.banner.approachSpeed * dt);
-        formation.center.x += (mdx / moveDistance) * step;
-        formation.center.y += (mdy / moveDistance) * step;
-        formation.markMoved();
-        this.clampFormationCenter(formation);
+        this.moveFormationWithTerrain(formation, mdx, mdy, step);
         formation.bannerAttackTimer = 0;
         continue;
       }
@@ -1453,6 +1525,8 @@ export class Game {
         if (formation.isPlayerControlled) {
           const planned = this.plannedRespawnClasses.get(formation.id) ?? formation.squadClass;
           this.plannedRespawnClasses.set(formation.id, planned);
+          const plannedArea = this.plannedRespawnAreas.get(formation.id) ?? this.formationSpawnAreas.get(formation.id) ?? (this.teamIndexOf(formation) % 3);
+          this.plannedRespawnAreas.set(formation.id, plannedArea);
           if (formation === this.playerFormation) {
             this.cancelChargeAim();
             this.setNotice(
@@ -1482,9 +1556,13 @@ export class Game {
           chosenClass = this.aiSystem.chooseRespawnClass(formation, this.formations, this.banners, this.plannedRespawnClasses);
         }
         const index = this.teamIndexOf(formation);
-        formation.reset(this.respawnFor(formation.team, index), formation.team === 'blue' ? 0 : Math.PI, chosenClass);
+        const chosenArea = formation.isPlayerControlled
+          ? (this.plannedRespawnAreas.get(formation.id) ?? this.formationSpawnAreas.get(formation.id) ?? (index % 3))
+          : (index % 3);
+        formation.reset(this.nextRespawnPoint(formation, chosenArea), formation.team === 'blue' ? 0 : Math.PI, chosenClass);
         this.respawnTimers.delete(formation.id);
         this.plannedRespawnClasses.delete(formation.id);
+        this.plannedRespawnAreas.delete(formation.id);
         if (formation.isPlayerControlled) {
           const nextWeapon: WeaponType = canVolleyClass(chosenClass) ? 'musket' : 'bayonet';
           this.humanWeapons.set(formation.id, nextWeapon);
@@ -1559,30 +1637,25 @@ export class Game {
     if (formation.isPlayerControlled) this.screenShake = Math.max(this.screenShake, 1.4);
   }
 
-  private resolveFriendlyFormationSeparation(): void {
-    const minDistance = GAME_CONFIG.formation.friendlySeparation;
-    const minDistanceSq = minDistance * minDistance;
-    for (let i = 0; i < this.formations.length; i += 1) {
-      const a = this.formations[i];
-      if (a.aliveCount() === 0 || !this.isSeparationMode(a.mode)) continue;
-      for (let j = i + 1; j < this.formations.length; j += 1) {
-        const b = this.formations[j];
-        if (b.team !== a.team || b.aliveCount() === 0 || !this.isSeparationMode(b.mode)) continue;
-        const dx = b.center.x - a.center.x;
-        const dy = b.center.y - a.center.y;
-        const distanceSq = dx * dx + dy * dy;
-        if (distanceSq <= 0.001 || distanceSq >= minDistanceSq) continue;
-        const distance = Math.sqrt(distanceSq);
-        const push = (minDistance - distance) * 0.5;
-        const nx = dx / distance;
-        const ny = dy / distance;
-        a.center.x -= nx * push;
-        a.center.y -= ny * push;
-        b.center.x += nx * push;
-        b.center.y += ny * push;
-        this.clampFormationCenter(a);
-        this.clampFormationCenter(b);
-      }
+  private rescueFormationsFromMountains(): void {
+    for (const formation of this.formations) {
+      if (formation.aliveCount() <= 0) continue;
+      this.rescueFormationFromMountain(formation);
+    }
+  }
+
+  private rescueFormationFromMountain(formation: Formation): void {
+    if (BATTLEFIELD_MAP.isPassable(formation.center)) return;
+    const safe = BATTLEFIELD_MAP.nearestPassablePoint(formation.center);
+    if (!BATTLEFIELD_MAP.isPassable(safe)) return;
+    const dx = safe.x - formation.center.x;
+    const dy = safe.y - formation.center.y;
+    formation.center.x = safe.x;
+    formation.center.y = safe.y;
+    for (const soldier of formation.soldiers) {
+      if (soldier.dead) continue;
+      soldier.position.x += dx;
+      soldier.position.y += dy;
     }
   }
 
@@ -1837,6 +1910,27 @@ export class Game {
   }
 
 
+  private moveFormationWithTerrain(formation: Formation, dx: number, dy: number, baseDistance: number): boolean {
+    const length = Math.hypot(dx, dy);
+    if (length <= 0.0001 || baseDistance <= 0) return false;
+    this.rescueFormationFromMountain(formation);
+    const terrainMultiplier = BATTLEFIELD_MAP.movementMultiplier(formation.center, formation.squadClass);
+    if (terrainMultiplier <= 0) return false;
+    const fieldworkMultiplier = this.fieldworkMovementMultiplier(formation);
+    const next = BATTLEFIELD_MAP.resolveStep(
+      formation.center,
+      { x: dx / length, y: dy / length },
+      baseDistance * terrainMultiplier * fieldworkMultiplier,
+    );
+    const moved = Math.hypot(next.x - formation.center.x, next.y - formation.center.y) > 0.05;
+    if (!moved) return false;
+    formation.center.x = next.x;
+    formation.center.y = next.y;
+    formation.markMoved();
+    this.clampFormationCenter(formation);
+    return true;
+  }
+
   private fieldworkMovementMultiplier(formation: Formation): number {
     for (const fieldwork of this.fieldworks) {
       if (!fieldwork.active) continue;
@@ -2006,20 +2100,15 @@ export class Game {
   }
 
   private minimapWorldPoint(point: Vec2): Vec2 | null {
-    const x = GAME_CONFIG.viewport.width - GAME_CONFIG.minimap.width - GAME_CONFIG.minimap.margin;
-    const y = GAME_CONFIG.viewport.height - GAME_CONFIG.minimap.height - GAME_CONFIG.minimap.margin - GAME_CONFIG.minimap.controlHeight - GAME_CONFIG.minimap.controlGap;
+    const rect = minimapRect(this.minimapPosition);
     if (
-      point.x < x || point.x > x + GAME_CONFIG.minimap.width
-      || point.y < y || point.y > y + GAME_CONFIG.minimap.height
+      point.x < rect.x || point.x > rect.x + rect.width
+      || point.y < rect.y || point.y > rect.y + rect.height
     ) return null;
     return {
-      x: ((point.x - x) / GAME_CONFIG.minimap.width) * GAME_CONFIG.world.width,
-      y: ((point.y - y) / GAME_CONFIG.minimap.height) * GAME_CONFIG.world.height,
+      x: ((point.x - rect.x) / rect.width) * GAME_CONFIG.world.width,
+      y: ((point.y - rect.y) / rect.height) * GAME_CONFIG.world.height,
     };
-  }
-
-  private isSeparationMode(mode: FormationMode): boolean {
-    return mode === 'line' || mode === 'reforming' || mode === 'bannerAttack' || mode === 'routed';
   }
 
   private cancelChargeAim(): void {

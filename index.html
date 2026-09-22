@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Phase 3.10 - Field Doctrine Expansion" />
-    <title>Bannerfall - Phase 3.10 Field Doctrine Expansion</title>
+    <meta name="description" content="Bannerfall Version 4.0.4 - Grand River Front" />
+    <title>Bannerfall - Version 4.0.4 Grand River Front</title>
   </head>
   <body>
     <main id="app">
@@ -95,12 +95,15 @@
                 </div>
               </div>
 
-              <div id="deployment-map" class="deployment-map" aria-label="Deployment map">
-                <div class="deployment-zone blue-zone"><span>BLUE 出撃区域</span></div>
-                <div class="deployment-front">中立地帯</div>
-                <div class="deployment-zone red-zone"><span>RED 出撃区域</span></div>
-                <div class="map-banner blue-banner-marker">⚑</div>
-                <div class="map-banner red-banner-marker">⚑</div>
+              <div id="deployment-map" class="deployment-map" aria-label="大河戦線 deployment map">
+                <div class="deployment-zone blue-zone"><span>BLUE 出撃区域 · 左下</span></div>
+                <div class="deployment-zone red-zone"><span>RED 出撃区域 · 右上</span></div>
+                <div class="deployment-river"><span>大河</span></div>
+                <div class="deployment-crossing crossing-west">浅瀬</div>
+                <div class="deployment-crossing crossing-center">中央橋 · 合金予定地</div>
+                <div class="deployment-crossing crossing-east">浅瀬</div>
+                <div class="map-banner blue-banner-marker" title="BLUE 旗">⚑</div>
+                <div class="map-banner red-banner-marker" title="RED 旗">⚑</div>
                 <div id="spawn-points" class="spawn-points"></div>
               </div>
 
@@ -147,7 +150,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Phase 3.10 — 戦闘教義拡張</p>
+            <p id="battle-subtitle">Version 4.0.4 — 大河戦線</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
@@ -197,12 +200,6 @@
 
           <div id="context-hint" class="context-hint hidden"></div>
 
-          <div class="minimap-opacity-control" aria-label="Minimap opacity">
-            <span>MAP</span>
-            <input id="minimap-opacity" type="range" min="20" max="100" step="2" value="86" aria-label="Minimap opacity" />
-            <strong id="minimap-opacity-value">86%</strong>
-          </div>
-
           <div id="hotbar" class="hotbar" aria-label="Action hotbar">
             <div class="slot" data-slot="1"><span class="key">1</span><span class="icon">━</span><small>MUSKET</small></div>
             <div class="slot" data-slot="2"><span class="key">2</span><span class="icon">†</span><small>BAYONET</small></div>
@@ -222,10 +219,28 @@
             </div>
             <div class="class-cards">
             </div>
+            <div class="respawn-spawn-select" aria-label="次回スポーン地点">
+              <strong>次回スポーン地点</strong>
+              <div class="respawn-spawn-buttons">
+                <button type="button" data-respawn-spawn="0">A 後方営地</button>
+                <button type="button" data-respawn-spawn="1">B 西部営地</button>
+                <button type="button" data-respawn-spawn="2">C 東部営地</button>
+              </div>
+            </div>
             <div class="class-intel"><span id="army-composition"></span><span id="class-recommendation"></span></div>
           </div>
 
-          <div class="overlay hidden" id="pause-overlay"><div class="overlay-card"><h2>一時停止</h2><p>Esc / P で再開</p></div></div>
+          <div class="overlay hidden" id="pause-overlay"><div class="overlay-card"><h2>一時停止</h2><p>P で再開</p></div></div>
+
+          <div class="overlay hidden" id="settings-overlay" aria-label="Battle settings">
+            <div class="settings-card">
+              <div class="settings-head"><div><small>ESC MENU</small><h2>設定</h2></div><button id="settings-close" type="button">戦闘へ戻る</button></div>
+              <p class="settings-warning">オンライン対戦中のため、設定画面を開いている間も戦闘は進行します。</p>
+              <label class="battle-setting-row"><span>SE音量</span><input id="sfx-volume" type="range" min="0" max="100" step="2" value="72" /><strong id="sfx-volume-value">72%</strong></label>
+              <label class="battle-setting-row"><span>ミニマップ透明度</span><input id="minimap-opacity" type="range" min="20" max="100" step="2" value="86" /><strong id="minimap-opacity-value">86%</strong></label>
+              <div class="battle-setting-row map-position-row"><span>ミニマップ配置</span><div class="map-position-buttons"><button type="button" data-map-position="top-left">左上</button><button type="button" data-map-position="bottom-right">右下</button></div></div>
+            </div>
+          </div>
         </div>
 
         <footer class="controls">
@@ -237,11 +252,12 @@
           <span><kbd>5</kbd> 馬防柵を設置</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>
           <span><kbd>Shift</kbd> 強行軍（士気消費・1で停止）</span>
-          <span><kbd>N</kbd> 次回兵科を予約</span>
+          <span><kbd>N</kbd> 次回兵科 / Spawnを予約</span>
           <span><kbd>Enter</kbd> チャット</span>
           <span><kbd>Wheel</kbd> ズーム</span>
           <span><kbd>Minimap Click</kbd> カメラ移動</span>
           <span><kbd>Space</kbd> 自部隊追従へ戻る</span>
+          <span><kbd>Esc</kbd> 設定</span>
           <span><kbd>F3</kbd> AIデバッグ</span>
         </footer>
       </section>

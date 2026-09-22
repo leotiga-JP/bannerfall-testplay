@@ -45,6 +45,7 @@ export class Formation {
   spawnProtectionTimer = 0;
   debugIntent = 'HOLD';
   debugTargetId: string | null = null;
+  debugNavPath: Vec2[] = [];
   artilleryDeployTimer = 0;
   artilleryDeployed = false;
   chargeMomentum = 0;
@@ -96,6 +97,7 @@ export class Formation {
     this.spawnProtectionTimer = GAME_CONFIG.army.spawnProtectionSeconds;
     this.debugIntent = this.isPlayerControlled ? 'PLAYER' : 'HOLD';
     this.debugTargetId = null;
+    this.debugNavPath = [];
     this.layoutCount = this.soldiers.length;
     this.artilleryDeployTimer = 0;
     this.artilleryDeployed = false;

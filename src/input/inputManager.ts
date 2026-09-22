@@ -14,6 +14,7 @@ export class InputManager {
   private panDelta: Vec2 = { x: 0, y: 0 };
   private wheelDelta = 0;
   private queuedClassSelection: SquadClass | null = null;
+  private blocked = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     window.addEventListener('keydown', (event) => {
@@ -74,10 +75,23 @@ export class InputManager {
   }
 
   isDown(key: string): boolean {
-    return this.keys.has(key.toLowerCase());
+    return !this.blocked && this.keys.has(key.toLowerCase());
+  }
+
+  setBlocked(blocked: boolean): void {
+    this.blocked = blocked;
+    if (blocked) {
+      this.keys.clear();
+      this.pressed.clear();
+      this.released.clear();
+      this.clearActionInputs();
+      this.panDelta = { x: 0, y: 0 };
+      this.wheelDelta = 0;
+    }
   }
 
   consumePressed(key: string): boolean {
+    if (this.blocked) return false;
     const normalized = key.toLowerCase();
     if (!this.pressed.has(normalized)) return false;
     this.pressed.delete(normalized);
@@ -85,7 +99,7 @@ export class InputManager {
   }
 
   consumePause(): boolean {
-    return this.consumePressed('escape') || this.consumePressed('p');
+    return false;
   }
 
   consumeRestart(): boolean {
@@ -146,13 +160,14 @@ export class InputManager {
   }
 
   consumePrimaryClick(): Vec2 | null {
-    if (!this.leftClickPoint) return null;
+    if (this.blocked || !this.leftClickPoint) return null;
     const point = { ...this.leftClickPoint };
     this.leftClickPoint = null;
     return point;
   }
 
   consumeChargeStart(): boolean {
+    if (this.blocked) return false;
     if (this.rightMousePressed) {
       this.rightMousePressed = false;
       return true;
@@ -161,7 +176,7 @@ export class InputManager {
   }
 
   consumeRightPress(): boolean {
-    if (!this.rightMousePressed) return false;
+    if (this.blocked || !this.rightMousePressed) return false;
     this.rightMousePressed = false;
     return true;
   }
@@ -171,6 +186,7 @@ export class InputManager {
   }
 
   consumeChargeRelease(): boolean {
+    if (this.blocked) return false;
     if (this.rightMouseReleased) {
       this.rightMouseReleased = false;
       return true;
@@ -179,7 +195,7 @@ export class InputManager {
   }
 
   isChargeHeld(): boolean {
-    return this.rightMouseDown;
+    return !this.blocked && this.rightMouseDown;
   }
 
   getPointer(): Vec2 {
@@ -187,12 +203,14 @@ export class InputManager {
   }
 
   consumePanDelta(): Vec2 {
+    if (this.blocked) return { x: 0, y: 0 };
     const delta = { ...this.panDelta };
     this.panDelta = { x: 0, y: 0 };
     return delta;
   }
 
   consumeWheelDelta(): number {
+    if (this.blocked) return 0;
     const delta = this.wheelDelta;
     this.wheelDelta = 0;
     return delta;

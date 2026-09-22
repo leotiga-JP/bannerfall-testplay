@@ -5,6 +5,8 @@ import { Projectile } from '../entities/projectile';
 import { Fieldwork } from '../entities/fieldwork';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
+import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
+import { BATTLEFIELD_MAP, CROSSINGS, MAP_SITES, type TerrainType } from '../game/battlefieldMap';
 import type { AxeStrike, GameSnapshot } from '../game/game';
 import { classShortLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { artilleryProfile } from '../game/classProfiles';
@@ -14,11 +16,17 @@ import type { MeleeStrike } from '../systems/meleeSystem';
 
 export class Renderer {
   private minimapOpacity = 0.86;
+  private minimapPosition: MinimapPosition = 'bottom-right';
+  private minimapTerrainCache: HTMLCanvasElement | null = null;
 
   constructor(private readonly ctx: CanvasRenderingContext2D) {}
 
   setMinimapOpacity(value: number): void {
     this.minimapOpacity = Math.max(0.2, Math.min(1, value));
+  }
+
+  setMinimapPosition(value: MinimapPosition): void {
+    this.minimapPosition = value;
   }
 
   private routedPalette(team: Team): { body: string; skin: string; dark: string; label: string; morale: string; minimap: string; minimapLocal: string } {
@@ -104,43 +112,159 @@ export class Renderer {
 
   private drawBattlefield(camera: Camera): void {
     const { ctx } = this;
-    ctx.fillStyle = '#4c623f';
+    ctx.fillStyle = '#536746';
     ctx.fillRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
 
-    const bounds = camera.visibleBounds(100);
-    const grid = GAME_CONFIG.world.grid;
-    const startX = Math.max(0, Math.floor(bounds.left / grid) * grid);
-    const endX = Math.min(GAME_CONFIG.world.width, Math.ceil(bounds.right / grid) * grid);
-    const startY = Math.max(0, Math.floor(bounds.top / grid) * grid);
-    const endY = Math.min(GAME_CONFIG.world.height, Math.ceil(bounds.bottom / grid) * grid);
+    const bounds = camera.visibleBounds(160);
+    const tile = BATTLEFIELD_MAP.tileSize;
+    const startCol = Math.max(0, Math.floor(bounds.left / tile));
+    const endCol = Math.min(BATTLEFIELD_MAP.columns - 1, Math.ceil(bounds.right / tile));
+    const startRow = Math.max(0, Math.floor(bounds.top / tile));
+    const endRow = Math.min(BATTLEFIELD_MAP.rows - 1, Math.ceil(bounds.bottom / tile));
 
-    ctx.strokeStyle = 'rgba(226, 220, 183, 0.07)';
+    for (let row = startRow; row <= endRow; row += 1) {
+      for (let col = startCol; col <= endCol; col += 1) {
+        const terrain = BATTLEFIELD_MAP.terrainAtTile(col, row);
+        const x = col * tile;
+        const y = row * tile;
+        ctx.fillStyle = this.terrainColor(terrain);
+        ctx.fillRect(x, y, tile + 1, tile + 1);
+        this.drawTerrainDetail(terrain, x, y, tile, col, row, camera);
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(235, 225, 192, 0.05)';
     ctx.lineWidth = 1 / camera.zoom;
     ctx.beginPath();
-    for (let x = startX; x <= endX; x += grid) {
-      ctx.moveTo(x, startY);
-      ctx.lineTo(x, endY);
+    for (let col = startCol; col <= endCol + 1; col += 1) {
+      const x = col * tile;
+      ctx.moveTo(x, startRow * tile);
+      ctx.lineTo(x, (endRow + 1) * tile);
     }
-    for (let y = startY; y <= endY; y += grid) {
-      ctx.moveTo(startX, y);
-      ctx.lineTo(endX, y);
+    for (let row = startRow; row <= endRow + 1; row += 1) {
+      const y = row * tile;
+      ctx.moveTo(startCol * tile, y);
+      ctx.lineTo((endCol + 1) * tile, y);
     }
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(235, 221, 176, 0.35)';
+    ctx.strokeStyle = 'rgba(235, 221, 176, 0.38)';
     ctx.lineWidth = 4 / camera.zoom;
     ctx.strokeRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
 
-    this.drawHomeGround('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.y }, camera);
-    this.drawHomeGround('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.y }, camera);
+    this.drawHomeGround('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.blueY }, camera);
+    this.drawHomeGround('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.redY }, camera);
+    this.drawSpawnCamp('blue', BATTLEFIELD_MAP.spawnCenter('blue'), camera);
+    this.drawSpawnCamp('red', BATTLEFIELD_MAP.spawnCenter('red'), camera);
+    this.drawMapSites(camera);
+    this.drawCrossingLabels(camera);
 
-    this.drawSpawnCamp('blue', { x: GAME_CONFIG.army.respawnX + 170, y: GAME_CONFIG.banner.y }, camera);
-    this.drawSpawnCamp('red', { x: GAME_CONFIG.world.width - GAME_CONFIG.army.respawnX - 170, y: GAME_CONFIG.banner.y }, camera);
-
-    ctx.fillStyle = 'rgba(35, 48, 29, 0.28)';
-    ctx.font = `${32 / camera.zoom}px Georgia, serif`;
+    ctx.fillStyle = 'rgba(30, 42, 27, 0.28)';
+    ctx.font = `${28 / camera.zoom}px Georgia, serif`;
     ctx.textAlign = 'center';
-    ctx.fillText('THE OPEN FIELD', GAME_CONFIG.world.width / 2, GAME_CONFIG.world.height / 2);
+    ctx.fillText('大河戦線 · GRAND RIVER FRONT', GAME_CONFIG.world.width / 2, GAME_CONFIG.world.height / 2 - 420);
+  }
+
+  private terrainColor(terrain: TerrainType): string {
+    switch (terrain) {
+      case 'road': return '#7b704e';
+      case 'forest': return '#344f36';
+      case 'mountain': return '#5b5a50';
+      case 'river': return '#385e70';
+      case 'ford': return '#587178';
+      case 'bridge': return '#8b7048';
+      default: return '#536746';
+    }
+  }
+
+  private drawTerrainDetail(terrain: TerrainType, x: number, y: number, tile: number, col: number, row: number, camera: Camera): void {
+    const { ctx } = this;
+    const seed = ((col * 73856093) ^ (row * 19349663)) >>> 0;
+    const n = (seed % 997) / 997;
+    if (terrain === 'forest') {
+      ctx.fillStyle = 'rgba(18, 42, 25, 0.46)';
+      for (let i = 0; i < 3; i += 1) {
+        const px = x + tile * (0.22 + ((n * 13 + i * 0.31) % 0.62));
+        const py = y + tile * (0.20 + ((n * 7 + i * 0.27) % 0.60));
+        ctx.beginPath();
+        ctx.arc(px, py, (8 + ((seed >> (i + 2)) % 7)) / camera.zoom, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (terrain === 'mountain') {
+      ctx.fillStyle = 'rgba(40, 39, 35, 0.42)';
+      ctx.beginPath();
+      ctx.moveTo(x + tile * 0.12, y + tile * 0.82);
+      ctx.lineTo(x + tile * 0.48, y + tile * (0.16 + n * 0.12));
+      ctx.lineTo(x + tile * 0.88, y + tile * 0.82);
+      ctx.closePath();
+      ctx.fill();
+    } else if (terrain === 'river' || terrain === 'ford') {
+      ctx.strokeStyle = terrain === 'river' ? 'rgba(185, 224, 232, 0.16)' : 'rgba(226, 215, 172, 0.20)';
+      ctx.lineWidth = 2 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(x + 8, y + tile * (0.36 + n * 0.16));
+      ctx.quadraticCurveTo(x + tile * 0.5, y + tile * (0.20 + n * 0.18), x + tile - 8, y + tile * (0.45 + n * 0.12));
+      ctx.stroke();
+    } else if (terrain === 'bridge') {
+      ctx.strokeStyle = 'rgba(54, 38, 24, 0.48)';
+      ctx.lineWidth = 3 / camera.zoom;
+      for (let i = 1; i < 4; i += 1) {
+        ctx.beginPath();
+        ctx.moveTo(x + i * tile / 4, y + 4);
+        ctx.lineTo(x + i * tile / 4, y + tile - 4);
+        ctx.stroke();
+      }
+    } else if (terrain === 'road') {
+      ctx.strokeStyle = 'rgba(232, 214, 158, 0.10)';
+      ctx.lineWidth = 2 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(x + 4, y + tile * 0.5);
+      ctx.lineTo(x + tile - 4, y + tile * 0.5);
+      ctx.stroke();
+    }
+  }
+
+  private drawMapSites(camera: Camera): void {
+    const { ctx } = this;
+    for (const site of MAP_SITES) {
+      if (!this.pointVisible(site.position, camera, 180)) continue;
+      ctx.save();
+      const isResource = site.kind === 'resource';
+      const teamColor = site.team === 'blue' ? 'rgba(120, 177, 240, 0.72)'
+        : site.team === 'red' ? 'rgba(232, 125, 125, 0.72)'
+          : 'rgba(235, 210, 111, 0.82)';
+      ctx.strokeStyle = teamColor;
+      ctx.fillStyle = isResource ? 'rgba(229, 205, 116, 0.10)' : 'rgba(230, 222, 194, 0.07)';
+      ctx.lineWidth = 3 / camera.zoom;
+      ctx.setLineDash([10 / camera.zoom, 7 / camera.zoom]);
+      ctx.beginPath();
+      ctx.arc(site.position.x, site.position.y, isResource ? 64 : 82, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = teamColor;
+      ctx.font = `bold ${12 / camera.zoom}px ui-monospace, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(site.shortLabel, site.position.x, site.position.y + 5 / camera.zoom);
+      ctx.fillStyle = 'rgba(235, 228, 207, 0.60)';
+      ctx.font = `${9 / camera.zoom}px ui-monospace, monospace`;
+      ctx.fillText('V4.1予定', site.position.x, site.position.y + 24 / camera.zoom);
+      ctx.restore();
+    }
+  }
+
+  private drawCrossingLabels(camera: Camera): void {
+    const { ctx } = this;
+    for (const crossing of CROSSINGS) {
+      const point = { x: crossing.x, y: BATTLEFIELD_MAP.riverY(crossing.x) };
+      if (!this.pointVisible(point, camera, 150)) continue;
+      ctx.save();
+      ctx.fillStyle = 'rgba(245, 232, 194, 0.72)';
+      ctx.font = `bold ${10 / camera.zoom}px ui-monospace, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(crossing.label, point.x, point.y - 205 / camera.zoom);
+      ctx.restore();
+    }
   }
 
   private drawHomeGround(team: 'blue' | 'red', point: Vec2, camera: Camera): void {
@@ -157,17 +281,20 @@ export class Renderer {
   private drawSpawnCamp(team: 'blue' | 'red', point: Vec2, camera: Camera): void {
     const { ctx } = this;
     ctx.save();
-    ctx.strokeStyle = team === 'blue' ? 'rgba(122, 176, 238, 0.34)' : 'rgba(238, 122, 122, 0.34)';
-    ctx.fillStyle = team === 'blue' ? 'rgba(49, 88, 133, 0.10)' : 'rgba(140, 54, 54, 0.10)';
+    ctx.strokeStyle = team === 'blue' ? 'rgba(122, 176, 238, 0.48)' : 'rgba(238, 122, 122, 0.48)';
+    ctx.fillStyle = team === 'blue' ? 'rgba(49, 88, 133, 0.13)' : 'rgba(140, 54, 54, 0.13)';
     ctx.lineWidth = 4 / camera.zoom;
     ctx.setLineDash([18 / camera.zoom, 12 / camera.zoom]);
-    ctx.fillRect(point.x - 330, point.y - 1650, 660, 3300);
-    ctx.strokeRect(point.x - 330, point.y - 1650, 660, 3300);
+    ctx.fillRect(point.x - 430, point.y - 360, 860, 720);
+    ctx.strokeRect(point.x - 430, point.y - 360, 860, 720);
     ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(235, 226, 198, 0.5)';
-    ctx.font = `${18 / camera.zoom}px ui-monospace, monospace`;
+    ctx.fillStyle = 'rgba(235, 226, 198, 0.68)';
+    ctx.font = `bold ${18 / camera.zoom}px ui-monospace, monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText('REINFORCEMENT CAMP', point.x, point.y - 1700);
+    ctx.fillText(`${team === 'blue' ? 'BLUE' : 'RED'} RESPAWN CAMP`, point.x, point.y - 390);
+    ctx.font = `${11 / camera.zoom}px ui-monospace, monospace`;
+    ctx.fillStyle = 'rgba(235, 226, 198, 0.46)';
+    ctx.fillText('ここで待機すると兵員・士気・資材を回復', point.x, point.y - 365);
     ctx.restore();
   }
 
@@ -703,16 +830,15 @@ export class Renderer {
 
   private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot, localFormationId: string | null): void {
     const { ctx } = this;
-    const width = GAME_CONFIG.minimap.width;
-    const height = GAME_CONFIG.minimap.height;
-    const x = GAME_CONFIG.viewport.width - width - GAME_CONFIG.minimap.margin;
-    const y = GAME_CONFIG.viewport.height - height - GAME_CONFIG.minimap.margin - GAME_CONFIG.minimap.controlHeight - GAME_CONFIG.minimap.controlGap;
+    const { x, y, width, height } = minimapRect(this.minimapPosition);
     const sx = width / GAME_CONFIG.world.width;
     const sy = height / GAME_CONFIG.world.height;
 
     ctx.save();
     ctx.globalAlpha = this.minimapOpacity;
-    ctx.fillStyle = 'rgba(19, 20, 15, 0.86)';
+    if (!this.minimapTerrainCache) this.minimapTerrainCache = this.buildMinimapTerrainCache(width, height);
+    ctx.drawImage(this.minimapTerrainCache, x, y, width, height);
+    ctx.fillStyle = 'rgba(15, 16, 12, 0.16)';
     ctx.fillRect(x, y, width, height);
     ctx.strokeStyle = snapshot.cameraFollow ? 'rgba(224, 211, 170, 0.65)' : 'rgba(255, 218, 115, 0.88)';
     ctx.lineWidth = 1.5;
@@ -745,6 +871,18 @@ export class Renderer {
       }
     }
 
+    for (const site of MAP_SITES) {
+      const px = x + site.position.x * sx;
+      const py = y + site.position.y * sy;
+      ctx.fillStyle = site.team === 'blue' ? 'rgba(125, 176, 232, 0.75)'
+        : site.team === 'red' ? 'rgba(226, 124, 124, 0.75)'
+          : 'rgba(236, 211, 116, 0.85)';
+      const r = site.resource === 'alloy' ? 3.4 : 2.1;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     for (const banner of banners) {
       const px = x + banner.position.x * sx;
       const py = y + banner.position.y * sy;
@@ -772,6 +910,23 @@ export class Renderer {
     ctx.textAlign = 'left';
     ctx.fillText('TACTICAL MAP · CLICK TO JUMP', x + 7, y + 12);
     ctx.restore();
+  }
+
+  private buildMinimapTerrainCache(width: number, height: number): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+    const tileW = width / BATTLEFIELD_MAP.columns;
+    const tileH = height / BATTLEFIELD_MAP.rows;
+    for (let row = 0; row < BATTLEFIELD_MAP.rows; row += 1) {
+      for (let col = 0; col < BATTLEFIELD_MAP.columns; col += 1) {
+        ctx.fillStyle = this.terrainColor(BATTLEFIELD_MAP.terrainAtTile(col, row));
+        ctx.fillRect(col * tileW, row * tileH, tileW + 1, tileH + 1);
+      }
+    }
+    return canvas;
   }
 
   private drawPlayerMode(snapshot: GameSnapshot): void {

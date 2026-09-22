@@ -64,7 +64,7 @@ export function classShortLabel(value: SquadClass): string {
     case 'engineer': return '工兵';
     case 'dragoon': return '竜騎';
     case 'cavalry': return '騎兵';
-    case 'hussar': return '軽騎';
+    case 'hussar': return 'フッサー';
     case 'cuirassier': return '胸甲';
     case 'artillery': return '野砲';
     case 'heavyArtillery': return '重砲';

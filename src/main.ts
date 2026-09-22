@@ -1,6 +1,7 @@
 import './styles.css';
 import { SQUAD_CLASSES, classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
 import { NetworkClient } from './network/networkClient';
+import { BATTLEFIELD_MAP, SPAWN_AREA_COUNT } from './game/battlefieldMap';
 import { MultiplayerBattle } from './network/multiplayerBattle';
 import type { ChatMessage, MatchStartPayload, RoomBrowserEntry, RoomState, RoomVisibility } from './network/protocol';
 
@@ -36,7 +37,7 @@ const required = [
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Phase 3.10 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.0.4 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
@@ -63,7 +64,7 @@ function renderClassCatalogs(): void {
   if (!lobby || !respawn) return;
   lobby.innerHTML = '';
   respawn.innerHTML = '';
-  SQUAD_CLASSES.forEach((squadClass, index) => {
+  SQUAD_CLASSES.forEach((squadClass) => {
     const info = CLASS_UI[squadClass];
     const button = document.createElement('button');
     button.type = 'button';
@@ -78,9 +79,7 @@ function renderClassCatalogs(): void {
     const card = document.createElement('div');
     card.className = 'class-card';
     card.dataset.class = squadClass;
-    const key = index < 9 ? String(index + 1) : 'CLICK';
-    card.innerHTML = `<span class="class-key"></span><strong></strong><small></small><em></em>`;
-    card.querySelector('.class-key')!.textContent = key;
+    card.innerHTML = `<strong></strong><small></small><em></em>`;
     card.querySelector('strong')!.textContent = classLabel(squadClass);
     card.querySelector('small')!.textContent = info.summary;
     card.querySelector('em')!.textContent = info.role;
@@ -159,7 +158,8 @@ function classLabel(squadClass: SquadClass): string {
 
 function spawnLabel(team: Team, index: number | null): string {
   if (index === null) return 'NO SPAWN';
-  return `${team === 'blue' ? 'B' : 'R'}${String(index + 1).padStart(2, '0')}`;
+  const area = BATTLEFIELD_MAP.spawnArea(team, index);
+  return area.label;
 }
 
 function roomPhaseLabel(phase: RoomBrowserEntry['phase']): string {
@@ -170,8 +170,8 @@ function roomPhaseLabel(phase: RoomBrowserEntry['phase']): string {
 
 function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
   roomBrowserList!.innerHTML = '';
-  const lobbyCount = entries.filter((entry) => entry.phase === 'lobby').length;
-  roomBrowserSummary!.textContent = `${entries.length} PUBLIC ROOMS · ${lobbyCount} JOINABLE`;
+  const joinableCount = entries.filter((entry) => entry.joinable).length;
+  roomBrowserSummary!.textContent = `${entries.length} PUBLIC ROOMS · ${joinableCount} JOINABLE`;
 
   if (entries.length === 0) {
     const empty = document.createElement('div');
@@ -213,9 +213,13 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
 
     const join = document.createElement('button');
     join.className = 'room-browser-join';
-    const full = entry.players >= entry.maxPlayers;
-    join.disabled = entry.phase !== 'lobby' || full;
-    join.textContent = entry.phase !== 'lobby' ? 'IN BATTLE' : full ? 'FULL' : entry.passwordProtected ? 'PASSWORD' : 'JOIN';
+    const full = entry.players >= entry.maxPlayers || !entry.joinable;
+    join.disabled = entry.phase === 'countdown' || full;
+    join.textContent = full
+      ? 'FULL'
+      : entry.phase === 'battle'
+        ? (entry.passwordProtected ? 'PASSWORD' : 'JOIN BATTLE')
+        : entry.passwordProtected ? 'PASSWORD' : 'JOIN';
     join.addEventListener('click', async () => {
       try {
         const name = cleanPlayerName();
@@ -268,57 +272,49 @@ function renderPlayers(room: RoomState): void {
   redCount.textContent = `${redReady} READY`;
 }
 
-function spawnPointPercent(team: Team, index: number, count: number): { x: number; y: number } {
-  // Schematic deployment map: keep the same row/column ordering as the battlefield,
-  // but spread buttons across each deployment zone so 50-player layouts stay clickable.
-  const columns = count <= 20 ? Math.min(4, count) : count <= 35 ? 5 : 6;
-  const rows = Math.ceil(count / columns);
-  const row = Math.floor(index / columns);
-  const column = index % columns;
-  const xStep = columns <= 1 ? 0 : column / (columns - 1);
-  const yStep = rows <= 1 ? 0.5 : row / (rows - 1);
-  const blueX = 8 + xStep * 29;
-  const redX = 92 - xStep * 29;
-  return { x: team === 'blue' ? blueX : redX, y: 12 + yStep * 76 };
+function spawnPointPercent(team: Team, index: number): { x: number; y: number } {
+  const bluePositions = [
+    { x: 12, y: 85 },
+    { x: 24, y: 73 },
+    { x: 36, y: 84 },
+  ];
+  const blue = bluePositions[Math.max(0, Math.min(2, index))];
+  return team === 'blue' ? blue : { x: 100 - blue.x, y: 100 - blue.y };
 }
 
 function renderDeploymentMap(room: RoomState): void {
   const local = room.players.find((player) => player.id === network.clientId);
   if (!local) return;
   spawnPoints!.innerHTML = '';
-  const count = local.team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
-  const occupied = new Map<number, string>();
-  for (const player of room.players) {
-    if (player.team === local.team && player.spawnIndex !== null) occupied.set(player.spawnIndex, player.name);
-  }
-  for (let index = 0; index < count; index += 1) {
-    const position = spawnPointPercent(local.team, index, count);
+  const canEdit = room.phase === 'lobby' || (room.phase === 'battle' && local.formationId === null);
+  for (let index = 0; index < SPAWN_AREA_COUNT; index += 1) {
+    const position = spawnPointPercent(local.team, index);
     const button = document.createElement('button');
     button.className = `spawn-point ${local.team}`;
     button.style.left = `${position.x}%`;
     button.style.top = `${position.y}%`;
     button.dataset.spawnIndex = String(index);
-    const holder = occupied.get(index);
     const own = local.spawnIndex === index;
-    if (holder) button.classList.add(own ? 'selected' : 'occupied');
-    button.textContent = own ? '★' : holder ? '×' : String(index + 1);
-    button.title = holder ? `${spawnLabel(local.team, index)} — ${holder}` : `${spawnLabel(local.team, index)} — FREE`;
-    button.disabled = (!!holder && !own) || local.ready || room.phase !== 'lobby';
+    if (own) button.classList.add('selected');
+    button.textContent = BATTLEFIELD_MAP.spawnArea(local.team, index).shortLabel;
+    button.title = `${spawnLabel(local.team, index)} — AREA内から分散出撃`;
+    button.disabled = !canEdit || (room.phase === 'lobby' && local.ready);
     button.addEventListener('click', () => network.selectSpawn(index));
     spawnPoints!.appendChild(button);
   }
   deploymentStatus!.textContent = local.spawnIndex === null
-    ? `SELECT ${local.team.toUpperCase()} DEPLOYMENT POINT`
-    : `DEPLOYMENT ${spawnLabel(local.team, local.spawnIndex)} · ${classLabel(local.squadClass)}`;
+    ? `SELECT ${local.team.toUpperCase()} SPAWN AREA`
+    : `${spawnLabel(local.team, local.spawnIndex)} · ${classLabel(local.squadClass)}${room.phase === 'battle' && !local.formationId ? ' · 出撃準備' : ''}`;
 }
 
 function renderClassCards(room: RoomState): void {
   const local = room.players.find((player) => player.id === network.clientId);
   if (!local) return;
+  const canEdit = room.phase === 'lobby' || (room.phase === 'battle' && local.formationId === null);
   for (const card of document.querySelectorAll<HTMLButtonElement>('[data-lobby-class]')) {
     const value = card.dataset.lobbyClass;
     card.classList.toggle('selected', value === local.squadClass);
-    card.disabled = local.ready || room.phase !== 'lobby';
+    card.disabled = !canEdit || (room.phase === 'lobby' && local.ready);
   }
 }
 
@@ -329,14 +325,22 @@ function renderReadyControls(room: RoomState): void {
   const redButton = document.querySelector<HTMLButtonElement>('#join-red');
   if (!local || !startButton || !blueButton || !redButton) return;
 
+  const stagingMidmatch = room.phase === 'battle' && local.formationId === null;
   const allReady = room.players.length > 0 && room.players.every((player) => player.ready && player.spawnIndex !== null);
   const readyCount = room.players.filter((player) => player.ready).length;
-  readyButton!.disabled = local.spawnIndex === null || room.phase !== 'lobby';
+  readyButton!.disabled = local.spawnIndex === null || (room.phase !== 'lobby' && !stagingMidmatch);
   readyButton!.classList.toggle('active', local.ready);
-  readyButton!.textContent = local.ready ? 'CANCEL READY' : local.spawnIndex === null ? 'SELECT SPAWN FIRST' : 'READY';
-  blueButton.disabled = local.ready || room.phase !== 'lobby' || local.team === 'blue';
-  redButton.disabled = local.ready || room.phase !== 'lobby' || local.team === 'red';
+  readyButton!.textContent = stagingMidmatch
+    ? (local.spawnIndex === null ? 'SELECT SPAWN FIRST' : '出撃')
+    : local.ready ? 'CANCEL READY' : local.spawnIndex === null ? 'SELECT SPAWN FIRST' : 'READY';
 
+  const blueFull = room.slots.blue.available <= 0 && local.team !== 'blue';
+  const redFull = room.slots.red.available <= 0 && local.team !== 'red';
+  blueButton.disabled = (room.phase === 'countdown') || (!stagingMidmatch && room.phase !== 'lobby') || local.team === 'blue' || blueFull || (room.phase === 'lobby' && local.ready);
+  redButton.disabled = (room.phase === 'countdown') || (!stagingMidmatch && room.phase !== 'lobby') || local.team === 'red' || redFull || (room.phase === 'lobby' && local.ready);
+
+  startButton.classList.toggle('hidden', stagingMidmatch);
+  if (stagingMidmatch) return;
   startButton.disabled = !local.owner || !allReady || room.phase !== 'lobby';
   if (room.phase === 'countdown') startButton.textContent = 'STARTING...';
   else if (!local.owner) startButton.textContent = `WAITING FOR HOST · ${readyCount}/${room.players.length} READY`;
@@ -350,7 +354,9 @@ function renderLobby(room: RoomState): void {
   const settings = document.querySelector<HTMLElement>('#lobby-settings');
   if (!code || !settings) return;
   code.textContent = room.code;
-  settings.textContent = `${room.settings.blueSquads} vs ${room.settings.redSquads} squads · RESPAWN ${room.settings.respawnSeconds}s · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
+  const local = room.players.find((player) => player.id === network.clientId);
+  const mode = room.phase === 'battle' && local?.formationId === null ? '途中参戦 — TEAM / CLASS / SPAWNを選択して出撃' : `${room.settings.blueSquads} vs ${room.settings.redSquads} squads`;
+  settings.textContent = `${mode} · RESPAWN ${room.settings.respawnSeconds}s · BLUE H${room.slots.blue.humans}/${room.slots.blue.total} · RED H${room.slots.red.humans}/${room.slots.red.total} · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
   renderPlayers(room);
   renderDeploymentMap(room);
   renderClassCards(room);
@@ -433,7 +439,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Phase 3.10';
+  document.title = 'Bannerfall — Version 4.0.4';
 }
 
 network.onConnection = (connected, text) => {
@@ -549,7 +555,9 @@ document.querySelector('#lobby-class-cards')?.addEventListener('click', (event) 
 });
 readyButton!.addEventListener('click', () => {
   const local = currentRoom?.players.find((player) => player.id === network.clientId);
-  if (local) network.setReady(!local.ready);
+  if (!local || !currentRoom) return;
+  if (currentRoom.phase === 'battle' && local.formationId === null) network.deployMidmatch();
+  else network.setReady(!local.ready);
 });
 document.querySelector('#start-match')?.addEventListener('click', () => network.startMatch());
 document.querySelector('#leave-room')?.addEventListener('click', () => {

@@ -1,6 +1,7 @@
 import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { GAME_CONFIG } from '../game/config';
+import { BATTLEFIELD_MAP } from '../game/battlefieldMap';
 import { artilleryProfile, chargeProfile, volleyProfile } from '../game/classProfiles';
 import {
   SQUAD_CLASSES,
@@ -55,6 +56,12 @@ interface Controller {
   flankSign: number;
   meleeTime: number;
   reformCooldown: number;
+  navPath: Vec2[];
+  navTarget: Vec2 | null;
+  navRepathTimer: number;
+  navProgressTimer: number;
+  navStuckTimer: number;
+  navLastPosition: Vec2 | null;
 }
 
 function zeroScores(): Record<SquadClass, number> {
@@ -93,6 +100,7 @@ export class BattleAiSystem {
       this.controllers.set(formation.id, controller);
       controller.thinkTimer -= dt;
       controller.reformCooldown = Math.max(0, controller.reformCooldown - dt);
+      controller.navRepathTimer = Math.max(0, controller.navRepathTimer - dt);
 
       const enemies = formations.filter((candidate) => candidate.team !== formation.team && candidate.aliveCount() > 0);
       const allies = formations.filter((candidate) => candidate.team === formation.team && candidate.aliveCount() > 0);
@@ -200,10 +208,18 @@ export class BattleAiSystem {
         }
       }
 
+      if (command.chargeTarget && !BATTLEFIELD_MAP.linePassable(formation.center, command.chargeTarget, 1)) {
+        // Do not commit a charge through a mountain ridge. Navigate to a clear
+        // approach first, then the next AI think can issue the actual charge.
+        command.chargeTarget = null;
+        controller.intent = 'advance';
+      }
+
       if (target && !command.reform && !command.chargeTarget && !command.bannerAttackTarget && !command.artilleryTarget) {
-        command.move = this.movementForIntent(formation, target, controller, enemyBanner.position);
+        command.move = this.movementForIntent(formation, target, controller, enemyBanner.position, dt);
       } else if (!target && (controller.intent === 'advance' || controller.intent === 'breakthrough')) {
-        command.move = this.toward(formation.center, enemyBanner.position);
+        const laneTarget = BATTLEFIELD_MAP.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner.position);
+        command.move = this.navigateToward(formation, laneTarget, controller, dt);
       }
 
       this.writeDebug(formation, controller);
@@ -382,7 +398,7 @@ export class BattleAiSystem {
 
     if (!target) {
       controller.intent = ownBanner.underAttackTimer > 0 ? 'defend' : 'advance';
-      command.move = this.toward(formation.center, enemyBanner.position);
+      command.move = BATTLEFIELD_MAP.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
       return;
     }
 
@@ -391,7 +407,7 @@ export class BattleAiSystem {
     const routedOrBroken = target.mode === 'routed' || target.morale <= GAME_CONFIG.morale.breakthroughMoraleThreshold;
     if (routedOrBroken && formation.morale > 45) {
       controller.intent = 'breakthrough';
-      command.move = this.toward(formation.center, enemyBanner.position);
+      command.move = BATTLEFIELD_MAP.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
       return;
     }
 
@@ -403,7 +419,7 @@ export class BattleAiSystem {
     );
     if (nearbyBreakthrough && formation.morale > 52 && distance > volley.defensiveRange) {
       controller.intent = 'breakthrough';
-      command.move = this.toward(formation.center, enemyBanner.position);
+      command.move = BATTLEFIELD_MAP.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
       return;
     }
 
@@ -546,13 +562,28 @@ export class BattleAiSystem {
     controller.intent = 'hold';
   }
 
-  private movementForIntent(formation: Formation, target: Formation, controller: Controller, enemyBanner: Vec2): Vec2 {
+  private movementForIntent(formation: Formation, target: Formation, controller: Controller, enemyBanner: Vec2, dt: number): Vec2 {
     if (formation.mode !== 'line') return { x: 0, y: 0 };
-    if (controller.intent === 'breakthrough') return this.toward(formation.center, enemyBanner);
-    const toward = this.toward(formation.center, target.center);
-    if (controller.intent === 'advance' || controller.intent === 'defend' || controller.intent === 'escort') return toward;
-    if (controller.intent === 'retreat') return { x: -toward.x, y: -toward.y };
+    if (controller.intent === 'breakthrough') {
+      const laneTarget = BATTLEFIELD_MAP.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner);
+      return this.navigateToward(formation, laneTarget, controller, dt);
+    }
+
+    if (controller.intent === 'advance' || controller.intent === 'defend' || controller.intent === 'escort') {
+      return this.navigateToward(formation, target.center, controller, dt);
+    }
+
+    if (controller.intent === 'retreat') {
+      const away = this.awayFrom(formation.center, target.center);
+      const desired = {
+        x: formation.center.x + away.x * 900,
+        y: formation.center.y + away.y * 900,
+      };
+      return this.navigateToward(formation, desired, controller, dt);
+    }
+
     if (controller.intent === 'flank') {
+      const toward = this.toward(formation.center, target.center);
       const rightX = -toward.y * controller.flankSign;
       const rightY = toward.x * controller.flankSign;
       const desiredRange = isChargeCavalryClass(formation.squadClass) ? 390
@@ -562,9 +593,55 @@ export class BattleAiSystem {
         x: target.center.x - toward.x * desiredRange + rightX * controller.flankOffset,
         y: target.center.y - toward.y * desiredRange + rightY * controller.flankOffset,
       };
-      return this.toward(formation.center, desired);
+      return this.navigateToward(formation, desired, controller, dt);
     }
+    controller.navPath = [];
+    formation.debugNavPath = [];
     return { x: 0, y: 0 };
+  }
+
+  private navigateToward(formation: Formation, rawTarget: Vec2, controller: Controller, dt: number): Vec2 {
+    const target = BATTLEFIELD_MAP.nearestPassablePoint(rawTarget, 14);
+    const directDistance = this.distance(formation.center, target);
+    if (directDistance <= 1) return { x: 0, y: 0 };
+
+    controller.navProgressTimer += dt;
+    if (!controller.navLastPosition) controller.navLastPosition = { ...formation.center };
+    if (controller.navProgressTimer >= 0.6) {
+      const moved = this.distance(formation.center, controller.navLastPosition);
+      if (moved < 16 && directDistance > 140) controller.navStuckTimer += controller.navProgressTimer;
+      else controller.navStuckTimer = 0;
+      controller.navProgressTimer = 0;
+      controller.navLastPosition = { ...formation.center };
+    }
+
+    const targetChanged = !controller.navTarget || this.distance(controller.navTarget, target) > 320;
+    const stuck = controller.navStuckTimer >= 1.5;
+    const directClear = BATTLEFIELD_MAP.linePassable(formation.center, target, isArtilleryClass(formation.squadClass) ? 1 : 0);
+
+    if (directClear && directDistance < 900) {
+      controller.navPath = [];
+      controller.navTarget = { ...target };
+      controller.navRepathTimer = 0.7;
+      controller.navStuckTimer = 0;
+      formation.debugNavPath = [target];
+      return this.toward(formation.center, target);
+    }
+
+    if (targetChanged || stuck || controller.navRepathTimer <= 0 || controller.navPath.length === 0) {
+      const path = BATTLEFIELD_MAP.findPath(formation.center, target, formation.squadClass);
+      controller.navPath = path;
+      controller.navTarget = { ...target };
+      controller.navRepathTimer = 1.25 + Math.random() * 0.75;
+      controller.navStuckTimer = 0;
+    }
+
+    while (controller.navPath.length > 0 && this.distance(formation.center, controller.navPath[0]) < 105) {
+      controller.navPath.shift();
+    }
+    formation.debugNavPath = controller.navPath.slice(0, 8).map((point) => ({ ...point }));
+    const waypoint = controller.navPath[0] ?? target;
+    return this.toward(formation.center, waypoint);
   }
 
   private selectTarget(formation: Formation, enemies: Formation[], locks: Map<string, number>): Formation | null {
@@ -681,6 +758,12 @@ export class BattleAiSystem {
       flankSign: Math.random() < 0.5 ? -1 : 1,
       meleeTime: 0,
       reformCooldown: Math.random() * 2,
+      navPath: [],
+      navTarget: null,
+      navRepathTimer: Math.random(),
+      navProgressTimer: 0,
+      navStuckTimer: 0,
+      navLastPosition: null,
     };
   }
 

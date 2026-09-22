@@ -1,14 +1,15 @@
-import type {
-  BattleNetSnapshot,
-  ChatMessage,
-  ClientMessage,
-  ContinuousControl,
-  MatchStartPayload,
-  PlayerAction,
-  RoomBrowserEntry,
-  RoomState,
-  RoomVisibility,
-  ServerMessage,
+import {
+  PROTOCOL_VERSION,
+  type BattleNetSnapshot,
+  type ChatMessage,
+  type ClientMessage,
+  type ContinuousControl,
+  type MatchStartPayload,
+  type PlayerAction,
+  type RoomBrowserEntry,
+  type RoomState,
+  type RoomVisibility,
+  type ServerMessage,
 } from './protocol';
 import type { SquadClass, Team } from '../game/types';
 
@@ -55,6 +56,7 @@ export class NetworkClient {
       }, 8000);
       ws.addEventListener('open', () => {
         window.clearTimeout(timeout);
+        ws.send(JSON.stringify({ type: 'hello', name: '', protocolVersion: PROTOCOL_VERSION } satisfies ClientMessage));
         this.onConnection?.(true, 'ONLINE');
         resolve();
       }, { once: true });
@@ -83,7 +85,9 @@ export class NetworkClient {
   }
 
   joinRoom(name: string, code: string, password: string): void {
-    this.send({ type: 'join_room', name, code: code.trim().toUpperCase(), password });
+    const normalized = code.trim().toUpperCase();
+    const reconnectToken = localStorage.getItem(`bannerfall.reconnect.${normalized}`) ?? undefined;
+    this.send({ type: 'join_room', name, code: normalized, password, reconnectToken });
   }
 
   changeTeam(team: Team): void {
@@ -100,6 +104,10 @@ export class NetworkClient {
 
   setReady(ready: boolean): void {
     this.send({ type: 'set_ready', ready });
+  }
+
+  deployMidmatch(): void {
+    this.send({ type: 'deploy_midmatch' });
   }
 
   sendChat(text: string): void {
@@ -125,6 +133,7 @@ export class NetworkClient {
   }
 
   leaveRoom(): void {
+    if (this.room?.code) localStorage.removeItem(`bannerfall.reconnect.${this.room.code}`);
     this.send({ type: 'leave_room' });
     this.room = null;
   }
@@ -151,7 +160,15 @@ export class NetworkClient {
     }
     switch (message.type) {
       case 'welcome':
+        if (message.protocolVersion !== PROTOCOL_VERSION) {
+          this.onError?.(`バージョン不一致: Client protocol ${PROTOCOL_VERSION} / Server protocol ${message.protocolVersion ?? 'unknown'}`);
+          this.socket?.close();
+          return;
+        }
         this.clientId = message.clientId;
+        break;
+      case 'reconnect_token':
+        localStorage.setItem(`bannerfall.reconnect.${message.roomCode}`, message.token);
         break;
       case 'room_state':
         this.room = message.room;

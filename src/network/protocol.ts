@@ -1,3 +1,6 @@
+export const GAME_VERSION = '4.0.4';
+export const PROTOCOL_VERSION = 403;
+
 import type { FormationMode } from '../entities/formation';
 import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
 
@@ -24,12 +27,20 @@ export interface LobbyPlayer {
   ready: boolean;
 }
 
+export interface TeamSlotState {
+  humans: number;
+  reserved: number;
+  available: number;
+  total: number;
+}
+
 export interface RoomState {
   code: string;
   phase: RoomPhase;
   settings: RoomSettings;
   players: LobbyPlayer[];
   ownerId: string;
+  slots: { blue: TeamSlotState; red: TeamSlotState };
 }
 
 
@@ -43,11 +54,17 @@ export interface RoomBrowserEntry {
   redSquads: number;
   respawnSeconds: number;
   passwordProtected: boolean;
+  blueHumans: number;
+  redHumans: number;
+  blueAvailable: number;
+  redAvailable: number;
+  joinable: boolean;
 }
 
 export interface MatchStartPayload {
   room: RoomState;
   authorityId: string;
+  joinInProgress?: boolean;
 }
 
 export interface ChatMessage {
@@ -77,7 +94,8 @@ export type PlayerAction =
   | { type: 'fieldwork'; formationId: string; target: Vec2; direction: number }
   | { type: 'fieldwork-attack'; formationId: string; fieldworkId: string }
   | { type: 'weapon'; formationId: string; weapon: WeaponType }
-  | { type: 'class'; formationId: string; squadClass: SquadClass };
+  | { type: 'class'; formationId: string; squadClass: SquadClass }
+  | { type: 'spawn'; formationId: string; spawnIndex: number };
 
 export interface SoldierNetState {
   x: number;
@@ -108,6 +126,8 @@ export interface FormationNetState {
   bannerTargetTeam: Team | null;
   respawnRemaining: number | null;
   plannedClass: SquadClass | null;
+  plannedSpawnIndex: number | null;
+  spawnAreaIndex: number;
   forcedMarch: boolean;
   fieldworkKits: number;
   grenadeCooldown: number;
@@ -181,14 +201,15 @@ export interface BattleNetSnapshot {
 }
 
 export type ClientMessage =
-  | { type: 'hello'; name: string }
+  | { type: 'hello'; name: string; protocolVersion: number }
   | { type: 'create_room'; name: string; password: string; settings: Omit<RoomSettings, 'passwordProtected'> }
   | { type: 'request_room_list' }
-  | { type: 'join_room'; name: string; code: string; password: string }
+  | { type: 'join_room'; name: string; code: string; password: string; reconnectToken?: string }
   | { type: 'change_team'; team: Team }
   | { type: 'select_class'; squadClass: SquadClass }
   | { type: 'select_spawn'; spawnIndex: number }
   | { type: 'set_ready'; ready: boolean }
+  | { type: 'deploy_midmatch' }
   | { type: 'chat_send'; text: string }
   | { type: 'start_match' }
   | { type: 'control'; control: ContinuousControl }
@@ -198,7 +219,8 @@ export type ClientMessage =
   | { type: 'ping'; at: number };
 
 export type ServerMessage =
-  | { type: 'welcome'; clientId: string }
+  | { type: 'welcome'; clientId: string; protocolVersion: number; serverVersion: string }
+  | { type: 'reconnect_token'; roomCode: string; token: string }
   | { type: 'room_state'; room: RoomState }
   | { type: 'room_list'; rooms: RoomBrowserEntry[] }
   | { type: 'match_countdown'; seconds: number }

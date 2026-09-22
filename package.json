@@ -1,7 +1,7 @@
 {
-  "name": "bannerfall-phase3-10",
+  "name": "bannerfall-v4",
   "private": true,
-  "version": "0.3.10.1",
+  "version": "0.4.0-4",
   "type": "module",
   "scripts": {
     "dev": "vite",

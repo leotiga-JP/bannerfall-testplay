@@ -1,9 +1,11 @@
 import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
-import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, classLabel, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
+import { canBannerAttackClass, canVolleyClass, classLabel, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
+import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
 import { InputManager } from '../input/inputManager';
 import { Renderer } from '../rendering/renderer';
 import { Hud } from '../ui/hud';
+import { AudioManager } from '../audio/audioManager';
 import { NetworkClient } from './networkClient';
 import type { MatchStartPayload, PlayerAction, RoomState } from './protocol';
 
@@ -12,6 +14,7 @@ export class MultiplayerBattle {
   private readonly game: Game;
   private readonly renderer: Renderer;
   private readonly hud: Hud;
+  private readonly audio: AudioManager;
   private readonly labels = new Map<string, string>();
   private readonly localFormationId: string;
   private room: RoomState;
@@ -23,6 +26,8 @@ export class MultiplayerBattle {
   private controlAccumulator = 0;
   private readonly cleanup: Array<() => void> = [];
   private fieldworkPlacementArmed = false;
+  private settingsOpen = false;
+  private minimapPosition: MinimapPosition = 'bottom-right';
 
   constructor(
     private readonly network: NetworkClient,
@@ -42,6 +47,9 @@ export class MultiplayerBattle {
     const initialClasses = Object.fromEntries(
       payload.room.players.flatMap((player) => player.formationId ? [[player.formationId, player.squadClass]] : []),
     );
+    const initialSpawnAreas = Object.fromEntries(
+      payload.room.players.flatMap((player) => player.formationId && player.spawnIndex !== null ? [[player.formationId, player.spawnIndex]] : []),
+    );
     for (const player of payload.room.players) {
       if (player.formationId) this.labels.set(player.formationId, `★ ${player.name}`);
     }
@@ -54,7 +62,8 @@ export class MultiplayerBattle {
       localFormationId: this.localFormationId,
       humanFormationIds: humanIds,
       initialClasses,
-      introEnabled: false,
+      initialSpawnAreas,
+      introEnabled: !payload.joinInProgress,
     });
 
     const ctx = canvas.getContext('2d');
@@ -63,7 +72,9 @@ export class MultiplayerBattle {
     canvas.width = GAME_CONFIG.viewport.width;
     canvas.height = GAME_CONFIG.viewport.height;
     this.renderer = new Renderer(ctx);
-    this.installMinimapOpacityControl();
+    this.audio = new AudioManager();
+    this.installMapAndAudioControls();
+    this.installAudioUnlock();
     this.hud = this.createHud();
     const reserveToggle = document.querySelector<HTMLButtonElement>('#reserve-class-toggle');
     if (reserveToggle) {
@@ -100,40 +111,100 @@ export class MultiplayerBattle {
     this.running = false;
     for (const dispose of this.cleanup) dispose();
     this.input.destroy();
+    this.audio.stop();
   }
 
-  private installMinimapOpacityControl(): void {
+  private installMapAndAudioControls(): void {
     const slider = document.querySelector<HTMLInputElement>('#minimap-opacity');
     const value = document.querySelector<HTMLElement>('#minimap-opacity-value');
-    if (!slider || !value) return;
+    const sfxSlider = document.querySelector<HTMLInputElement>('#sfx-volume');
+    const sfxValue = document.querySelector<HTMLElement>('#sfx-volume-value');
+    const overlay = document.querySelector<HTMLElement>('#settings-overlay');
+    const closeButton = document.querySelector<HTMLButtonElement>('#settings-close');
+    const positionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-map-position]'));
+    if (!slider || !value || !sfxSlider || !sfxValue || !overlay || !closeButton) return;
 
-    const stored = Number(localStorage.getItem('bannerfall.minimapOpacity') ?? '86');
-    const initial = Number.isFinite(stored) ? Math.max(20, Math.min(100, stored)) : 86;
-    slider.value = String(initial);
+    const storedOpacity = Number(localStorage.getItem('bannerfall.minimapOpacity') ?? '86');
+    const opacity = Number.isFinite(storedOpacity) ? Math.max(20, Math.min(100, storedOpacity)) : 86;
+    slider.value = String(opacity);
 
-    const apply = (): void => {
+    const storedPosition = localStorage.getItem('bannerfall.minimapPosition');
+    this.minimapPosition = storedPosition === 'top-left' ? 'top-left' : 'bottom-right';
+
+    const applyOpacity = (): void => {
       const percent = Math.max(20, Math.min(100, Number(slider.value) || 86));
       this.renderer.setMinimapOpacity(percent / 100);
       value.textContent = `${Math.round(percent)}%`;
       localStorage.setItem('bannerfall.minimapOpacity', String(percent));
     };
-
-    const releaseSliderFocus = (): void => {
-      // Range inputs keep keyboard focus after mouse/touch interaction. That made
-      // the global game hotkeys intentionally ignore input until the player
-      // clicked elsewhere. Release the focus as soon as the adjustment ends.
-      slider.blur();
+    const applyPosition = (position: MinimapPosition): void => {
+      this.minimapPosition = position;
+      this.renderer.setMinimapPosition(position);
+      this.game.setMinimapPosition(position);
+      localStorage.setItem('bannerfall.minimapPosition', position);
+      for (const button of positionButtons) button.classList.toggle('selected', button.dataset.mapPosition === position);
+    };
+    const applySfx = (): void => {
+      const percent = Math.max(0, Math.min(100, Number(sfxSlider.value) || 0));
+      this.audio.setVolume(percent);
+      sfxValue.textContent = `${Math.round(percent)}%`;
+    };
+    const setSettingsOpen = (open: boolean): void => {
+      this.settingsOpen = open;
+      overlay.classList.toggle('hidden', !open);
+      this.input.setBlocked(open);
+      if (open) {
+        this.fieldworkPlacementArmed = false;
+        this.hud.closeClassReservation();
+        this.scoreboard.classList.add('hidden');
+        const formation = this.game.playerFormation;
+        const weapon: WeaponType = canBannerAttackClass(formation.squadClass)
+          ? formation.weapon
+          : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
+        this.network.sendControl({ formationId: formation.id, moveX: 0, moveY: 0, aim: formation.center, weapon, forcedMarch: false });
+      }
     };
 
-    apply();
-    slider.addEventListener('input', apply);
-    slider.addEventListener('change', releaseSliderFocus);
-    slider.addEventListener('pointerup', releaseSliderFocus);
-    slider.addEventListener('pointercancel', releaseSliderFocus);
-    this.cleanup.push(() => slider.removeEventListener('input', apply));
-    this.cleanup.push(() => slider.removeEventListener('change', releaseSliderFocus));
-    this.cleanup.push(() => slider.removeEventListener('pointerup', releaseSliderFocus));
-    this.cleanup.push(() => slider.removeEventListener('pointercancel', releaseSliderFocus));
+    applyOpacity();
+    sfxSlider.value = String(this.audio.volumePercent);
+    applySfx();
+    applyPosition(this.minimapPosition);
+
+    const releaseFocus = (event: Event): void => (event.currentTarget as HTMLInputElement | null)?.blur();
+    slider.addEventListener('input', applyOpacity);
+    slider.addEventListener('change', releaseFocus);
+    sfxSlider.addEventListener('input', applySfx);
+    sfxSlider.addEventListener('change', releaseFocus);
+    const closeSettings = (): void => setSettingsOpen(false);
+    closeButton.addEventListener('click', closeSettings);
+    for (const button of positionButtons) {
+      const click = (): void => applyPosition(button.dataset.mapPosition === 'top-left' ? 'top-left' : 'bottom-right');
+      button.addEventListener('click', click);
+      this.cleanup.push(() => button.removeEventListener('click', click));
+    }
+    const keyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      setSettingsOpen(!this.settingsOpen);
+    };
+    window.addEventListener('keydown', keyDown);
+    this.cleanup.push(() => slider.removeEventListener('input', applyOpacity));
+    this.cleanup.push(() => slider.removeEventListener('change', releaseFocus));
+    this.cleanup.push(() => sfxSlider.removeEventListener('input', applySfx));
+    this.cleanup.push(() => sfxSlider.removeEventListener('change', releaseFocus));
+    this.cleanup.push(() => closeButton.removeEventListener('click', closeSettings));
+    this.cleanup.push(() => window.removeEventListener('keydown', keyDown));
+    this.cleanup.push(() => { overlay.classList.add('hidden'); this.input.setBlocked(false); });
+  }
+
+  private installAudioUnlock(): void {
+    const unlock = (): void => this.audio.unlock();
+    window.addEventListener('pointerdown', unlock, { passive: true });
+    window.addEventListener('keydown', unlock);
+    this.cleanup.push(() => window.removeEventListener('pointerdown', unlock));
+    this.cleanup.push(() => window.removeEventListener('keydown', unlock));
   }
 
   private createHud(): Hud {
@@ -177,6 +248,7 @@ export class MultiplayerBattle {
     }
 
     const snapshot = this.game.snapshot();
+    this.audio.update(this.game);
     this.renderer.render(
       this.game.formations,
       this.game.banners,
@@ -208,7 +280,7 @@ export class MultiplayerBattle {
 
   private installScoreboardEvents(): void {
     const keyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Tab') return;
+      if (event.key !== 'Tab' || this.settingsOpen) return;
       const active = document.activeElement;
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
       event.preventDefault();
@@ -260,15 +332,15 @@ export class MultiplayerBattle {
     const formation = this.game.playerFormation;
     let moveX = 0;
     let moveY = 0;
-    if (this.input.isDown('a')) moveX -= 1;
-    if (this.input.isDown('d')) moveX += 1;
-    if (this.input.isDown('w')) moveY -= 1;
-    if (this.input.isDown('s')) moveY += 1;
+    if (!this.settingsOpen && this.input.isDown('a')) moveX -= 1;
+    if (!this.settingsOpen && this.input.isDown('d')) moveX += 1;
+    if (!this.settingsOpen && this.input.isDown('w')) moveY -= 1;
+    if (!this.settingsOpen && this.input.isDown('s')) moveY += 1;
     const aim = this.game.camera.screenToWorld(this.input.getPointer());
     const weapon: WeaponType = canBannerAttackClass(formation.squadClass)
       ? formation.weapon
       : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
-    this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon, forcedMarch: this.input.isForcedMarchHeld() });
+    this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon, forcedMarch: !this.settingsOpen && this.input.isForcedMarchHeld() });
   }
 
 
@@ -306,16 +378,16 @@ export class MultiplayerBattle {
       };
     };
     const onMinimap = (point: Vec2): boolean => {
-      const x = GAME_CONFIG.viewport.width - GAME_CONFIG.minimap.width - GAME_CONFIG.minimap.margin;
-      const y = GAME_CONFIG.viewport.height - GAME_CONFIG.minimap.height - GAME_CONFIG.minimap.margin - GAME_CONFIG.minimap.controlHeight - GAME_CONFIG.minimap.controlGap;
-      return point.x >= x && point.x <= x + GAME_CONFIG.minimap.width
-        && point.y >= y && point.y <= y + GAME_CONFIG.minimap.height;
+      const rect = minimapRect(this.minimapPosition);
+      return point.x >= rect.x && point.x <= rect.x + rect.width
+        && point.y >= rect.y && point.y <= rect.y + rect.height;
     };
     const worldAtEvent = (event: MouseEvent): Vec2 => this.game.camera.screenToWorld(toCanvasPoint(event));
     const send = (action: PlayerAction): void => this.network.sendAction(action);
     let suppressNextRightRelease = false;
 
     const mouseDown = (event: MouseEvent): void => {
+      if (this.settingsOpen) return;
       const point = toCanvasPoint(event);
       if (onMinimap(point)) return;
       const formation = this.game.playerFormation;
@@ -350,7 +422,7 @@ export class MultiplayerBattle {
       }
     };
     const mouseUp = (event: MouseEvent): void => {
-      if (event.button !== 2) return;
+      if (this.settingsOpen || event.button !== 2) return;
       if (suppressNextRightRelease) {
         suppressNextRightRelease = false;
         return;
@@ -363,15 +435,11 @@ export class MultiplayerBattle {
       if (event.repeat) return;
       const active = document.activeElement;
       if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      if (this.settingsOpen) return;
       const formation = this.game.playerFormation;
       const key = event.key.toLowerCase();
       if (key === 'f') send({ type: 'reform', formationId: formation.id });
       if (key === 'n') this.hud.toggleClassReservation();
-      if (key === 'escape' && this.fieldworkPlacementArmed) {
-        this.fieldworkPlacementArmed = false;
-        event.preventDefault();
-        return;
-      }
       if (key === '4' && formation.aliveCount() > 0 && formation.squadClass === 'grenadier') {
         this.fieldworkPlacementArmed = false;
         const pointerTarget = this.game.camera.screenToWorld(this.input.getPointer());
@@ -388,14 +456,9 @@ export class MultiplayerBattle {
         this.fieldworkPlacementArmed = !this.fieldworkPlacementArmed;
         event.preventDefault();
       }
-      if (key >= '1' && key <= '9') {
-        if (formation.aliveCount() === 0) {
-          const squadClass = SQUAD_CLASSES[Number(key) - 1];
-          if (squadClass) send({ type: 'class', formationId: formation.id, squadClass });
-        } else if (canBannerAttackClass(formation.squadClass) && (key === '1' || key === '2' || key === '3')) {
-          const weapon: WeaponType = key === '1' ? 'musket' : key === '2' ? 'bayonet' : 'axe';
-          send({ type: 'weapon', formationId: formation.id, weapon });
-        }
+      if (formation.aliveCount() > 0 && canBannerAttackClass(formation.squadClass) && (key === '1' || key === '2' || key === '3')) {
+        const weapon: WeaponType = key === '1' ? 'musket' : key === '2' ? 'bayonet' : 'axe';
+        send({ type: 'weapon', formationId: formation.id, weapon });
       }
     };
 
@@ -412,10 +475,18 @@ export class MultiplayerBattle {
         if (!isSquadClass(value)) return;
         const formation = this.game.playerFormation;
         send({ type: 'class', formationId: formation.id, squadClass: value });
-        if (formation.aliveCount() > 0) this.hud.closeClassReservation();
       };
       card.addEventListener('click', click);
       this.cleanup.push(() => card.removeEventListener('click', click));
+    }
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-respawn-spawn]')) {
+      const click = (): void => {
+        const spawnIndex = Number(button.dataset.respawnSpawn);
+        if (!Number.isInteger(spawnIndex) || spawnIndex < 0 || spawnIndex > 2) return;
+        send({ type: 'spawn', formationId: this.game.playerFormation.id, spawnIndex });
+      };
+      button.addEventListener('click', click);
+      this.cleanup.push(() => button.removeEventListener('click', click));
     }
   }
 }
