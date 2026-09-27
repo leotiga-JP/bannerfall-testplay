@@ -1,8 +1,16 @@
-export const GAME_VERSION = '4.0.7';
-export const PROTOCOL_VERSION = 403;
+export const GAME_VERSION = '4.4.5';
+export const PROTOCOL_VERSION = 444;
 
 import type { FormationMode } from '../entities/formation';
-import type { SquadClass, Team, Vec2, WeaponType } from '../game/types';
+import type { GameMode } from '../game/gameMode';
+import type { FactionId } from '../game/factionBanners';
+import type { FormationShape, SquadClass, Team, Vec2, WeaponType } from '../game/types';
+import type { ResourceNetworkState } from '../game/resourceSystem';
+import type { RecruitmentNetState } from '../game/recruitmentSystem';
+import type { ConquestNetState } from '../game/conquestSystem';
+import type { EquipmentUpgradeKind, UpgradeTier } from '../game/upgradeSystem';
+import type { ConstructionBlockKind } from '../entities/constructionBlock';
+import type { ConstructionNetworkState, ConstructionWorkNetState } from '../game/constructionSystem';
 
 export type RoomPhase = 'lobby' | 'countdown' | 'battle';
 export type RoomVisibility = 'public' | 'unlisted';
@@ -11,8 +19,14 @@ export interface RoomSettings {
   blueSquads: number;
   redSquads: number;
   respawnSeconds: number;
+  conquestTickets: number;
   passwordProtected: boolean;
   visibility: RoomVisibility;
+  gameMode: GameMode;
+  introEnabled: boolean;
+  constructionEnabled: boolean;
+  blueFaction: FactionId;
+  redFaction: FactionId;
 }
 
 export interface LobbyPlayer {
@@ -53,11 +67,16 @@ export interface RoomBrowserEntry {
   blueSquads: number;
   redSquads: number;
   respawnSeconds: number;
+  conquestTickets: number;
   passwordProtected: boolean;
   blueHumans: number;
   redHumans: number;
   blueAvailable: number;
   redAvailable: number;
+  gameMode: GameMode;
+  introEnabled: boolean;
+  blueFaction: FactionId;
+  redFaction: FactionId;
   joinable: boolean;
 }
 
@@ -83,6 +102,7 @@ export interface ContinuousControl {
   aim: Vec2;
   weapon: WeaponType;
   forcedMarch: boolean;
+  gathering: boolean;
 }
 
 export type PlayerAction =
@@ -91,11 +111,17 @@ export type PlayerAction =
   | { type: 'banner-attack'; formationId: string; targetTeam: Team }
   | { type: 'reform'; formationId: string }
   | { type: 'grenade'; formationId: string; target: Vec2 }
-  | { type: 'fieldwork'; formationId: string; target: Vec2; direction: number }
-  | { type: 'fieldwork-attack'; formationId: string; fieldworkId: string }
   | { type: 'weapon'; formationId: string; weapon: WeaponType }
   | { type: 'class'; formationId: string; squadClass: SquadClass }
-  | { type: 'spawn'; formationId: string; spawnIndex: number };
+  | { type: 'spawn'; formationId: string; spawnIndex: number }
+  | { type: 'recruit'; formationId: string; count: number }
+  | { type: 'recruit_cancel'; formationId: string }
+  | { type: 'upgrade_capacity'; formationId: string }
+  | { type: 'equipment_upgrade'; formationId: string; upgrade: EquipmentUpgradeKind }
+  | { type: 'formation_shape'; formationId: string; shape: FormationShape }
+  | { type: 'construction_place'; formationId: string; kind: ConstructionBlockKind; target: Vec2; direction: number }
+  | { type: 'construction_attack'; formationId: string; blockId: string }
+  | { type: 'construction_dismantle'; formationId: string; blockId: string };
 
 export interface SoldierNetState {
   x: number;
@@ -114,6 +140,12 @@ export interface FormationNetState {
   y: number;
   direction: number;
   squadClass: SquadClass;
+  maxSoldiers: number;
+  weaponTier: UpgradeTier;
+  armorTier: UpgradeTier;
+  artilleryPerformanceTier: UpgradeTier;
+  artilleryBatteryTier: UpgradeTier;
+  formationShape: FormationShape;
   mode: FormationMode;
   weapon: WeaponType;
   reloadTimer: number;
@@ -183,10 +215,17 @@ export interface FieldworkNetState {
   maxHp: number;
 }
 
+
+export type BattlePresentationEvent =
+  | { kind: 'volley'; formationId: string; team: Team; x: number; y: number; direction: number; count: number }
+  | { kind: 'artillery_fire'; formationId: string; team: Team; squadClass: SquadClass; x: number; y: number; direction: number }
+  | { kind: 'death'; team: Team; x: number; y: number; impactX: number; impactY: number };
+
 export interface BattleNetSnapshot {
   seq: number;
   time: number;
   winner: Team | null;
+  conquest: ConquestNetState | null;
   blueBannerHp: number;
   redBannerHp: number;
   blueBannerUnderAttack: number;
@@ -198,6 +237,8 @@ export interface BattleNetSnapshot {
   projectiles: ProjectileNetState[];
   shells: ShellNetState[];
   fieldworks: FieldworkNetState[];
+  recruitments: RecruitmentNetState[];
+  constructionWork: ConstructionWorkNetState[];
 }
 
 export type ClientMessage =
@@ -211,6 +252,7 @@ export type ClientMessage =
   | { type: 'set_ready'; ready: boolean }
   | { type: 'deploy_midmatch' }
   | { type: 'chat_send'; text: string }
+  | { type: 'set_conquest_tickets'; tickets: number }
   | { type: 'start_match' }
   | { type: 'control'; control: ContinuousControl }
   | { type: 'action'; action: PlayerAction }
@@ -230,6 +272,9 @@ export type ServerMessage =
   | { type: 'remote_control'; playerId: string; control: ContinuousControl }
   | { type: 'remote_action'; playerId: string; action: PlayerAction }
   | { type: 'battle_snapshot'; snapshot: BattleNetSnapshot }
+  | { type: 'battle_events'; events: BattlePresentationEvent[] }
+  | { type: 'resource_state'; state: ResourceNetworkState }
+  | { type: 'construction_state'; state: ConstructionNetworkState }
   | { type: 'error'; message: string }
   | { type: 'notice'; message: string }
   | { type: 'pong'; at: number };

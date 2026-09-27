@@ -4,6 +4,8 @@ import { NetworkClient } from './network/networkClient';
 import { BATTLEFIELD_MAP, SPAWN_AREA_COUNT } from './game/battlefieldMap';
 import { MultiplayerBattle } from './network/multiplayerBattle';
 import type { ChatMessage, MatchStartPayload, RoomBrowserEntry, RoomState, RoomVisibility } from './network/protocol';
+import { gameModeDescription, gameModeLabel, isGameMode, type GameMode } from './game/gameMode';
+import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, FACTION_IDS, factionLabel, factionShortLabel, isFactionId, type FactionId } from './game/factionBanners';
 
 const menuShell = document.querySelector<HTMLElement>('#menu-shell');
 const battleShell = document.querySelector<HTMLElement>('#battle-shell');
@@ -37,25 +39,25 @@ const required = [
   spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.0.7 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.4.5 UI initialization failed.');
 
 const network = new NetworkClient();
 let currentRoom: RoomState | null = null;
 let currentBattle: MultiplayerBattle | null = null;
 
 const CLASS_UI: Record<SquadClass, { summary: string; role: string }> = {
-  infantry: { summary: '20兵 · マスケット / 銃剣 / 斧', role: '標準戦列・旗破壊・馬防柵2' },
-  lightInfantry: { summary: '15兵 · 高機動 / 散開射撃', role: '側面・牽制・旗破壊・馬防柵2' },
-  grenadier: { summary: '16兵 · 高士気 / 手榴弾', role: '近距離爆破・正面突破・馬防柵2' },
-  sharpshooter: { summary: '6兵 · 超長射程 / 高精度', role: '対騎兵・遠距離狙撃・馬防柵1' },
-  engineer: { summary: '12兵 · 高機動 / 馬防柵6', role: '陣地構築・旗破壊特化' },
+  infantry: { summary: '20兵 · マスケット / 銃剣 / 斧', role: '標準戦列・旗破壊' },
+  lightInfantry: { summary: '15兵 · 高機動 / 散開射撃', role: '側面・牽制・旗破壊' },
+  grenadier: { summary: '16兵 · 高士気 / 手榴弾', role: '近距離爆破・正面突破' },
+  sharpshooter: { summary: '6兵 · 超長射程 / 高精度', role: '対騎兵・遠距離狙撃' },
+  engineer: { summary: '12兵 · 高機動 / 建築', role: '陣地構築・旗破壊特化' },
   dragoon: { summary: '14騎 · 高機動 / カービン', role: '突撃不可・機動火力' },
   cavalry: { summary: '12騎 · 高速 / 突撃', role: '突破・砲兵狩り' },
   hussar: { summary: '10騎 · 衝撃突撃', role: '士気破壊・追撃' },
   cuirassier: { summary: '10騎 · 高HP / 重騎兵', role: '耐久戦・戦列拘束' },
-  artillery: { summary: '6兵 · 2門 · 長射程', role: '継続砲撃・馬防柵2' },
-  heavyArtillery: { summary: '7兵 · 1門 · 巨大爆発', role: '超火力・長い再装填・馬防柵2' },
-  horseArtillery: { summary: '6兵 · 3門 · 高速展開', role: '前線追従砲撃・馬防柵2' },
+  artillery: { summary: '6兵 · 2門 · 長射程', role: '継続砲撃・陣地防御' },
+  heavyArtillery: { summary: '7兵 · 1門 · 巨大爆発', role: '超火力・長い再装填' },
+  horseArtillery: { summary: '6兵 · 3門 · 高速展開', role: '前線追従砲撃・陣地防御' },
 };
 
 function renderClassCatalogs(): void {
@@ -201,7 +203,14 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
 
     const battle = document.createElement('div');
     battle.className = 'room-browser-cell';
-    battle.innerHTML = `<span>BATTLE</span><strong>${entry.blueSquads} vs ${entry.redSquads}</strong>`;
+    battle.innerHTML = `<span>MODE / BATTLE</span><strong></strong>`;
+    const battleStrong = battle.querySelector('strong');
+    if (battleStrong) {
+      const factions = `${factionShortLabel(entry.blueFaction)} vs ${factionShortLabel(entry.redFaction)}`;
+      battleStrong.textContent = entry.gameMode === 'CONQUEST'
+        ? `${gameModeLabel(entry.gameMode)} · ${factions} · ${entry.blueSquads} vs ${entry.redSquads} · T${entry.conquestTickets}`
+        : `${gameModeLabel(entry.gameMode)} · ${factions} · ${entry.blueSquads} vs ${entry.redSquads}`;
+    }
 
     const respawn = document.createElement('div');
     respawn.className = 'room-browser-cell';
@@ -213,7 +222,7 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
 
     const join = document.createElement('button');
     join.className = 'room-browser-join';
-    const full = entry.players >= entry.maxPlayers || !entry.joinable;
+    const full = !entry.joinable;
     join.disabled = entry.phase === 'countdown' || full;
     join.textContent = full
       ? 'FULL'
@@ -304,7 +313,7 @@ function renderDeploymentMap(room: RoomState): void {
   }
   deploymentStatus!.textContent = local.spawnIndex === null
     ? `SELECT ${local.team.toUpperCase()} SPAWN AREA`
-    : `${spawnLabel(local.team, local.spawnIndex)} · ${classLabel(local.squadClass)}${room.phase === 'battle' && !local.formationId ? ' · 出撃準備' : ''}`;
+    : `${spawnLabel(local.team, local.spawnIndex)} · ${classLabel(local.squadClass)}${room.settings.gameMode === 'CONQUEST' ? ' · 成長編成' : ''}${room.phase === 'battle' && !local.formationId ? ' · 出撃準備' : ''}`;
 }
 
 function renderClassCards(room: RoomState): void {
@@ -355,8 +364,29 @@ function renderLobby(room: RoomState): void {
   if (!code || !settings) return;
   code.textContent = room.code;
   const local = room.players.find((player) => player.id === network.clientId);
-  const mode = room.phase === 'battle' && local?.formationId === null ? '途中参戦 — TEAM / CLASS / SPAWNを選択して出撃' : `${room.settings.blueSquads} vs ${room.settings.redSquads} squads`;
-  settings.textContent = `${mode} · RESPAWN ${room.settings.respawnSeconds}s · BLUE H${room.slots.blue.humans}/${room.slots.blue.total} · RED H${room.slots.red.humans}/${room.slots.red.total} · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
+  const deploymentMode = room.phase === 'battle' && local?.formationId === null ? '途中参戦 — TEAM / CLASS / SPAWNを選択して出撃' : `${room.settings.blueSquads} vs ${room.settings.redSquads} squads`;
+  const ticketLabel = room.settings.gameMode === 'CONQUEST' ? ` · TICKETS ${room.settings.conquestTickets}` : '';
+  settings.textContent = `${gameModeLabel(room.settings.gameMode)} · ${deploymentMode}${ticketLabel} · BLUE ${factionShortLabel(room.settings.blueFaction)} / RED ${factionShortLabel(room.settings.redFaction)} · INTRO ${room.settings.introEnabled ? 'ON' : 'SKIP'} · BUILD ${room.settings.constructionEnabled ? 'ON' : 'OFF'} · RESPAWN ${room.settings.respawnSeconds}s · BLUE H${room.slots.blue.humans}/${room.slots.blue.total} · RED H${room.slots.red.humans}/${room.slots.red.total} · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
+  const ticketControls = document.querySelector<HTMLElement>('#lobby-ticket-controls');
+  const ticketInput = document.querySelector<HTMLInputElement>('#lobby-conquest-tickets');
+  const ticketApply = document.querySelector<HTMLButtonElement>('#lobby-ticket-apply');
+  const showTickets = room.settings.gameMode === 'CONQUEST' && room.phase === 'lobby';
+  ticketControls?.classList.toggle('hidden', !showTickets);
+  if (ticketInput) {
+    if (document.activeElement !== ticketInput) ticketInput.value = String(room.settings.conquestTickets);
+    ticketInput.disabled = !local?.owner || room.phase !== 'lobby';
+  }
+  if (ticketApply) ticketApply.disabled = !local?.owner || room.phase !== 'lobby';
+  const blueTeamTitle = document.querySelector<HTMLElement>('.blue-team .team-title h3');
+  const redTeamTitle = document.querySelector<HTMLElement>('.red-team .team-title h3');
+  const blueJoin = document.querySelector<HTMLButtonElement>('#join-blue');
+  const redJoin = document.querySelector<HTMLButtonElement>('#join-red');
+  if (blueTeamTitle) blueTeamTitle.textContent = `BLUE · ${factionShortLabel(room.settings.blueFaction)}`;
+  if (redTeamTitle) redTeamTitle.textContent = `RED · ${factionShortLabel(room.settings.redFaction)}`;
+  if (blueJoin) blueJoin.textContent = `BLUE · ${factionShortLabel(room.settings.blueFaction)}`;
+  if (redJoin) redJoin.textContent = `RED · ${factionShortLabel(room.settings.redFaction)}`;
+  document.querySelector<HTMLElement>('.blue-banner-marker')?.setAttribute('title', `BLUE · ${factionLabel(room.settings.blueFaction)} 旗`);
+  document.querySelector<HTMLElement>('.red-banner-marker')?.setAttribute('title', `RED · ${factionLabel(room.settings.redFaction)} 旗`);
   renderPlayers(room);
   renderDeploymentMap(room);
   renderClassCards(room);
@@ -424,7 +454,7 @@ function startBattle(payload: MatchStartPayload): void {
   currentBattle = new MultiplayerBattle(network, payload, canvas!);
   networkStatus!.textContent = 'SERVER AUTH';
   const subtitle = document.querySelector<HTMLElement>('#battle-subtitle');
-  if (subtitle) subtitle.textContent = `Room ${payload.room.code} · ${payload.room.settings.blueSquads}v${payload.room.settings.redSquads}`;
+  if (subtitle) subtitle.textContent = `Room ${payload.room.code} · ${gameModeLabel(payload.room.settings.gameMode)} · ${payload.room.settings.blueSquads}v${payload.room.settings.redSquads}`;
   renderChat();
 }
 
@@ -439,7 +469,7 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Version 4.0.7';
+  document.title = 'Bannerfall — Version 4.4.5';
 }
 
 network.onConnection = (connected, text) => {
@@ -511,6 +541,55 @@ document.querySelector('#refresh-room-list')?.addEventListener('click', async ()
   }
 });
 
+const createGameModeSelect = document.querySelector<HTMLSelectElement>('#create-game-mode');
+const createGameModeDescription = document.querySelector<HTMLElement>('#create-game-mode-description');
+function refreshCreateGameModeDescription(): void {
+  const value = createGameModeSelect?.value;
+  const mode: GameMode = isGameMode(value) ? value : 'BATTLE';
+  if (createGameModeDescription) createGameModeDescription.textContent = `${gameModeLabel(mode)}：${gameModeDescription(mode)}`;
+}
+createGameModeSelect?.addEventListener('change', refreshCreateGameModeDescription);
+refreshCreateGameModeDescription();
+
+const createBlueFaction = document.querySelector<HTMLSelectElement>('#create-blue-faction');
+const createRedFaction = document.querySelector<HTMLSelectElement>('#create-red-faction');
+const blueFactionSwatch = document.querySelector<HTMLElement>('#blue-faction-swatch');
+const redFactionSwatch = document.querySelector<HTMLElement>('#red-faction-swatch');
+
+function factionFromSelect(select: HTMLSelectElement | null, fallback: FactionId): FactionId {
+  return isFactionId(select?.value) ? select.value : fallback;
+}
+
+function updateFactionSwatch(element: HTMLElement | null, faction: FactionId): void {
+  if (!element) return;
+  element.className = `faction-swatch faction-${faction.toLowerCase()}`;
+  element.title = factionLabel(faction);
+}
+
+function ensureCreateFactionsDistinct(changed: 'blue' | 'red'): void {
+  if (!createBlueFaction || !createRedFaction) return;
+  let blue = factionFromSelect(createBlueFaction, DEFAULT_BLUE_FACTION);
+  let red = factionFromSelect(createRedFaction, DEFAULT_RED_FACTION);
+  if (blue === red) {
+    const alternate = FACTION_IDS.find((candidate) => candidate !== (changed === 'blue' ? blue : red));
+    if (alternate) {
+      if (changed === 'blue') {
+        red = alternate;
+        createRedFaction.value = red;
+      } else {
+        blue = alternate;
+        createBlueFaction.value = blue;
+      }
+    }
+  }
+  updateFactionSwatch(blueFactionSwatch, blue);
+  updateFactionSwatch(redFactionSwatch, red);
+}
+
+createBlueFaction?.addEventListener('change', () => ensureCreateFactionsDistinct('blue'));
+createRedFaction?.addEventListener('change', () => ensureCreateFactionsDistinct('red'));
+ensureCreateFactionsDistinct('blue');
+
 document.querySelector('#create-room')?.addEventListener('click', async () => {
   try {
     const name = cleanPlayerName();
@@ -518,17 +597,44 @@ document.querySelector('#create-room')?.addEventListener('click', async () => {
     const password = document.querySelector<HTMLInputElement>('#create-password')?.value ?? '';
     const visibilitySelect = document.querySelector<HTMLSelectElement>('#create-visibility');
     const visibility: RoomVisibility = visibilitySelect?.value === 'unlisted' ? 'unlisted' : 'public';
+    const gameModeSelect = document.querySelector<HTMLSelectElement>('#create-game-mode');
+    const selectedMode = gameModeSelect?.value;
+    const gameMode: GameMode = isGameMode(selectedMode) ? selectedMode : 'BATTLE';
+    const introEnabled = document.querySelector<HTMLSelectElement>('#create-intro')?.value !== 'off';
+    const constructionEnabled = document.querySelector<HTMLSelectElement>('#create-construction')?.value !== 'off';
+    ensureCreateFactionsDistinct('blue');
+    const blueFaction = factionFromSelect(createBlueFaction, DEFAULT_BLUE_FACTION);
+    const redFaction = factionFromSelect(createRedFaction, DEFAULT_RED_FACTION);
+    const blueSquads = numberInput('blue-squads', 1, 50, 20);
+    const redSquads = numberInput('red-squads', 1, 50, 20);
+    const conquestTickets = Math.max(100, Math.min(400, Math.max(blueSquads, redSquads) * 8));
     network.createRoom(
       name,
       password,
-      numberInput('blue-squads', 1, 50, 20),
-      numberInput('red-squads', 1, 50, 20),
+      blueSquads,
+      redSquads,
       numberInput('respawn-seconds', 5, 60, 20),
+      conquestTickets,
       visibility,
+      gameMode,
+      introEnabled,
+      constructionEnabled,
+      blueFaction,
+      redFaction,
     );
   } catch (error) {
     showError(error instanceof Error ? error.message : String(error));
   }
+});
+
+document.querySelector('#lobby-ticket-apply')?.addEventListener('click', () => {
+  if (!currentRoom || currentRoom.phase !== 'lobby' || currentRoom.settings.gameMode !== 'CONQUEST') return;
+  const local = currentRoom.players.find((player) => player.id === network.clientId);
+  if (!local?.owner) return;
+  const input = document.querySelector<HTMLInputElement>('#lobby-conquest-tickets');
+  const tickets = Math.max(1, Math.min(9999, Math.floor(Number(input?.value) || currentRoom.settings.conquestTickets)));
+  if (input) input.value = String(tickets);
+  network.setConquestTickets(tickets);
 });
 
 document.querySelector('#join-room')?.addEventListener('click', async () => {

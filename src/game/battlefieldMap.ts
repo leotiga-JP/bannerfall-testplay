@@ -22,7 +22,7 @@ export interface MapSite {
   position: Vec2;
   team?: Team;
   kind: 'facility' | 'resource';
-  resource?: 'wood' | 'iron' | 'powder' | 'alloy';
+  resource?: 'wood' | 'iron' | 'gunpowder' | 'alloy';
 }
 
 export interface CrossingSite {
@@ -89,16 +89,20 @@ export const MAP_SITES: MapSite[] = [
   { id: 'red-workshop', label: 'RED 工房予定地', shortLabel: '工房', team: 'red', kind: 'facility', position: { x: GAME_CONFIG.world.width - 3340, y: GAME_CONFIG.world.height - 7700 } },
   { id: 'red-foundry', label: 'RED 砲兵工廠予定地', shortLabel: '砲兵工廠', team: 'red', kind: 'facility', position: { x: GAME_CONFIG.world.width - 3950, y: GAME_CONFIG.world.height - 8380 } },
 
-  { id: 'blue-wood', label: '木材予定地', shortLabel: '木材', team: 'blue', kind: 'resource', resource: 'wood', position: { x: 2050, y: 6960 } },
-  { id: 'blue-iron', label: '鉄鉱予定地', shortLabel: '鉄', team: 'blue', kind: 'resource', resource: 'iron', position: { x: 4700, y: 8500 } },
-  { id: 'blue-powder', label: '火薬予定地', shortLabel: '火薬', team: 'blue', kind: 'resource', resource: 'powder', position: { x: 1660, y: 8960 } },
-  { id: 'red-wood', label: '木材予定地', shortLabel: '木材', team: 'red', kind: 'resource', resource: 'wood', position: { x: GAME_CONFIG.world.width - 2050, y: GAME_CONFIG.world.height - 6960 } },
-  { id: 'red-iron', label: '鉄鉱予定地', shortLabel: '鉄', team: 'red', kind: 'resource', resource: 'iron', position: { x: GAME_CONFIG.world.width - 4700, y: GAME_CONFIG.world.height - 8500 } },
-  { id: 'red-powder', label: '火薬予定地', shortLabel: '火薬', team: 'red', kind: 'resource', resource: 'powder', position: { x: GAME_CONFIG.world.width - 1660, y: GAME_CONFIG.world.height - 8960 } },
+  { id: 'blue-wood', label: '木材集積地', shortLabel: '木材', team: 'blue', kind: 'resource', resource: 'wood', position: { x: 2050, y: 6960 } },
+  { id: 'blue-iron', label: '鉄鉱床', shortLabel: '鉄', team: 'blue', kind: 'resource', resource: 'iron', position: { x: 4700, y: 8500 } },
+  { id: 'blue-powder', label: '火薬原料地', shortLabel: '火薬', team: 'blue', kind: 'resource', resource: 'gunpowder', position: { x: 1660, y: 8960 } },
+  { id: 'red-wood', label: '木材集積地', shortLabel: '木材', team: 'red', kind: 'resource', resource: 'wood', position: { x: GAME_CONFIG.world.width - 2050, y: GAME_CONFIG.world.height - 6960 } },
+  { id: 'red-iron', label: '鉄鉱床', shortLabel: '鉄', team: 'red', kind: 'resource', resource: 'iron', position: { x: GAME_CONFIG.world.width - 4700, y: GAME_CONFIG.world.height - 8500 } },
+  { id: 'red-powder', label: '火薬原料地', shortLabel: '火薬', team: 'red', kind: 'resource', resource: 'gunpowder', position: { x: GAME_CONFIG.world.width - 1660, y: GAME_CONFIG.world.height - 8960 } },
 
-  { id: 'central-alloy', label: '中央合金鉱区（Version 4.1予定）', shortLabel: '合金', kind: 'resource', resource: 'alloy', position: { ...CENTER } },
-  { id: 'west-iron', label: '前線鉄鉱予定地', shortLabel: '鉄+', kind: 'resource', resource: 'iron', position: { x: 6600, y: 3300 } },
-  { id: 'east-powder', label: '前線火薬予定地', shortLabel: '火薬+', kind: 'resource', resource: 'powder', position: { x: GAME_CONFIG.world.width - 6600, y: GAME_CONFIG.world.height - 3300 } },
+  { id: 'central-alloy', label: '中央合金鉱区', shortLabel: '合金', kind: 'resource', resource: 'alloy', position: { ...CENTER } },
+  { id: 'west-wood', label: '前線木材集積地', shortLabel: '木材+', kind: 'resource', resource: 'wood', position: { x: 7480, y: 5960 } },
+  { id: 'east-wood', label: '前線木材集積地', shortLabel: '木材+', kind: 'resource', resource: 'wood', position: { x: GAME_CONFIG.world.width - 7480, y: GAME_CONFIG.world.height - 5960 } },
+  { id: 'west-iron', label: '前線鉄鉱床', shortLabel: '鉄+', kind: 'resource', resource: 'iron', position: { x: 6600, y: 3300 } },
+  { id: 'east-iron', label: '前線鉄鉱床', shortLabel: '鉄+', kind: 'resource', resource: 'iron', position: { x: GAME_CONFIG.world.width - 6600, y: GAME_CONFIG.world.height - 3300 } },
+  { id: 'west-powder', label: '前線火薬原料地', shortLabel: '火薬+', kind: 'resource', resource: 'gunpowder', position: { x: 7000, y: 4400 } },
+  { id: 'east-powder', label: '前線火薬原料地', shortLabel: '火薬+', kind: 'resource', resource: 'gunpowder', position: { x: GAME_CONFIG.world.width - 7000, y: GAME_CONFIG.world.height - 4400 } },
 ];
 
 function distanceToSegment(point: Vec2, a: Vec2, b: Vec2): number {
@@ -131,6 +135,11 @@ export class BattlefieldMap {
   readonly columns = COLS;
   readonly rows = ROWS;
   private readonly terrain = new Uint8Array(COLS * ROWS);
+  private readonly pathGScore = new Float64Array(COLS * ROWS);
+  private readonly pathCameFrom = new Int32Array(COLS * ROWS);
+  private readonly pathClosed = new Uint8Array(COLS * ROWS);
+  private readonly pathHeapIndices: number[] = [];
+  private readonly pathHeapScores: number[] = [];
 
   constructor() {
     this.generate();
@@ -164,13 +173,27 @@ export class BattlefieldMap {
     return this.terrainAt(point) === 'bridge';
   }
 
+  segmentHitsMountain(from: Vec2, to: Vec2, step = TILE * 0.28): Vec2 | null {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= 0.001) return this.terrainAt(from) === 'mountain' ? { ...from } : null;
+    const steps = Math.max(1, Math.ceil(distance / Math.max(8, step)));
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const point = { x: from.x + dx * t, y: from.y + dy * t };
+      if (this.terrainAt(point) === 'mountain') return point;
+    }
+    return null;
+  }
+
   movementMultiplier(point: Vec2, squadClass: SquadClass): number {
     const terrain = this.terrainAt(point);
     if (terrain === 'mountain') return 0;
     if (terrain === 'road') return isArtilleryClass(squadClass) ? 1.18 : 1.10;
     if (terrain === 'forest') {
       if (isArtilleryClass(squadClass)) return 0.52;
-      if (isMountedClass(squadClass)) return 0.62;
+      if (isMountedClass(squadClass)) return 0.75;
       return 0.76;
     }
     if (terrain === 'river') {
@@ -230,7 +253,7 @@ export class BattlefieldMap {
     ));
   }
 
-  linePassable(from: Vec2, to: Vec2, clearanceTiles = 1): boolean {
+  linePassable(from: Vec2, to: Vec2, clearanceTiles = 1, blockedCells?: ReadonlySet<string>): boolean {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const distance = Math.hypot(dx, dy);
@@ -244,15 +267,16 @@ export class BattlefieldMap {
       for (let oy = -clearanceTiles; oy <= clearanceTiles; oy += 1) {
         for (let ox = -clearanceTiles; ox <= clearanceTiles; ox += 1) {
           if (this.terrainAtTile(col + ox, row + oy) === 'mountain') return false;
+          if (blockedCells?.has(`${col + ox},${row + oy}`)) return false;
         }
       }
     }
     return true;
   }
 
-  findPath(from: Vec2, to: Vec2, squadClass: SquadClass, maxExpanded = 14000): Vec2[] {
-    const startPoint = this.nearestPassablePoint(from, 10);
-    const goalPoint = this.nearestPassablePoint(to, 14);
+  findPath(from: Vec2, to: Vec2, squadClass: SquadClass, maxExpanded = 14000, blockedCells?: ReadonlySet<string>): Vec2[] {
+    const startPoint = this.nearestPassablePoint(from, 10, blockedCells);
+    const goalPoint = this.nearestPassablePoint(to, 14, blockedCells);
     const startCol = Math.max(0, Math.min(this.columns - 1, Math.floor(startPoint.x / TILE)));
     const startRow = Math.max(0, Math.min(this.rows - 1, Math.floor(startPoint.y / TILE)));
     const goalCol = Math.max(0, Math.min(this.columns - 1, Math.floor(goalPoint.x / TILE)));
@@ -261,14 +285,18 @@ export class BattlefieldMap {
     const goalIndex = goalRow * this.columns + goalCol;
     if (startIndex === goalIndex) return [goalPoint];
 
-    const total = this.columns * this.rows;
-    const gScore = new Float64Array(total);
+    // Reuse pathfinding work buffers. Creating ~0.5 MB of TypedArrays for every
+    // A* request caused avoidable GC spikes when many squads repathed together.
+    const gScore = this.pathGScore;
+    const cameFrom = this.pathCameFrom;
+    const closed = this.pathClosed;
+    const heapIndices = this.pathHeapIndices;
+    const heapScores = this.pathHeapScores;
     gScore.fill(Number.POSITIVE_INFINITY);
-    const cameFrom = new Int32Array(total);
     cameFrom.fill(-1);
-    const closed = new Uint8Array(total);
-    const heapIndices: number[] = [];
-    const heapScores: number[] = [];
+    closed.fill(0);
+    heapIndices.length = 0;
+    heapScores.length = 0;
 
     const heuristic = (col: number, row: number): number => Math.hypot(goalCol - col, goalRow - row);
     const push = (index: number, score: number): void => {
@@ -330,8 +358,9 @@ export class BattlefieldMap {
         const nextCol = col + ox;
         const nextRow = row + oy;
         if (nextCol < 0 || nextRow < 0 || nextCol >= this.columns || nextRow >= this.rows) continue;
-        if (this.terrainAtTile(nextCol, nextRow) === 'mountain') continue;
-        if (ox !== 0 && oy !== 0 && (this.terrainAtTile(col + ox, row) === 'mountain' || this.terrainAtTile(col, row + oy) === 'mountain')) continue;
+        if (this.terrainAtTile(nextCol, nextRow) === 'mountain' || blockedCells?.has(`${nextCol},${nextRow}`)) continue;
+        if (ox !== 0 && oy !== 0 && (this.terrainAtTile(col + ox, row) === 'mountain' || this.terrainAtTile(col, row + oy) === 'mountain'
+          || blockedCells?.has(`${col + ox},${row}`) || blockedCells?.has(`${col},${row + oy}`))) continue;
         const next = nextRow * this.columns + nextCol;
         if (closed[next]) continue;
         const moveCost = this.navigationCost(nextCol, nextRow, squadClass) * stepDistance;
@@ -360,7 +389,7 @@ export class BattlefieldMap {
     while (anchor < raw.length - 1) {
       let next = Math.min(raw.length - 1, anchor + 1);
       for (let candidate = Math.min(raw.length - 1, anchor + 12); candidate > next; candidate -= 1) {
-        if (this.linePassable(raw[anchor], raw[candidate], 0)) {
+        if (this.linePassable(raw[anchor], raw[candidate], 0, blockedCells)) {
           next = candidate;
           break;
         }
@@ -422,8 +451,9 @@ export class BattlefieldMap {
     return { ...from };
   }
 
-  nearestPassablePoint(point: Vec2, maxRadiusTiles = 16): Vec2 {
-    if (this.isPassable(point)) return { ...point };
+  nearestPassablePoint(point: Vec2, maxRadiusTiles = 16, blockedCells?: ReadonlySet<string>): Vec2 {
+    const originKey = `${Math.floor(point.x / TILE)},${Math.floor(point.y / TILE)}`;
+    if (this.isPassable(point) && !blockedCells?.has(originKey)) return { ...point };
     const originCol = Math.max(0, Math.min(this.columns - 1, Math.floor(point.x / TILE)));
     const originRow = Math.max(0, Math.min(this.rows - 1, Math.floor(point.y / TILE)));
     let best: Vec2 | null = null;

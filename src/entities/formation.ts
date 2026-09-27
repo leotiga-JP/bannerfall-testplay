@@ -5,11 +5,13 @@ import {
   canVolleyClass,
   isArtilleryClass,
   isChargeCavalryClass,
+  type FormationShape,
   type SquadClass,
   type Team,
   type Vec2,
   type WeaponType,
 } from '../game/types';
+import type { FormationUpgradeState, UpgradeTier } from '../game/upgradeSystem';
 import { Unit } from './unit';
 
 export type FormationMode = 'line' | 'charging' | 'melee' | 'reforming' | 'bannerAttack' | 'routed';
@@ -53,11 +55,18 @@ export class Formation {
   morale: number = GAME_CONFIG.morale.max;
   moraleShockTimer = 0;
   routTravelled = 0;
+  rallyGraceTimer = 0;
   forcedMarch = false;
   fieldworkKits = 0;
   grenadeCooldown = 0;
+  weaponTier: UpgradeTier = 1;
+  armorTier: UpgradeTier = 1;
+  artilleryPerformanceTier: UpgradeTier = 1;
+  artilleryBatteryTier: UpgradeTier = 1;
+  formationShape: FormationShape = 'line';
 
   private layoutCount = 0;
+  private soldierCapacity = 0;
   private movedThisFrame = false;
   private movedLastUpdate = false;
 
@@ -82,8 +91,11 @@ export class Formation {
   reset(center: Vec2, direction: number, squadClass: SquadClass = this.squadClass): void {
     this.center = { ...center };
     this.direction = direction;
-    if (squadClass !== this.squadClass || this.soldiers.length !== this.classSpec(squadClass).soldiers) {
+    if (squadClass !== this.squadClass) {
       this.squadClass = squadClass;
+      if (!isArtilleryClass(squadClass) && this.formationShape === 'block') this.formationShape = 'line';
+      this.rebuildSoldiers();
+    } else if (this.soldiers.length < this.classSpec(squadClass).soldiers) {
       this.rebuildSoldiers();
     }
     this.reloadTimer = 0;
@@ -109,6 +121,7 @@ export class Formation {
     this.morale = GAME_CONFIG.morale.max;
     this.moraleShockTimer = 0;
     this.routTravelled = 0;
+    this.rallyGraceTimer = 0;
     this.forcedMarch = false;
     this.fieldworkKits = fieldworkKitCapacity(squadClass);
     this.grenadeCooldown = 0;
@@ -122,9 +135,11 @@ export class Formation {
 
   setClass(squadClass: SquadClass): void {
     this.squadClass = squadClass;
+    if (!isArtilleryClass(squadClass) && this.formationShape === 'block') this.formationShape = 'line';
     this.rebuildSoldiers();
     this.weapon = canVolleyClass(squadClass) ? 'musket' : 'bayonet';
     this.morale = GAME_CONFIG.morale.max;
+    this.rallyGraceTimer = 0;
     this.forcedMarch = false;
     this.fieldworkKits = fieldworkKitCapacity(squadClass);
     this.grenadeCooldown = 0;
@@ -154,6 +169,41 @@ export class Formation {
       soldier.direction = direction;
       soldier.knockback = { x: 0, y: 0 };
     }
+  }
+
+  upgradeState(): FormationUpgradeState {
+    return {
+      weaponTier: this.weaponTier,
+      armorTier: this.armorTier,
+      artilleryPerformanceTier: this.artilleryPerformanceTier,
+      artilleryBatteryTier: this.artilleryBatteryTier,
+    };
+  }
+
+  setUpgradeState(state: FormationUpgradeState): void {
+    this.weaponTier = state.weaponTier;
+    this.armorTier = state.armorTier;
+    this.artilleryPerformanceTier = state.artilleryPerformanceTier;
+    this.artilleryBatteryTier = state.artilleryBatteryTier;
+    if (isArtilleryClass(this.squadClass)) {
+      const deploy = artilleryProfile(this.squadClass, this.artilleryPerformanceTier, this.artilleryBatteryTier).deploySeconds;
+      this.artilleryDeployTimer = Math.min(this.artilleryDeployTimer, deploy);
+      this.artilleryDeployed = this.artilleryDeployTimer >= deploy;
+    }
+  }
+
+  setFormationShape(shape: FormationShape): boolean {
+    if (shape === 'block' && !isArtilleryClass(this.squadClass)) return false;
+    if (this.formationShape === shape) return true;
+    this.formationShape = shape;
+    const alive = this.aliveSoldiers();
+    this.layoutCount = Math.max(1, alive.length);
+    this.assignCompactSlots(alive);
+    if (isArtilleryClass(this.squadClass)) {
+      this.artilleryDeployed = false;
+      this.artilleryDeployTimer = 0;
+    }
+    return true;
   }
 
   markMoved(): void {
@@ -195,7 +245,7 @@ export class Formation {
       this.center = { ...this.chargeTarget };
       return true;
     }
-    const profile = chargeProfile(this.squadClass);
+    const profile = chargeProfile(this.squadClass, this.weaponTier);
     const speed = isChargeCavalryClass(this.squadClass)
       ? profile.speed * Math.max(0.45, this.chargeMomentum)
       : profile.speed;
@@ -218,6 +268,7 @@ export class Formation {
     this.artilleryDeployed = false;
     this.artilleryDeployTimer = 0;
     this.routTravelled = 0;
+    this.rallyGraceTimer = 0;
     this.debugIntent = 'ROUT';
     return true;
   }
@@ -330,22 +381,40 @@ export class Formation {
     this.moraleShockTimer = GAME_CONFIG.morale.shockCooldown;
   }
 
+  beginPostRoutRecovery(): void {
+    this.rallyGraceTimer = GAME_CONFIG.morale.postRoutGraceSeconds;
+    this.morale = Math.max(this.morale, GAME_CONFIG.morale.postRoutMoraleFloor);
+    this.moraleShockTimer = 0;
+  }
+
   update(dt: number): void {
     this.reloadTimer = Math.max(0, this.reloadTimer - dt);
     this.spawnProtectionTimer = Math.max(0, this.spawnProtectionTimer - dt);
     this.moraleShockTimer = Math.max(0, this.moraleShockTimer - dt);
+    this.rallyGraceTimer = Math.max(0, this.rallyGraceTimer - dt);
     this.grenadeCooldown = Math.max(0, this.grenadeCooldown - dt);
     for (const soldier of this.soldiers) soldier.update(dt);
 
     if (isArtilleryClass(this.squadClass) && this.mode === 'line') {
       if (!this.movedThisFrame) {
-        const deploy = artilleryProfile(this.squadClass).deploySeconds;
+        const deploy = artilleryProfile(this.squadClass, this.artilleryPerformanceTier, this.artilleryBatteryTier).deploySeconds;
         this.artilleryDeployTimer = Math.min(deploy, this.artilleryDeployTimer + dt);
         this.artilleryDeployed = this.artilleryDeployTimer >= deploy;
       }
     }
 
-    if (this.moraleShockTimer <= 0 && this.aliveCount() > 0 && !this.forcedMarch) {
+    if (this.rallyGraceTimer > 0 && this.aliveCount() > 0 && !this.forcedMarch) {
+      // A squad that has just rallied gets a short morale floor. Damage can still
+      // kill soldiers normally, but cavalry shock cannot chain it straight back
+      // into another uncontrollable ROUT before the player gets a chance to react.
+      this.morale = Math.min(
+        GAME_CONFIG.morale.max,
+        Math.max(
+          GAME_CONFIG.morale.postRoutMoraleFloor,
+          this.morale + GAME_CONFIG.morale.postRoutRecoveryPerSecond * dt,
+        ),
+      );
+    } else if (this.moraleShockTimer <= 0 && this.aliveCount() > 0 && !this.forcedMarch) {
       let recovery: number = GAME_CONFIG.morale.lineRecoveryPerSecond;
       if (this.mode === 'reforming') recovery = GAME_CONFIG.morale.reformRecoveryPerSecond;
       if (this.mode === 'routed') recovery = GAME_CONFIG.morale.routRecoveryPerSecond;
@@ -395,7 +464,100 @@ export class Formation {
   }
 
   maxSoldiers(): number {
-    return this.soldiers.length;
+    return Math.max(this.standardSoldiers(), this.soldierCapacity || this.soldiers.length);
+  }
+
+  standardSoldiers(): number {
+    return this.classSpec().soldiers;
+  }
+
+  setMaxSoldiers(count: number): void {
+    const standard = this.classSpec().soldiers;
+    const target = Math.max(standard, Math.floor(count));
+    if (target < this.aliveCount()) return;
+    this.soldierCapacity = target;
+    // Capacity is metadata until new soldiers are actually recruited. This avoids
+    // sending dozens of empty soldier slots in every multiplayer snapshot.
+    if (target < this.soldiers.length) this.trimInactiveSoldiers(target);
+  }
+
+  trimInactiveSoldiers(maxPool = this.aliveCount()): void {
+    const targetPool = Math.max(this.aliveCount(), Math.min(this.maxSoldiers(), Math.floor(maxPool)));
+    if (this.soldiers.length <= targetPool) return;
+    const alive = this.aliveSoldiers();
+    const dead = this.soldiers.filter((soldier) => soldier.dead);
+    this.soldiers = [...alive, ...dead.slice(0, Math.max(0, targetPool - alive.length))];
+    this.layoutCount = Math.max(1, alive.length);
+    this.assignCompactSlots(alive);
+  }
+
+  syncSoldierPoolSize(count: number): void {
+    const target = Math.max(0, Math.min(this.maxSoldiers(), Math.floor(count)));
+    if (target < this.soldiers.length) {
+      this.soldiers = this.soldiers.slice(0, target);
+      return;
+    }
+    if (target === this.soldiers.length) return;
+    const spec = this.classSpec();
+    while (this.soldiers.length < target) {
+      const index = this.soldiers.length;
+      const soldier = new Unit(`${this.id}-${index}`, this.team, index, this.center, spec.maxHp);
+      soldier.direction = this.direction;
+      soldier.dead = true;
+      soldier.hp = 0;
+      this.soldiers.push(soldier);
+    }
+  }
+
+  setActiveStrength(count: number, repositionAll = false): void {
+    const target = Math.max(0, Math.min(this.maxSoldiers(), Math.floor(count)));
+    const alive = this.aliveSoldiers();
+    if (alive.length > target) {
+      for (const soldier of alive.slice(target)) {
+        soldier.dead = true;
+        soldier.hp = 0;
+        soldier.knockback = { x: 0, y: 0 };
+      }
+    } else if (alive.length < target) {
+      const spec = this.classSpec();
+      let needed = target - alive.length;
+      const dead = this.soldiers.filter((soldier) => soldier.dead).slice(0, needed);
+      for (const soldier of dead) {
+        soldier.reset({ ...this.center }, spec.maxHp);
+        soldier.direction = this.direction;
+        needed -= 1;
+      }
+      while (needed > 0 && this.soldiers.length < this.maxSoldiers()) {
+        const index = this.soldiers.length;
+        const soldier = new Unit(`${this.id}-${index}`, this.team, index, this.center, spec.maxHp);
+        soldier.direction = this.direction;
+        this.soldiers.push(soldier);
+        needed -= 1;
+      }
+    }
+
+    const active = this.aliveSoldiers();
+    this.layoutCount = Math.max(1, active.length);
+    this.assignCompactSlots(active);
+    for (const soldier of active) {
+      const targetPosition = this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
+      if (repositionAll || Math.hypot(soldier.position.x - this.center.x, soldier.position.y - this.center.y) < 1) {
+        soldier.position = { ...targetPosition };
+      }
+      soldier.direction = this.direction;
+    }
+  }
+
+  addReinforcements(count: number, moralePerSoldier = 0, moraleCap = 100): number {
+    const before = this.aliveCount();
+    const target = Math.min(this.maxSoldiers(), before + Math.max(0, Math.floor(count)));
+    if (target <= before) return 0;
+    this.setActiveStrength(target, false);
+    const added = this.aliveCount() - before;
+    if (added > 0 && moralePerSoldier > 0) {
+      this.morale = Math.min(moraleCap, this.morale + added * moralePerSoldier);
+    }
+    return added;
   }
 
   canVolley(): boolean {
@@ -443,13 +605,16 @@ export class Formation {
   }
 
   maxChargeDistance(): number {
-    return chargeProfile(this.squadClass).maxDistance;
+    return chargeProfile(this.squadClass, this.weaponTier).maxDistance;
   }
 
   movementSpeed(player: boolean, retreat = false): number {
     const spec = this.classSpec();
     if (retreat) return spec.aiRetreatSpeed;
-    return player ? spec.playerMoveSpeed : spec.aiMoveSpeed;
+    const base = player ? spec.playerMoveSpeed : spec.aiMoveSpeed;
+    // Column is a marching formation: narrower frontage makes movement slightly easier,
+    // without turning formation choice into a raw combat-stat upgrade.
+    return base * (this.formationShape === 'column' ? 1.08 : 1);
   }
 
   forcedMarchMultiplier(): number {
@@ -481,7 +646,10 @@ export class Formation {
   }
 
   shouldRout(): boolean {
-    return this.mode !== 'routed' && this.morale <= GAME_CONFIG.morale.routThreshold && this.aliveCount() > 0;
+    return this.mode !== 'routed'
+      && this.rallyGraceTimer <= 0
+      && this.morale <= GAME_CONFIG.morale.routThreshold
+      && this.aliveCount() > 0;
   }
 
   slotPosition(index: number, count = this.layoutCount): Vec2 {
@@ -505,6 +673,7 @@ export class Formation {
 
   private rebuildSoldiers(): void {
     const spec = this.classSpec();
+    this.soldierCapacity = spec.soldiers;
     this.layoutCount = spec.soldiers;
     this.soldiers = Array.from({ length: spec.soldiers }, (_, index) => {
       const unit = new Unit(`${this.id}-${index}`, this.team, index, this.slotPosition(index, spec.soldiers), spec.maxHp);
@@ -515,12 +684,52 @@ export class Formation {
 
   private layoutFor(index: number, count: number): { row: number; column: number; rowCount: number } {
     if (count <= 1) return { row: 0, column: 0, rowCount: 1 };
-    const rows = Math.max(1, Math.min(this.classSpec().rows, count));
+    const spec = this.classSpec();
+
+    if (this.formationShape === 'column') {
+      // Narrow marching column: roughly five soldiers abreast, then deepen backwards.
+      const perRow = Math.min(5, count);
+      const row = Math.floor(index / perRow);
+      const rowStart = row * perRow;
+      const rowCount = Math.max(1, Math.min(perRow, count - rowStart));
+      return { row, column: index - rowStart, rowCount };
+    }
+
+    if (this.formationShape === 'block' && isArtilleryClass(this.squadClass)) {
+      // Artillery crews form a compact near-square around the battery.
+      const perRow = Math.max(1, Math.ceil(Math.sqrt(count)));
+      const row = Math.floor(index / perRow);
+      const rowStart = row * perRow;
+      const rowCount = Math.max(1, Math.min(perRow, count - rowStart));
+      return { row, column: index - rowStart, rowCount };
+    }
+
+    const standardPerRow = Math.max(1, Math.ceil(spec.soldiers / Math.max(1, spec.rows)));
+    const maxRows = this.maxDynamicRows();
+    // Growth should deepen the formation instead of making one impractically long
+    // horizontal line. Standard infantry stays 2 ranks at 20 men and grows to as
+    // many as 5 ranks at the new 50-man cap.
+    const rows = Math.max(spec.rows, Math.min(maxRows, Math.ceil(count / standardPerRow), count));
     const perRow = Math.ceil(count / rows);
     const row = Math.min(rows - 1, Math.floor(index / perRow));
     const rowStart = row * perRow;
     const rowCount = Math.min(perRow, count - rowStart);
     return { row, column: index - rowStart, rowCount: Math.max(1, rowCount) };
+  }
+
+  private maxDynamicRows(): number {
+    switch (this.squadClass) {
+      case 'infantry': return 5;
+      case 'lightInfantry':
+      case 'grenadier':
+      case 'sharpshooter':
+      case 'engineer': return 4;
+      case 'dragoon':
+      case 'cavalry':
+      case 'hussar':
+      case 'cuirassier': return 3;
+      default: return this.classSpec().rows;
+    }
   }
 
   private assignCompactSlots(alive: Unit[]): void {

@@ -542,6 +542,11 @@ button.wide { width: 100%; margin-top: 10px; }
 .lobby-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .lobby-head h2 { margin: 2px 0 0; font: 800 34px ui-monospace, monospace; letter-spacing: 0.18em; color: #f0d77d; }
 .lobby-settings { margin: 16px 0; padding: 10px 12px; border: 1px solid #514833; color: #cabd9d; font: 11px ui-monospace, monospace; }
+.lobby-ticket-controls { margin: -7px 0 14px; display: flex; align-items: end; gap: 8px; padding: 9px 10px; border: 1px solid rgba(208, 184, 112, .32); background: rgba(48, 41, 29, .62); }
+.lobby-ticket-controls label { display: grid; gap: 4px; color: #d7c89f; font: 800 9px ui-monospace, monospace; letter-spacing: .08em; }
+.lobby-ticket-controls input { width: 118px; padding: 7px 8px; border: 1px solid #62573d; background: #17140f; color: #f0dd9b; font: 800 12px ui-monospace, monospace; }
+.lobby-ticket-controls button { min-height: 32px; }
+.lobby-ticket-controls small { align-self: center; color: #9e947e; font: 9px ui-monospace, monospace; }
 .team-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .team-card { min-height: 250px; padding: 14px; border: 1px solid #5b503b; background: rgba(10,9,7,0.25); }
 .blue-team { border-top: 4px solid #659de0; }
@@ -762,15 +767,19 @@ button.wide { width: 100%; margin-top: 10px; }
 .battle-chat {
   position: absolute;
   left: 18px;
-  bottom: 92px;
-  width: min(360px, 36vw);
+  top: 18px;
+  bottom: auto;
+  width: min(380px, 38vw);
+  max-height: 190px;
   z-index: 16;
   pointer-events: none;
 }
+.battle-chat.minimap-top-left { top: 190px; }
 .battle-chat-log { display: flex; flex-direction: column; gap: 3px; margin-bottom: 5px; text-shadow: 0 2px 3px #000; }
 .battle-chat-log .chat-line { font-size: 9px; }
 .battle-chat-log .chat-line strong { color: #f0cf78; }
 .battle-chat-log .chat-line span { color: #f0e7d5; }
+.battle-chat-log .chat-line.system strong, .battle-chat-log .chat-line.system span { color: #91b59c; }
 #battle-chat-input { width: 100%; opacity: .48; pointer-events: auto; }
 #battle-chat-input:focus { opacity: 1; background: rgba(12,10,7,.97); }
 
@@ -963,3 +972,184 @@ button.wide { width: 100%; margin-top: 10px; }
   .respawn-spawn-buttons { grid-template-columns: 1fr; }
   .battle-setting-row, .map-position-row { grid-template-columns: 1fr; gap: 7px; padding: 10px 0; }
 }
+
+/* Version 4.1.1 — Total War resource HUD (retained in 4.2.0) */
+.resource-stockpile {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: flex;
+  gap: 14px;
+  padding: 6px 11px;
+  border: 1px solid rgba(220, 205, 159, 0.34);
+  background: rgba(17, 15, 11, 0.80);
+  color: #cfc4a9;
+  font: 800 9px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .04em;
+  pointer-events: none;
+}
+.resource-stockpile strong { color: #f0d77c; font-size: 10px; }
+
+
+.construction-work {
+  position: absolute;
+  left: 50%;
+  bottom: 132px;
+  transform: translateX(-50%);
+  z-index: 19;
+  width: min(360px, calc(100vw - 40px));
+  padding: 9px 11px;
+  border: 1px solid rgba(230, 207, 141, 0.62);
+  background: rgba(16, 14, 10, 0.94);
+  color: #e8dcc0;
+  pointer-events: none;
+}
+.construction-work-head { display:flex; justify-content:space-between; gap:12px; align-items:center; font:800 10px ui-monospace,monospace; }
+.construction-work-head strong { color:#f0d77c; }
+.construction-work-head span { color:#b9ad93; font-size:9px; }
+.construction-work-track { height:8px; margin-top:7px; background:rgba(255,255,255,.09); overflow:hidden; border:1px solid rgba(220,205,159,.2); }
+.construction-work-track span { display:block; width:0; height:100%; background:linear-gradient(90deg,#927d4f,#efd172); transition:width .08s linear; }
+.construction-work[data-work="dismantle"] .construction-work-track span { background:linear-gradient(90deg,#76584c,#d7ae86); }
+
+.resource-gather {
+  position: absolute;
+  left: 50%;
+  bottom: 132px;
+  transform: translateX(-50%);
+  z-index: 17;
+  width: min(340px, calc(100vw - 40px));
+  padding: 8px 10px;
+  border: 1px solid rgba(230, 207, 141, 0.48);
+  background: rgba(16, 14, 10, 0.90);
+  color: #e8dcc0;
+  pointer-events: none;
+}
+.resource-gather-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; font: 800 10px ui-monospace, monospace; }
+.resource-gather-head strong { color: #f0d77c; }
+.resource-gather-head span { color: #9b927f; font-size: 9px; }
+.resource-gather-track { height: 6px; margin: 7px 0 5px; background: rgba(255,255,255,.08); overflow: hidden; }
+.resource-gather-track span { display: block; width: 0; height: 100%; background: #d7bd68; }
+.resource-gather small { color: #bdb39e; font: 9px ui-monospace, monospace; }
+
+.resource-score-column { display: none; }
+.scoreboard.total-war .resource-score-column { display: inline; }
+.scoreboard.total-war .scoreboard-columns,
+.scoreboard.total-war .scoreboard-row {
+  grid-template-columns: minmax(200px, 1.55fr) .48fr .78fr .42fr .48fr .66fr .60fr .60fr;
+}
+.scoreboard.total-war .scoreboard-row span:nth-child(n+7),
+.scoreboard.total-war .scoreboard-columns span:nth-child(n+7) { text-align: right; }
+
+/* Version 4.3.2 — Faction Banner System */
+.recruitment-panel {
+  position: absolute;
+  top: 142px;
+  right: 22px;
+  z-index: 22;
+  width: 330px;
+  padding: 14px;
+  border: 1px solid rgba(225, 205, 154, 0.62);
+  background: rgba(17, 14, 10, 0.94);
+  color: #dfd2b4;
+  box-shadow: 0 14px 42px rgba(0,0,0,.45);
+}
+.recruitment-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.recruitment-head small { color: #978b73; font: 800 8px ui-monospace, monospace; letter-spacing: .14em; }
+.recruitment-head h2 { margin: 3px 0 0; font-size: 18px; color: #f0e2c0; }
+.recruitment-head button { padding: 6px 9px; }
+.recruitment-panel > p { margin: 10px 0; font: 10px/1.5 ui-monospace, monospace; }
+.recruitment-progress { height: 7px; margin: 9px 0 11px; background: rgba(255,255,255,.08); overflow: hidden; }
+.recruitment-progress span { display: block; width: 0; height: 100%; background: #d7bd68; }
+.recruitment-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.recruitment-actions button {
+  min-height: 58px;
+  padding: 9px;
+  border: 1px solid rgba(145, 127, 91, .72);
+  background: rgba(51, 44, 33, .84);
+  color: #e0d1ad;
+  cursor: pointer;
+  display: grid;
+  gap: 5px;
+}
+.recruitment-actions button:disabled { opacity: .38; cursor: default; }
+.recruitment-actions strong { font-size: 14px; }
+.recruitment-actions small { color: #afa48e; font: 9px ui-monospace, monospace; }
+.recruitment-cancel { width: 100%; margin-top: 9px; padding: 8px; border-color: rgba(193, 105, 88, .65); color: #e1aa9c; }
+.recruitment-panel .muted { color: #928a79; }
+
+/* Version 4.3.2 — Faction Banner System */
+.recruit-upgrade-cap {
+  width: 100%;
+  margin-top: 9px;
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-color: rgba(201, 164, 83, .72);
+  color: #f0d99b;
+  background: rgba(72, 55, 24, .54);
+}
+.recruit-upgrade-cap small { color: #bcae8a; font: 9px ui-monospace, monospace; }
+.recruit-upgrade-cap:disabled { opacity: .38; cursor: default; }
+
+/* Version 4.3.2 faction banner selectors */
+.faction-field { position: relative; }
+.faction-field select { padding-right: 58px; }
+.faction-swatch {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 38px;
+  height: 22px;
+  border: 1px solid rgba(245,235,210,.75);
+  box-shadow: 0 2px 8px rgba(0,0,0,.28);
+  pointer-events: none;
+}
+.faction-french { background: linear-gradient(90deg,#1f4f9a 0 33.33%,#eee9dc 33.33% 66.66%,#b73238 66.66% 100%); }
+.faction-prussian { background: linear-gradient(90deg,transparent 43%,#171717 43% 57%,transparent 57%), linear-gradient(0deg,transparent 39%,#171717 39% 61%,transparent 61%), #eeeade; }
+.faction-british { background: linear-gradient(90deg,transparent 42%,#c53d42 42% 58%,transparent 58%), linear-gradient(0deg,transparent 39%,#c53d42 39% 61%,transparent 61%), linear-gradient(32deg,transparent 43%,#f0eadc 43% 50%,#c53d42 50% 55%,#f0eadc 55% 62%,transparent 62%), linear-gradient(-32deg,transparent 43%,#f0eadc 43% 50%,#c53d42 50% 55%,#f0eadc 55% 62%,transparent 62%), #26477d; }
+.faction-russian { background: radial-gradient(circle at 52% 50%,#d4b75e 0 12%,#282820 13% 18%,transparent 19%), linear-gradient(135deg,transparent 40%,#2e674c 40% 48%,transparent 48%), linear-gradient(45deg,transparent 40%,#2e674c 40% 48%,transparent 48%), #eee9dc; }
+.faction-note { margin-top: -2px; }
+
+/* Version 4.4.0 — Upgrade Foundation */
+.upgrade-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 36px));
+  padding: 16px;
+  background: rgba(23, 20, 16, .96);
+  border: 1px solid rgba(185, 158, 102, .78);
+  box-shadow: 0 18px 58px rgba(0, 0, 0, .48);
+  z-index: 48;
+}
+.upgrade-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.upgrade-head small { color: #a99b7d; font: 9px ui-monospace, monospace; letter-spacing: .15em; }
+.upgrade-head h2 { margin: 4px 0 0; color: #ead8ae; font: 20px Georgia, serif; }
+.upgrade-head button { padding: 6px 9px; }
+.upgrade-panel > p { margin: 10px 0; color: #d8ccb0; font: 10px/1.5 ui-monospace, monospace; }
+.upgrade-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.upgrade-actions button {
+  min-height: 96px;
+  padding: 11px;
+  border: 1px solid rgba(151, 131, 89, .72);
+  background: rgba(52, 45, 33, .88);
+  color: #ead8ae;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+.upgrade-actions button:disabled { opacity: .38; cursor: default; }
+.upgrade-actions strong { font-size: 14px; }
+.upgrade-actions small { color: #b4a78c; font: 9px/1.4 ui-monospace, monospace; }
+.upgrade-actions .upgrade-detail { color: #d4c59f; }
+.upgrade-panel .muted { color: #918873; }
+
+/* Version 4.4.4 — Construction / Siege Polish */
+.hotbar .slot[data-slot="6"]:not(.empty) { cursor: pointer; }
+.hotbar .slot[data-slot="6"]:not(.empty):hover { transform: translateY(-2px); filter: brightness(1.12); }

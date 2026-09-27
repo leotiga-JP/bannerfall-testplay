@@ -1,6 +1,6 @@
 import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
-import { canBannerAttackClass, canVolleyClass, classLabel, isArtilleryClass, isSquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
+import { canBannerAttackClass, classLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, isSquadClass, nextFormationShape, type Team, type Vec2, type WeaponType } from '../game/types';
 import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
 import { artilleryTargetIssue } from '../game/classProfiles';
 import { InputManager } from '../input/inputManager';
@@ -9,6 +9,10 @@ import { Hud } from '../ui/hud';
 import { AudioManager } from '../audio/audioManager';
 import { NetworkClient } from './networkClient';
 import type { MatchStartPayload, PlayerAction, RoomState } from './protocol';
+import { factionShortLabel } from '../game/factionBanners';
+import { artilleryGunCount, type EquipmentUpgradeKind } from '../game/upgradeSystem';
+import type { ConstructionBlockKind } from '../entities/constructionBlock';
+import { CONSTRUCTION_COSTS, constructionWorkSecondsForClass } from '../game/constructionSystem';
 
 export class MultiplayerBattle {
   private readonly input: InputManager;
@@ -25,10 +29,18 @@ export class MultiplayerBattle {
   private previousTime = performance.now();
   private snapshotAccumulator = 0;
   private controlAccumulator = 0;
+  private audioAccumulator = 0;
+  private movementInputLocked = false;
   private readonly cleanup: Array<() => void> = [];
-  private fieldworkPlacementArmed = false;
+  private constructionPlacementArmed = false;
+  private constructionKind: ConstructionBlockKind = 'woodWall';
+  private constructionDirection = 0;
   private settingsOpen = false;
   private minimapPosition: MinimapPosition = 'bottom-right';
+  private recruitmentPanelOpen = false;
+  private recruitmentPanel: HTMLElement | null = null;
+  private upgradePanelOpen = false;
+  private upgradePanel: HTMLElement | null = null;
 
   constructor(
     private readonly network: NetworkClient,
@@ -44,6 +56,7 @@ export class MultiplayerBattle {
     if (!scoreboard || !scoreboardBody) throw new Error('Missing battle scoreboard elements.');
     this.scoreboard = scoreboard;
     this.scoreboardBody = scoreboardBody;
+    this.scoreboard.classList.toggle('total-war', payload.room.settings.gameMode === 'CONQUEST');
     const humanIds = payload.room.players.flatMap((player) => player.formationId ? [player.formationId] : []);
     const initialClasses = Object.fromEntries(
       payload.room.players.flatMap((player) => player.formationId ? [[player.formationId, player.squadClass]] : []),
@@ -60,11 +73,14 @@ export class MultiplayerBattle {
       blueSquads: payload.room.settings.blueSquads,
       redSquads: payload.room.settings.redSquads,
       respawnSeconds: payload.room.settings.respawnSeconds,
+      conquestTickets: payload.room.settings.conquestTickets,
+      gameMode: payload.room.settings.gameMode,
       localFormationId: this.localFormationId,
       humanFormationIds: humanIds,
       initialClasses,
       initialSpawnAreas,
-      introEnabled: !payload.joinInProgress,
+      introEnabled: payload.room.settings.introEnabled && !payload.joinInProgress,
+      constructionEnabled: payload.room.settings.constructionEnabled,
       // Cannon fire is confirmed by the authoritative server before shells/audio appear.
       predictArtilleryShots: false,
     });
@@ -74,7 +90,7 @@ export class MultiplayerBattle {
     ctx.imageSmoothingEnabled = false;
     canvas.width = GAME_CONFIG.viewport.width;
     canvas.height = GAME_CONFIG.viewport.height;
-    this.renderer = new Renderer(ctx);
+    this.renderer = new Renderer(ctx, payload.room.settings.blueFaction, payload.room.settings.redFaction);
     this.audio = new AudioManager();
     this.installMapAndAudioControls();
     this.installAudioUnlock();
@@ -95,8 +111,21 @@ export class MultiplayerBattle {
     this.network.onBattleSnapshot = (snapshot) => {
       if (!this.network.isAuthority) this.game.applyNetworkSnapshot(snapshot);
     };
+    this.network.onBattleEvents = (events) => {
+      if (this.network.isAuthority) return;
+      this.game.applyPresentationEvents(events);
+      this.audio.handlePresentationEvents(events, this.game);
+    };
+    this.network.onResourceState = (state) => {
+      this.game.applyResourceNetworkState(state);
+    };
+    this.network.onConstructionState = (state) => {
+      this.game.applyConstructionNetworkState(state);
+    };
 
     this.installNetworkInputEvents();
+    this.installRecruitmentControls();
+    this.installUpgradeControls();
     this.installScoreboardEvents();
     requestAnimationFrame((now) => this.frame(now));
   }
@@ -144,6 +173,7 @@ export class MultiplayerBattle {
       this.minimapPosition = position;
       this.renderer.setMinimapPosition(position);
       this.game.setMinimapPosition(position);
+      document.querySelector<HTMLElement>('#battle-chat')?.classList.toggle('minimap-top-left', position === 'top-left');
       localStorage.setItem('bannerfall.minimapPosition', position);
       for (const button of positionButtons) button.classList.toggle('selected', button.dataset.mapPosition === position);
     };
@@ -157,14 +187,15 @@ export class MultiplayerBattle {
       overlay.classList.toggle('hidden', !open);
       this.input.setBlocked(open);
       if (open) {
-        this.fieldworkPlacementArmed = false;
+        this.recruitmentPanelOpen = false;
+        this.recruitmentPanel?.classList.add('hidden');
+        this.upgradePanelOpen = false;
+        this.upgradePanel?.classList.add('hidden');
         this.hud.closeClassReservation();
         this.scoreboard.classList.add('hidden');
         const formation = this.game.playerFormation;
-        const weapon: WeaponType = canBannerAttackClass(formation.squadClass)
-          ? formation.weapon
-          : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
-        this.network.sendControl({ formationId: formation.id, moveX: 0, moveY: 0, aim: formation.center, weapon, forcedMarch: false });
+        const weapon: WeaponType = this.game.playerInputWeapon();
+        this.network.sendControl({ formationId: formation.id, moveX: 0, moveY: 0, aim: formation.center, weapon, forcedMarch: false, gathering: false });
       }
     };
 
@@ -222,7 +253,8 @@ export class MultiplayerBattle {
       get('blue-banner-bar'), get('red-banner-bar'), get('player-state'), get('player-detail'), get('player-stats'),
       get('notice'), get('objective-progress'), get('context-hint'), get('hotbar'),
       get('class-selector'), get('class-selector-title'), get('class-selector-description'), get<HTMLButtonElement>('reserve-class-toggle'),
-      get('army-composition'), get('class-recommendation'),
+      get('army-composition'), get('class-recommendation'), get('resource-stockpile'), get('resource-gather'),
+      factionShortLabel(this.room.settings.blueFaction), factionShortLabel(this.room.settings.redFaction),
     );
   }
 
@@ -231,10 +263,13 @@ export class MultiplayerBattle {
     const rawDt = Math.min((now - this.previousTime) / 1000, 0.04);
     this.previousTime = now;
 
-    // Clients keep short local prediction for responsive controls, then reconcile
-    // toward the latest authoritative server snapshot over several render frames.
-    this.game.update(rawDt);
-    if (!this.network.isAuthority) this.game.smoothNetworkState(rawDt);
+    // The server is authoritative. Multiplayer clients only advance presentation
+    // state and interpolate snapshots; they do not run AI/pathfinding/combat again.
+    if (this.network.isAuthority) this.game.update(rawDt);
+    else {
+      this.game.updateNetworkPresentation(rawDt);
+      this.game.smoothNetworkState(rawDt);
+    }
 
     if (this.network.isAuthority) {
       this.snapshotAccumulator += rawDt;
@@ -251,7 +286,18 @@ export class MultiplayerBattle {
     }
 
     const snapshot = this.game.snapshot();
-    this.audio.update(this.game);
+    if (this.constructionPlacementArmed) {
+      const target = this.game.camera.screenToWorld(this.input.getPointer());
+      const preview = this.game.constructionPlacementPreview(this.constructionKind, target);
+      this.renderer.setConstructionGhost({ ...preview, kind: this.constructionKind, direction: this.constructionDirection });
+    } else {
+      this.renderer.setConstructionGhost(null);
+    }
+    this.audioAccumulator += rawDt;
+    if (this.audioAccumulator >= 0.05) {
+      this.audioAccumulator = 0;
+      this.audio.update(this.game);
+    }
     this.renderer.render(
       this.game.formations,
       this.game.banners,
@@ -259,6 +305,8 @@ export class MultiplayerBattle {
       this.game.artilleryShells,
       this.game.artilleryExplosions,
       this.game.fieldworks,
+      this.game.constructionBlocks,
+      this.game.resourceNodes(),
       this.game.smoke,
       this.game.muzzleFlashes,
       this.game.corpses,
@@ -269,16 +317,269 @@ export class MultiplayerBattle {
       this.labels,
       this.localFormationId,
     );
+    if (this.constructionPlacementArmed && (snapshot.playerAlive <= 0 || !this.room.settings.constructionEnabled || !snapshot.conquestEnabled)) this.constructionPlacementArmed = false;
+    this.hud.setBuilderMode(this.constructionPlacementArmed, this.constructionKind, this.room.settings.constructionEnabled && snapshot.conquestEnabled);
     this.hud.update(snapshot);
-    if (this.fieldworkPlacementArmed) {
+    this.renderConstructionWork(snapshot);
+    this.renderRecruitmentPanel(snapshot);
+    this.renderUpgradePanel(snapshot);
+    if (this.constructionPlacementArmed) {
       const hint = document.querySelector<HTMLElement>('#context-hint');
       if (hint) {
-        hint.textContent = '馬防柵：設置したい位置を左クリック · 5 / Esc でキャンセル';
+        const labels: Record<ConstructionBlockKind, string> = { woodWall: '木製壁', ironWall: '強化壁', loophole: '銃眼', door: '扉', roadTile: '道路', bridgeTile: '橋' };
+        const label = labels[this.constructionKind];
+        const cost = CONSTRUCTION_COSTS[this.constructionKind];
+        hint.textContent = `BUILDER · ${label} · 左クリック建築 · 右クリック味方撤去 · 2〜7 種類 · R 回転 · 1 戦闘へ戻る · 木${cost.wood} 鉄${cost.iron} 合金${cost.alloy}`;
         hint.classList.remove('hidden');
       }
     }
     if (!this.scoreboard.classList.contains('hidden')) this.renderScoreboard();
     requestAnimationFrame((time) => this.frame(time));
+  }
+
+  private installRecruitmentControls(): void {
+    const panel = document.querySelector<HTMLElement>('#recruitment-panel');
+    const close = document.querySelector<HTMLButtonElement>('#recruitment-close');
+    const cancel = document.querySelector<HTMLButtonElement>('#recruitment-cancel');
+    const upgrade = document.querySelector<HTMLButtonElement>('#recruit-upgrade-cap');
+    if (!panel || !close || !cancel || !upgrade) return;
+    this.recruitmentPanel = panel;
+
+    const setOpen = (open: boolean): void => {
+      this.recruitmentPanelOpen = open && this.game.modeRules.recruitment;
+      if (this.recruitmentPanelOpen && this.upgradePanelOpen) {
+        this.upgradePanelOpen = false;
+        this.upgradePanel?.classList.add('hidden');
+      }
+      panel.classList.toggle('hidden', !this.recruitmentPanelOpen);
+    };
+    const closePanel = (): void => setOpen(false);
+    close.addEventListener('click', closePanel);
+    this.cleanup.push(() => close.removeEventListener('click', closePanel));
+
+    const cancelRecruitment = (): void => {
+      this.network.sendAction({ type: 'recruit_cancel', formationId: this.game.playerFormation.id });
+    };
+    cancel.addEventListener('click', cancelRecruitment);
+    this.cleanup.push(() => cancel.removeEventListener('click', cancelRecruitment));
+
+    const upgradeCapacity = (): void => {
+      this.network.sendAction({ type: 'upgrade_capacity', formationId: this.game.playerFormation.id });
+    };
+    upgrade.addEventListener('click', upgradeCapacity);
+    this.cleanup.push(() => upgrade.removeEventListener('click', upgradeCapacity));
+
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-recruit-count]')) {
+      const click = (): void => {
+        const count = Number(button.dataset.recruitCount);
+        if (!Number.isInteger(count) || count <= 0) return;
+        this.network.sendAction({ type: 'recruit', formationId: this.game.playerFormation.id, count });
+      };
+      button.addEventListener('click', click);
+      this.cleanup.push(() => button.removeEventListener('click', click));
+    }
+
+    const keyDown = (event: KeyboardEvent): void => {
+      if (event.repeat || event.key.toLowerCase() !== 'e' || this.settingsOpen || !this.game.modeRules.recruitment) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      const snapshot = this.game.snapshot();
+      if (!snapshot.playerNearBarracks || snapshot.playerAlive <= 0) return;
+      event.preventDefault();
+      setOpen(!this.recruitmentPanelOpen);
+    };
+    window.addEventListener('keydown', keyDown);
+    this.cleanup.push(() => window.removeEventListener('keydown', keyDown));
+    this.cleanup.push(() => setOpen(false));
+  }
+
+  private renderRecruitmentPanel(snapshot: ReturnType<Game['snapshot']>): void {
+    const panel = this.recruitmentPanel;
+    if (!panel) return;
+    if (!snapshot.recruitmentEnabled) {
+      this.recruitmentPanelOpen = false;
+      panel.classList.add('hidden');
+      return;
+    }
+    if (this.recruitmentPanelOpen && (!snapshot.playerNearBarracks || snapshot.playerAlive <= 0)) {
+      this.recruitmentPanelOpen = false;
+    }
+    panel.classList.toggle('hidden', !this.recruitmentPanelOpen);
+    if (!this.recruitmentPanelOpen) return;
+
+    const title = panel.querySelector<HTMLElement>('#recruitment-title');
+    const status = panel.querySelector<HTMLElement>('#recruitment-status');
+    const progress = panel.querySelector<HTMLElement>('#recruitment-progress');
+    const progressBar = panel.querySelector<HTMLElement>('#recruitment-progress-bar');
+    const cancel = panel.querySelector<HTMLButtonElement>('#recruitment-cancel');
+    const note = panel.querySelector<HTMLElement>('#recruitment-note');
+    const oneCost = panel.querySelector<HTMLElement>('#recruit-cost-1');
+    const fiveCost = panel.querySelector<HTMLElement>('#recruit-cost-5');
+    const upgrade = panel.querySelector<HTMLButtonElement>('#recruit-upgrade-cap');
+    const upgradeCost = panel.querySelector<HTMLElement>('#recruit-upgrade-cost');
+    const buttons = Array.from(panel.querySelectorAll<HTMLButtonElement>('[data-recruit-count]'));
+
+    if (title) title.textContent = `${snapshot.playerBarracksLabel || '兵舎'} · 部隊強化`;
+    const missing = Math.max(0, snapshot.playerMaxSoldiers - snapshot.playerAlive);
+    if (status) status.textContent = `現在兵力 ${snapshot.playerAlive} / ${snapshot.playerMaxSoldiers} · 標準兵力 ${snapshot.playerStarterStrength} · 最終上限 ${snapshot.playerGrowthLimit}`;
+
+    const active = snapshot.playerRecruitmentProgress !== null;
+    progress?.classList.toggle('hidden', !active);
+    if (progressBar) progressBar.style.width = `${Math.round((snapshot.playerRecruitmentProgress ?? 0) * 100)}%`;
+    cancel?.classList.toggle('hidden', !active);
+
+    const recruitable = snapshot.playerGrowthLimit > snapshot.playerStarterStrength;
+    const count1 = Math.min(1, missing);
+    const count5 = Math.min(5, missing);
+    const cost1 = this.game.playerRecruitmentCost(count1);
+    const cost5 = this.game.playerRecruitmentCost(count5);
+    if (oneCost) oneCost.textContent = count1 > 0 ? `木材 ${cost1.wood} · 鉄 ${cost1.iron}` : '最大兵力';
+    if (fiveCost) fiveCost.textContent = count5 > 0 ? `木材 ${cost5.wood} · 鉄 ${cost5.iron}` : '最大兵力';
+
+    const nextCapacity = snapshot.playerNextGrowthCapacity;
+    const upgradeAffordable = snapshot.playerResourceStockpile.wood >= snapshot.playerGrowthUpgradeWood
+      && snapshot.playerResourceStockpile.iron >= snapshot.playerGrowthUpgradeIron;
+    if (upgrade) {
+      upgrade.disabled = active || nextCapacity === null || !upgradeAffordable;
+      const strong = upgrade.querySelector<HTMLElement>('strong');
+      if (strong) strong.textContent = nextCapacity === null ? '兵員上限 最大' : `兵員上限 ${snapshot.playerMaxSoldiers} → ${nextCapacity}`;
+    }
+    if (upgradeCost) upgradeCost.textContent = nextCapacity === null
+      ? '最大強化済み'
+      : `木材 ${snapshot.playerGrowthUpgradeWood} · 鉄 ${snapshot.playerGrowthUpgradeIron}`;
+
+    for (const button of buttons) {
+      const requested = Number(button.dataset.recruitCount) || 1;
+      const actual = Math.min(requested, missing);
+      const cost = this.game.playerRecruitmentCost(actual);
+      const affordable = snapshot.playerResourceStockpile.wood >= cost.wood && snapshot.playerResourceStockpile.iron >= cost.iron;
+      button.disabled = active || !recruitable || actual <= 0 || !affordable;
+      const strong = button.querySelector<HTMLElement>('strong');
+      if (strong) strong.textContent = actual > 0 ? `+${actual}人` : '最大兵力';
+    }
+
+    if (note) {
+      if (!recruitable) note.textContent = '砲兵の成長は将来の砲兵工廠システムで実装します。';
+      else if (active) note.textContent = `${snapshot.playerRecruitmentCount}人を増員中… 資源は完了時に消費されます。`;
+      else if (missing > 0) note.textContent = '現在の兵員上限まで即時増員できます。上限拡張は別途資源を消費します。';
+      else if (nextCapacity !== null) note.textContent = '現在の編成は満員です。兵員上限を拡張すると、さらに増員できます。';
+      else note.textContent = 'この兵科は最大成長に到達しています。';
+    }
+  }
+
+  private installUpgradeControls(): void {
+    const panel = document.querySelector<HTMLElement>('#upgrade-panel');
+    const close = document.querySelector<HTMLButtonElement>('#upgrade-close');
+    if (!panel || !close) return;
+    this.upgradePanel = panel;
+
+    const setOpen = (open: boolean): void => {
+      this.upgradePanelOpen = open && this.game.modeRules.equipment;
+      if (this.upgradePanelOpen && this.recruitmentPanelOpen) {
+        this.recruitmentPanelOpen = false;
+        this.recruitmentPanel?.classList.add('hidden');
+        this.upgradePanelOpen = false;
+        this.upgradePanel?.classList.add('hidden');
+      }
+      panel.classList.toggle('hidden', !this.upgradePanelOpen);
+    };
+    const closePanel = (): void => setOpen(false);
+    close.addEventListener('click', closePanel);
+    this.cleanup.push(() => close.removeEventListener('click', closePanel));
+
+    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-equipment-upgrade]')) {
+      const click = (): void => {
+        const kind = button.dataset.equipmentUpgrade as EquipmentUpgradeKind | undefined;
+        if (!kind) return;
+        this.network.sendAction({ type: 'equipment_upgrade', formationId: this.game.playerFormation.id, upgrade: kind });
+      };
+      button.addEventListener('click', click);
+      this.cleanup.push(() => button.removeEventListener('click', click));
+    }
+
+    const keyDown = (event: KeyboardEvent): void => {
+      if (event.repeat || event.key.toLowerCase() !== 'e' || this.settingsOpen || !this.game.modeRules.equipment) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+      const snapshot = this.game.snapshot();
+      if (!snapshot.playerNearUpgradeFacility || snapshot.playerAlive <= 0) return;
+      event.preventDefault();
+      setOpen(!this.upgradePanelOpen);
+    };
+    window.addEventListener('keydown', keyDown);
+    this.cleanup.push(() => window.removeEventListener('keydown', keyDown));
+    this.cleanup.push(() => setOpen(false));
+  }
+
+  private renderUpgradePanel(snapshot: ReturnType<Game['snapshot']>): void {
+    const panel = this.upgradePanel;
+    if (!panel) return;
+    if (!snapshot.equipmentEnabled) {
+      this.upgradePanelOpen = false;
+      panel.classList.add('hidden');
+      return;
+    }
+    if (this.upgradePanelOpen && (!snapshot.playerNearUpgradeFacility || snapshot.playerAlive <= 0)) this.upgradePanelOpen = false;
+    panel.classList.toggle('hidden', !this.upgradePanelOpen);
+    if (!this.upgradePanelOpen) return;
+
+    const title = panel.querySelector<HTMLElement>('#upgrade-title');
+    const status = panel.querySelector<HTMLElement>('#upgrade-status');
+    const note = panel.querySelector<HTMLElement>('#upgrade-note');
+    if (title) title.textContent = `${snapshot.playerUpgradeFacilityLabel || '工房'} · 装備強化`;
+    if (status) status.textContent = snapshot.playerEquipmentSummary;
+
+    const stock = snapshot.playerResourceStockpile;
+    const artillery = isArtilleryClass(snapshot.playerClass);
+    const configs: Array<{ kind: EquipmentUpgradeKind; tier: number; cost: typeof stock; label: string; detail: string }> = artillery
+      ? [
+        {
+          kind: 'artillery-performance', tier: snapshot.playerArtilleryPerformanceTier,
+          cost: snapshot.playerArtilleryPerformanceUpgradeCost, label: '砲性能',
+          detail: '射程・装填・精度・威力・爆発性能を強化',
+        },
+        {
+          kind: 'artillery-battery', tier: snapshot.playerArtilleryBatteryTier,
+          cost: snapshot.playerArtilleryBatteryUpgradeCost, label: '砲門数',
+          detail: `現在 ${artilleryGunCount(snapshot.playerClass, snapshot.playerArtilleryBatteryTier as 1 | 2 | 3)}門`,
+        },
+      ]
+      : [
+        {
+          kind: 'weapon', tier: snapshot.playerWeaponTier,
+          cost: snapshot.playerWeaponUpgradeCost, label: '武器',
+          detail: snapshot.playerClass === 'sharpshooter' ? '射程・精度・装填を重点強化'
+            : snapshot.playerClass === 'engineer' ? '射撃性能と斧の対目標威力を強化'
+              : snapshot.playerClass === 'hussar' ? '白兵・突撃の士気衝撃を重点強化'
+                : isChargeCavalryClass(snapshot.playerClass) ? '白兵・突撃性能を強化'
+                  : '射撃・装填・白兵性能を強化',
+        },
+        {
+          kind: 'armor', tier: snapshot.playerArmorTier,
+          cost: snapshot.playerArmorUpgradeCost, label: '防具',
+          detail: '銃弾・白兵・爆発・突撃への耐性を強化',
+        },
+      ];
+
+    for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-equipment-upgrade]')) button.classList.add('hidden');
+    for (const config of configs) {
+      const button = panel.querySelector<HTMLButtonElement>(`[data-equipment-upgrade="${config.kind}"]`);
+      if (!button) continue;
+      button.classList.remove('hidden');
+      const maxed = config.tier >= 3;
+      const affordable = stock.wood >= config.cost.wood && stock.iron >= config.cost.iron
+        && stock.gunpowder >= config.cost.gunpowder && stock.alloy >= config.cost.alloy;
+      button.disabled = maxed || !affordable;
+      const strong = button.querySelector<HTMLElement>('strong');
+      const cost = button.querySelector<HTMLElement>('.upgrade-cost');
+      const detail = button.querySelector<HTMLElement>('.upgrade-detail');
+      if (strong) strong.textContent = maxed ? `${config.label} T3 · 最大` : `${config.label} T${config.tier} → T${config.tier + 1}`;
+      if (cost) cost.textContent = maxed ? '最大強化済み' : `木 ${config.cost.wood} · 鉄 ${config.cost.iron} · 火薬 ${config.cost.gunpowder} · 合金 ${config.cost.alloy}`;
+      if (detail) detail.textContent = config.detail;
+    }
+    if (note) note.textContent = artillery
+      ? '砲兵は防具ではなく「砲性能」と「砲門数」を強化します。強化はこの兵科に保存されます。'
+      : '武器・防具Tierはこの兵科に保存され、全滅後も維持されます。兵科を戻せば以前のTierが復元されます。';
   }
 
   private installScoreboardEvents(): void {
@@ -316,12 +617,16 @@ export class MultiplayerBattle {
       row.className = `scoreboard-row ${player.team}${player.id === this.network.clientId ? ' local' : ''}`;
       const values = [
         `${player.id === this.network.clientId ? '★ ' : ''}${player.name} · ${player.formationId}`,
-        player.team.toUpperCase(),
+        `${player.team.toUpperCase()} · ${factionShortLabel(player.team === 'blue' ? this.room.settings.blueFaction : this.room.settings.redFaction)}`,
         classLabel(formation?.squadClass ?? player.squadClass),
         String(stats.kills),
         String(stats.losses),
         String(Math.round(stats.bannerDamage)),
       ];
+      if (this.game.modeRules.resources) {
+        values.push(String(Math.round(this.game.getFormationResourceTotal(player.formationId))));
+        values.push(String(Math.round(this.game.getFormationCombatLootTotal(player.formationId))));
+      }
       for (const value of values) {
         const cell = document.createElement('span');
         cell.textContent = value;
@@ -333,41 +638,74 @@ export class MultiplayerBattle {
 
   private sendContinuousControl(): void {
     const formation = this.game.playerFormation;
+    const inputLocked = this.settingsOpen || formation.aliveCount() === 0 || formation.mode === 'routed';
+    if (inputLocked && !this.movementInputLocked) {
+      this.input.suppressMovementUntilRelease();
+      this.movementInputLocked = true;
+    } else if (!inputLocked && this.movementInputLocked) {
+      // Keys held while dead/routed remain ignored until they are physically released.
+      this.input.suppressMovementUntilRelease();
+      this.movementInputLocked = false;
+    }
+
     let moveX = 0;
     let moveY = 0;
-    if (!this.settingsOpen && this.input.isDown('a')) moveX -= 1;
-    if (!this.settingsOpen && this.input.isDown('d')) moveX += 1;
-    if (!this.settingsOpen && this.input.isDown('w')) moveY -= 1;
-    if (!this.settingsOpen && this.input.isDown('s')) moveY += 1;
+    if (!inputLocked && this.input.isDown('a')) moveX -= 1;
+    if (!inputLocked && this.input.isDown('d')) moveX += 1;
+    if (!inputLocked && this.input.isDown('w')) moveY -= 1;
+    if (!inputLocked && this.input.isDown('s')) moveY += 1;
     const aim = this.game.camera.screenToWorld(this.input.getPointer());
-    const weapon: WeaponType = canBannerAttackClass(formation.squadClass)
-      ? formation.weapon
-      : canVolleyClass(formation.squadClass) ? 'musket' : 'bayonet';
-    this.network.sendControl({ formationId: formation.id, moveX, moveY, aim, weapon, forcedMarch: !this.settingsOpen && this.input.isForcedMarchHeld() });
+    const weapon: WeaponType = this.game.playerInputWeapon();
+    this.network.sendControl({
+      formationId: formation.id,
+      moveX,
+      moveY,
+      aim,
+      weapon,
+      forcedMarch: !inputLocked && this.input.isForcedMarchHeld(),
+      gathering: !inputLocked && !this.recruitmentPanelOpen && !this.upgradePanelOpen && this.game.modeRules.resources && this.input.isDown('e'),
+    });
   }
 
 
-  private nearestEnemyFieldwork(point: Vec2, team: Team): { id: string } | null {
+  private nearestFriendlyConstructionBlock(world: Vec2, team: Team): { id: string } | null {
     let best: { id: string } | null = null;
-    let bestDistance = 95;
-    for (const fieldwork of this.game.fieldworks) {
-      if (!fieldwork.active || fieldwork.team === team) continue;
-      const { a, b } = fieldwork.endpoints();
-      const vx = b.x - a.x;
-      const vy = b.y - a.y;
-      const wx = point.x - a.x;
-      const wy = point.y - a.y;
-      const lengthSq = vx * vx + vy * vy;
-      const t = lengthSq <= 0.0001 ? 0 : Math.max(0, Math.min(1, (wx * vx + wy * vy) / lengthSq));
-      const px = a.x + vx * t;
-      const py = a.y + vy * t;
-      const distance = Math.hypot(point.x - px, point.y - py);
+    let bestDistance = 72;
+    for (const block of this.game.constructionBlocks) {
+      if (!block.active || block.team !== team) continue;
+      const d = Math.hypot(block.position.x - world.x, block.position.y - world.y);
+      if (d < bestDistance) { bestDistance = d; best = { id: block.id }; }
+    }
+    return best;
+  }
+
+  private nearestEnemyConstructionBlock(point: Vec2, team: Team): { id: string } | null {
+    let best: { id: string } | null = null;
+    let bestDistance = 92;
+    for (const block of this.game.constructionBlocks) {
+      if (!block.active || block.team === team) continue;
+      const distance = Math.hypot(point.x - block.position.x, point.y - block.position.y);
       if (distance < bestDistance) {
         bestDistance = distance;
-        best = { id: fieldwork.id };
+        best = { id: block.id };
       }
     }
     return best;
+  }
+
+  private renderConstructionWork(snapshot: ReturnType<Game['snapshot']>): void {
+    const panel = document.querySelector<HTMLElement>('#construction-work');
+    const label = document.querySelector<HTMLElement>('#construction-work-label');
+    const time = document.querySelector<HTMLElement>('#construction-work-time');
+    const bar = document.querySelector<HTMLElement>('#construction-work-bar');
+    if (!panel || !label || !time || !bar) return;
+    const active = snapshot.playerConstructionWorkProgress !== null && snapshot.playerConstructionWorkType !== null;
+    panel.classList.toggle('hidden', !active);
+    if (!active) return;
+    label.textContent = snapshot.playerConstructionWorkLabel || (snapshot.playerConstructionWorkType === 'place' ? '建築中' : '撤去中');
+    time.textContent = `${(snapshot.playerConstructionWorkRemaining ?? 0).toFixed(1)}秒`;
+    bar.style.width = `${Math.round((snapshot.playerConstructionWorkProgress ?? 0) * 100)}%`;
+    panel.dataset.work = snapshot.playerConstructionWorkType ?? '';
   }
 
   private installNetworkInputEvents(): void {
@@ -387,6 +725,14 @@ export class MultiplayerBattle {
     };
     const worldAtEvent = (event: MouseEvent): Vec2 => this.game.camera.screenToWorld(toCanvasPoint(event));
     const send = (action: PlayerAction): void => this.network.sendAction(action);
+    const cycleFormationShape = (): void => {
+      const formation = this.game.playerFormation;
+      if (formation.aliveCount() <= 0 || (formation.mode !== 'line' && formation.mode !== 'reforming')) return;
+      const shape = nextFormationShape(formation.squadClass, formation.formationShape);
+      if (!this.game.setLocalFormationShape(shape)) return;
+      send({ type: 'formation_shape', formationId: formation.id, shape });
+      this.game.showClientHint(`隊列変更: ${formationShapeLabel(shape)}`);
+    };
     let suppressNextRightRelease = false;
 
     const mouseDown = (event: MouseEvent): void => {
@@ -396,35 +742,50 @@ export class MultiplayerBattle {
       const formation = this.game.playerFormation;
       if (event.button === 0) {
         const world = worldAtEvent(event);
-        if (this.fieldworkPlacementArmed && formation.aliveCount() > 0 && formation.fieldworkKits > 0) {
-          const direction = Math.atan2(world.y - formation.center.y, world.x - formation.center.x) + Math.PI / 2;
-          send({ type: 'fieldwork', formationId: formation.id, target: world, direction });
-          this.fieldworkPlacementArmed = false;
+        if (this.constructionPlacementArmed && formation.aliveCount() > 0 && this.game.modeRules.resources) {
+          const workSeconds = constructionWorkSecondsForClass(formation.squadClass);
+          send({ type: 'construction_place', formationId: formation.id, kind: this.constructionKind, target: world, direction: this.constructionDirection });
+          this.game.showClientHint(`建築作業を開始（${workSeconds.toFixed(2).replace(/\.00$/, '')}秒）`);
           event.preventDefault();
           return;
         }
-        if (canBannerAttackClass(formation.squadClass) && formation.weapon === 'axe') {
-          const clicked = this.nearestEnemyFieldwork(world, formation.team);
-          if (clicked) {
-            send({ type: 'fieldwork-attack', formationId: formation.id, fieldworkId: clicked.id });
+        if (canBannerAttackClass(formation.squadClass) && this.game.playerInputWeapon() === 'axe') {
+          const construction = this.nearestEnemyConstructionBlock(world, formation.team);
+          if (construction) {
+            send({ type: 'construction_attack', formationId: formation.id, blockId: construction.id });
             event.preventDefault();
             return;
           }
         }
         if (isArtilleryClass(formation.squadClass)) {
-          const issue = artilleryTargetIssue(formation.squadClass, this.game.playerArtilleryRangeOrigin(), world);
+          const issue = artilleryTargetIssue(formation.squadClass, this.game.playerArtilleryRangeOrigin(), world, 0, formation.artilleryPerformanceTier, formation.artilleryBatteryTier);
           // Display, client pre-check and authoritative firing all share artilleryProfile()/artilleryTargetIssue().
           // Game.update() consumes invalid clicks locally so the player receives an immediate range hint.
           if (!formation.artilleryDeployed || formation.reloadTimer > 0 || issue) {
+            if (!formation.artilleryDeployed) this.game.showClientHint('砲兵は停止して展開完了を待ってください');
+            else if (formation.reloadTimer > 0) this.game.showClientHint(`再装填中 ${formation.reloadTimer.toFixed(1)}秒`);
+            else if (issue === 'too-far') this.game.showClientHint('射程外です');
+            else if (issue === 'too-close') this.game.showClientHint('近すぎます');
             event.preventDefault();
             return;
           }
         }
         send({ type: 'fire', formationId: formation.id, target: world });
+      } else if (event.button === 2 && this.constructionPlacementArmed) {
+        suppressNextRightRelease = true;
+        const world = worldAtEvent(event);
+        const construction = this.nearestFriendlyConstructionBlock(world, formation.team);
+        if (construction) {
+          const workSeconds = constructionWorkSecondsForClass(formation.squadClass);
+          send({ type: 'construction_dismantle', formationId: formation.id, blockId: construction.id });
+          this.game.showClientHint(`撤去作業を開始（${workSeconds.toFixed(2).replace(/\.00$/, '')}秒）`);
+          event.preventDefault();
+          return;
+        }
       } else if (event.button === 2 && (formation.mode === 'charging' || formation.mode === 'melee')) {
         suppressNextRightRelease = true;
         send({ type: 'reform', formationId: formation.id });
-      } else if (event.button === 2 && canBannerAttackClass(formation.squadClass) && formation.weapon === 'axe') {
+      } else if (event.button === 2 && canBannerAttackClass(formation.squadClass) && this.game.playerInputWeapon() === 'axe') {
         const targetTeam: Team = formation.team === 'blue' ? 'red' : 'blue';
         const banner = this.game.banners.find((candidate) => candidate.team === targetTeam);
         const world = worldAtEvent(event);
@@ -440,7 +801,7 @@ export class MultiplayerBattle {
         return;
       }
       const formation = this.game.playerFormation;
-      if (isArtilleryClass(formation.squadClass) || formation.squadClass === 'dragoon' || (canBannerAttackClass(formation.squadClass) && formation.weapon !== 'bayonet')) return;
+      if (isArtilleryClass(formation.squadClass) || formation.squadClass === 'dragoon' || (canBannerAttackClass(formation.squadClass) && this.game.playerInputWeapon() !== 'bayonet')) return;
       send({ type: 'charge', formationId: formation.id, target: worldAtEvent(event) });
     };
     const keyDown = (event: KeyboardEvent): void => {
@@ -450,10 +811,31 @@ export class MultiplayerBattle {
       if (this.settingsOpen) return;
       const formation = this.game.playerFormation;
       const key = event.key.toLowerCase();
+      if (this.constructionPlacementArmed) {
+        const builderKeys: Partial<Record<string, ConstructionBlockKind>> = {
+          '2': 'woodWall', '3': 'ironWall', '4': 'loophole', '5': 'door', '6': 'roadTile', '7': 'bridgeTile',
+        };
+        if (key === '1' || key === 'escape') {
+          this.constructionPlacementArmed = false;
+          this.game.showClientHint('戦闘モードへ復帰');
+          event.preventDefault();
+          return;
+        }
+        const selected = builderKeys[key];
+        if (selected) {
+          this.constructionKind = selected;
+          event.preventDefault();
+          return;
+        }
+        if (key === 'r') {
+          this.constructionDirection = (this.constructionDirection + 1) % 4;
+          event.preventDefault();
+          return;
+        }
+      }
       if (key === 'f') send({ type: 'reform', formationId: formation.id });
       if (key === 'n') this.hud.toggleClassReservation();
       if (key === '4' && formation.aliveCount() > 0 && formation.squadClass === 'grenadier') {
-        this.fieldworkPlacementArmed = false;
         const pointerTarget = this.game.camera.screenToWorld(this.input.getPointer());
         const dx = pointerTarget.x - formation.center.x;
         const dy = pointerTarget.y - formation.center.y;
@@ -464,12 +846,19 @@ export class MultiplayerBattle {
         send({ type: 'grenade', formationId: formation.id, target });
         event.preventDefault();
       }
-      if (key === '5' && formation.aliveCount() > 0 && formation.fieldworkKits > 0) {
-        this.fieldworkPlacementArmed = !this.fieldworkPlacementArmed;
+      if (key === '5' && formation.aliveCount() > 0 && this.game.modeRules.resources && this.room.settings.constructionEnabled) {
+        this.constructionPlacementArmed = true;
+        this.game.showClientHint('Builder Mode · 2〜7で建築物選択 · 1で戦闘へ戻る');
+        event.preventDefault();
+        return;
+      }
+      if (key === '6' && formation.aliveCount() > 0) {
+        cycleFormationShape();
         event.preventDefault();
       }
       if (formation.aliveCount() > 0 && canBannerAttackClass(formation.squadClass) && (key === '1' || key === '2' || key === '3')) {
         const weapon: WeaponType = key === '1' ? 'musket' : key === '2' ? 'bayonet' : 'axe';
+        this.game.setLocalWeaponSelection(weapon);
         send({ type: 'weapon', formationId: formation.id, weapon });
       }
     };
@@ -480,6 +869,13 @@ export class MultiplayerBattle {
     this.cleanup.push(() => this.canvas.removeEventListener('mousedown', mouseDown));
     this.cleanup.push(() => window.removeEventListener('mouseup', mouseUp));
     this.cleanup.push(() => window.removeEventListener('keydown', keyDown));
+
+    const formationSlot = document.querySelector<HTMLElement>('#hotbar .slot[data-slot="6"]');
+    if (formationSlot) {
+      const click = (): void => { if (!this.constructionPlacementArmed) cycleFormationShape(); };
+      formationSlot.addEventListener('click', click);
+      this.cleanup.push(() => formationSlot.removeEventListener('click', click));
+    }
 
     for (const card of document.querySelectorAll<HTMLElement>('.class-card[data-class]')) {
       const click = (): void => {

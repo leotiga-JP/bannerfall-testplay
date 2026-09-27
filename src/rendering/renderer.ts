@@ -3,13 +3,19 @@ import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
 import { Fieldwork } from '../entities/fieldwork';
+import { ConstructionBlock } from '../entities/constructionBlock';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
 import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
-import { BATTLEFIELD_MAP, CROSSINGS, MAP_SITES, type TerrainType } from '../game/battlefieldMap';
+import { BATTLEFIELD_MAP, CROSSINGS, type TerrainType } from '../game/battlefieldMap';
+import { RESOURCE_LABELS, type ResourceNodeState } from '../game/resourceSystem';
+import { BARRACKS } from '../game/recruitmentSystem';
+import { UPGRADE_FACILITIES } from '../game/upgradeSystem';
 import type { AxeStrike, GameSnapshot } from '../game/game';
 import { classShortLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { artilleryProfile } from '../game/classProfiles';
+import { artilleryGunLocalOffset } from '../game/formationSystem';
+import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, factionShortLabel, type FactionId } from '../game/factionBanners';
 import type { ArtilleryExplosion } from '../systems/artillerySystem';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
 import type { MeleeStrike } from '../systems/meleeSystem';
@@ -18,8 +24,13 @@ export class Renderer {
   private minimapOpacity = 0.86;
   private minimapPosition: MinimapPosition = 'bottom-right';
   private minimapTerrainCache: HTMLCanvasElement | null = null;
+  private constructionGhost: { position: Vec2; kind: ConstructionBlock['kind']; direction: number; valid: boolean; cooldown: boolean } | null = null;
 
-  constructor(private readonly ctx: CanvasRenderingContext2D) {}
+  constructor(
+    private readonly ctx: CanvasRenderingContext2D,
+    private readonly blueFaction: FactionId = DEFAULT_BLUE_FACTION,
+    private readonly redFaction: FactionId = DEFAULT_RED_FACTION,
+  ) {}
 
   setMinimapOpacity(value: number): void {
     this.minimapOpacity = Math.max(0.2, Math.min(1, value));
@@ -27,6 +38,101 @@ export class Renderer {
 
   setMinimapPosition(value: MinimapPosition): void {
     this.minimapPosition = value;
+  }
+
+  setConstructionGhost(ghost: { position: Vec2; kind: ConstructionBlock['kind']; direction: number; valid: boolean; cooldown: boolean } | null): void {
+    this.constructionGhost = ghost;
+  }
+
+  private factionForTeam(team: Team): FactionId {
+    return team === 'blue' ? this.blueFaction : this.redFaction;
+  }
+
+  private drawFactionFlag(faction: FactionId, x: number, y: number, width: number, height: number): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, width, height);
+    ctx.clip();
+
+    if (faction === 'FRENCH') {
+      ctx.fillStyle = '#1f4f9a';
+      ctx.fillRect(x, y, width / 3, height);
+      ctx.fillStyle = '#eee9dc';
+      ctx.fillRect(x + width / 3, y, width / 3, height);
+      ctx.fillStyle = '#b73238';
+      ctx.fillRect(x + width * 2 / 3, y, width / 3, height);
+    } else if (faction === 'PRUSSIAN') {
+      ctx.fillStyle = '#eeeade';
+      ctx.fillRect(x, y, width, height);
+      ctx.fillStyle = '#171717';
+      ctx.fillRect(x + width * 0.44, y, width * 0.12, height);
+      ctx.fillRect(x, y + height * 0.40, width, height * 0.20);
+      ctx.fillStyle = '#c6a94f';
+      ctx.beginPath();
+      ctx.arc(x + width * 0.5, y + height * 0.5, Math.min(width, height) * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#171717';
+      ctx.beginPath();
+      ctx.arc(x + width * 0.5, y + height * 0.5, Math.min(width, height) * 0.065, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (faction === 'BRITISH') {
+      ctx.fillStyle = '#26477d';
+      ctx.fillRect(x, y, width, height);
+      ctx.strokeStyle = '#f0eadc';
+      ctx.lineWidth = Math.max(2, height * 0.22);
+      ctx.beginPath();
+      ctx.moveTo(x - width * 0.05, y);
+      ctx.lineTo(x + width * 1.05, y + height);
+      ctx.moveTo(x + width * 1.05, y);
+      ctx.lineTo(x - width * 0.05, y + height);
+      ctx.stroke();
+      ctx.strokeStyle = '#c53d42';
+      ctx.lineWidth = Math.max(1, height * 0.09);
+      ctx.beginPath();
+      ctx.moveTo(x - width * 0.05, y);
+      ctx.lineTo(x + width * 1.05, y + height);
+      ctx.moveTo(x + width * 1.05, y);
+      ctx.lineTo(x - width * 0.05, y + height);
+      ctx.stroke();
+      ctx.fillStyle = '#f0eadc';
+      ctx.fillRect(x + width * 0.39, y, width * 0.22, height);
+      ctx.fillRect(x, y + height * 0.34, width, height * 0.32);
+      ctx.fillStyle = '#c53d42';
+      ctx.fillRect(x + width * 0.44, y, width * 0.12, height);
+      ctx.fillRect(x, y + height * 0.41, width, height * 0.18);
+    } else {
+      ctx.fillStyle = '#eee9dc';
+      ctx.fillRect(x, y, width, height);
+      ctx.fillStyle = '#2e674c';
+      ctx.beginPath();
+      ctx.moveTo(x, y); ctx.lineTo(x + width * 0.34, y); ctx.lineTo(x, y + height * 0.34); ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + width, y); ctx.lineTo(x + width * 0.66, y); ctx.lineTo(x + width, y + height * 0.34); ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x, y + height); ctx.lineTo(x + width * 0.34, y + height); ctx.lineTo(x, y + height * 0.66); ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + width, y + height); ctx.lineTo(x + width * 0.66, y + height); ctx.lineTo(x + width, y + height * 0.66); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#c8a84d';
+      ctx.beginPath();
+      ctx.moveTo(x + width * 0.5, y + height * 0.20);
+      ctx.lineTo(x + width * 0.68, y + height * 0.50);
+      ctx.lineTo(x + width * 0.5, y + height * 0.80);
+      ctx.lineTo(x + width * 0.32, y + height * 0.50);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#282820';
+      ctx.beginPath();
+      ctx.arc(x + width * 0.5, y + height * 0.5, Math.min(width, height) * 0.085, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+    ctx.save();
+    ctx.strokeStyle = 'rgba(245, 232, 190, 0.92)';
+    ctx.lineWidth = Math.max(1, Math.min(width, height) * 0.045);
+    ctx.strokeRect(x, y, width, height);
+    ctx.restore();
   }
 
   private routedPalette(team: Team): { body: string; skin: string; dark: string; label: string; morale: string; minimap: string; minimapLocal: string } {
@@ -58,6 +164,8 @@ export class Renderer {
     artilleryShells: ArtilleryShell[],
     artilleryExplosions: ArtilleryExplosion[],
     fieldworks: Fieldwork[],
+    constructionBlocks: ConstructionBlock[],
+    resourceNodes: readonly ResourceNodeState[],
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
     corpses: CorpseParticle[],
@@ -81,7 +189,8 @@ export class Renderer {
     ctx.save();
     ctx.translate(shakeX, shakeY);
     camera.applyTransform(ctx);
-    this.drawBattlefield(camera);
+    this.drawBattlefield(camera, snapshot, resourceNodes);
+    this.drawCapturePoints(snapshot, camera);
     this.drawBanners(banners, camera, snapshot.selectedWeapon);
     this.drawCorpses(corpses, camera);
     this.drawSmoke(smoke, camera);
@@ -89,6 +198,8 @@ export class Renderer {
     this.drawArtilleryShells(artilleryShells, camera);
     this.drawArtilleryExplosions(artilleryExplosions, camera);
     this.drawFieldworks(fieldworks, camera);
+    this.drawConstructionBlocks(constructionBlocks, camera);
+    this.drawConstructionGhost();
     this.drawPlayerArtilleryRange(formations, snapshot, camera, localFormationId);
     this.drawFormations(formations, camera, formationLabels, localFormationId);
     this.drawMuzzleFlashes(flashes, camera);
@@ -105,13 +216,13 @@ export class Renderer {
     if (snapshot.debugAi) this.drawAiDebug(formations, camera);
     ctx.restore();
 
-    this.drawMinimap(formations, banners, camera, snapshot, localFormationId);
+    this.drawMinimap(formations, banners, camera, snapshot, localFormationId, resourceNodes);
     this.drawPlayerMode(snapshot);
     if (snapshot.introActive) this.drawIntro(snapshot);
     this.drawResult(snapshot);
   }
 
-  private drawBattlefield(camera: Camera): void {
+  private drawBattlefield(camera: Camera, snapshot: GameSnapshot, resourceNodes: readonly ResourceNodeState[]): void {
     const { ctx } = this;
     ctx.fillStyle = '#536746';
     ctx.fillRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
@@ -157,7 +268,9 @@ export class Renderer {
     this.drawHomeGround('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.redY }, camera);
     this.drawSpawnCamp('blue', BATTLEFIELD_MAP.spawnCenter('blue'), camera);
     this.drawSpawnCamp('red', BATTLEFIELD_MAP.spawnCenter('red'), camera);
-    this.drawMapSites(camera);
+    this.drawMapSites(camera, snapshot, resourceNodes);
+    this.drawBarracks(camera, snapshot);
+    this.drawUpgradeFacilities(camera, snapshot);
     this.drawCrossingLabels(camera);
 
     ctx.fillStyle = 'rgba(30, 42, 27, 0.28)';
@@ -225,31 +338,144 @@ export class Renderer {
     }
   }
 
-  private drawMapSites(camera: Camera): void {
+  private drawMapSites(camera: Camera, snapshot: GameSnapshot, resourceNodes: readonly ResourceNodeState[]): void {
+    if (!snapshot.resourcesEnabled) return;
     const { ctx } = this;
-    for (const site of MAP_SITES) {
-      if (!this.pointVisible(site.position, camera, 180)) continue;
+
+    for (const node of resourceNodes) {
+      if (!this.pointVisible(node.position, camera, 190)) continue;
+      const depleted = node.amount <= 0.01;
+      const amountRatio = node.maxAmount <= 0 ? 0 : Math.max(0, Math.min(1, node.amount / node.maxAmount));
       ctx.save();
-      const isResource = site.kind === 'resource';
-      const teamColor = site.team === 'blue' ? 'rgba(120, 177, 240, 0.72)'
-        : site.team === 'red' ? 'rgba(232, 125, 125, 0.72)'
-          : 'rgba(235, 210, 111, 0.82)';
-      ctx.strokeStyle = teamColor;
-      ctx.fillStyle = isResource ? 'rgba(229, 205, 116, 0.10)' : 'rgba(230, 222, 194, 0.07)';
-      ctx.lineWidth = 3 / camera.zoom;
-      ctx.setLineDash([10 / camera.zoom, 7 / camera.zoom]);
+      ctx.globalAlpha = depleted ? 0.42 : 1;
+      const radius = node.resource === 'alloy' ? 74 : node.rich ? 68 : 60;
+      ctx.fillStyle = node.resource === 'wood' ? 'rgba(74, 53, 28, 0.58)'
+        : node.resource === 'iron' ? 'rgba(85, 91, 91, 0.62)'
+          : node.resource === 'gunpowder' ? 'rgba(104, 82, 45, 0.62)'
+            : 'rgba(147, 128, 65, 0.62)';
+      ctx.strokeStyle = node.rich ? 'rgba(255, 224, 121, 0.92)' : 'rgba(231, 216, 177, 0.72)';
+      ctx.lineWidth = (node.rich ? 4 : 3) / camera.zoom;
       ctx.beginPath();
-      ctx.arc(site.position.x, site.position.y, isResource ? 64 : 82, 0, Math.PI * 2);
+      ctx.arc(node.position.x, node.position.y, radius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = teamColor;
+
+      if (node.resource === 'wood') {
+        ctx.strokeStyle = 'rgba(43, 31, 18, 0.9)';
+        ctx.lineWidth = 10 / camera.zoom;
+        for (let i = -1; i <= 1; i += 1) {
+          ctx.beginPath();
+          ctx.moveTo(node.position.x - 30, node.position.y + i * 16);
+          ctx.lineTo(node.position.x + 30, node.position.y + i * 16);
+          ctx.stroke();
+        }
+      } else if (node.resource === 'iron' || node.resource === 'alloy') {
+        const fill = node.resource === 'alloy' ? 'rgba(245, 220, 118, 0.9)' : 'rgba(184, 190, 188, 0.88)';
+        ctx.fillStyle = fill;
+        for (let i = 0; i < 5; i += 1) {
+          const angle = (Math.PI * 2 * i) / 5;
+          ctx.beginPath();
+          ctx.moveTo(node.position.x + Math.cos(angle) * 16, node.position.y + Math.sin(angle) * 16 - 13);
+          ctx.lineTo(node.position.x + Math.cos(angle) * 34 + 11, node.position.y + Math.sin(angle) * 34 + 17);
+          ctx.lineTo(node.position.x + Math.cos(angle) * 34 - 11, node.position.y + Math.sin(angle) * 34 + 17);
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else {
+        ctx.fillStyle = 'rgba(60, 48, 31, 0.95)';
+        ctx.fillRect(node.position.x - 31, node.position.y - 24, 62, 48);
+        ctx.strokeStyle = 'rgba(213, 180, 100, 0.82)';
+        ctx.lineWidth = 3 / camera.zoom;
+        ctx.strokeRect(node.position.x - 31, node.position.y - 24, 62, 48);
+        ctx.beginPath();
+        ctx.moveTo(node.position.x - 31, node.position.y);
+        ctx.lineTo(node.position.x + 31, node.position.y);
+        ctx.stroke();
+      }
+
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = depleted ? 'rgba(191, 178, 153, 0.72)' : 'rgba(250, 235, 194, 0.96)';
+      ctx.font = `bold ${11 / camera.zoom}px ui-monospace, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`${node.rich ? '★ ' : ''}${RESOURCE_LABELS[node.resource]}`, node.position.x, node.position.y - (radius + 15) / camera.zoom);
+      ctx.fillStyle = depleted ? 'rgba(213, 150, 120, 0.8)' : 'rgba(224, 211, 173, 0.72)';
+      ctx.font = `${9 / camera.zoom}px ui-monospace, monospace`;
+      ctx.fillText(depleted ? '枯渇' : `${Math.round(amountRatio * 100)}%`, node.position.x, node.position.y + (radius + 17) / camera.zoom);
+      ctx.restore();
+    }
+  }
+
+
+  private drawBarracks(camera: Camera, snapshot: GameSnapshot): void {
+    if (!snapshot.recruitmentEnabled) return;
+    const { ctx } = this;
+    for (const barracks of BARRACKS) {
+      if (!this.pointVisible(barracks.position, camera, 220)) continue;
+      ctx.save();
+      ctx.translate(barracks.position.x, barracks.position.y);
+      ctx.fillStyle = barracks.team === 'blue' ? 'rgba(49, 91, 142, 0.82)' : 'rgba(145, 60, 57, 0.82)';
+      ctx.strokeStyle = 'rgba(238, 220, 174, 0.92)';
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.fillRect(-74, -52, 148, 104);
+      ctx.strokeRect(-74, -52, 148, 104);
+      ctx.fillStyle = 'rgba(70, 49, 28, 0.95)';
+      ctx.beginPath();
+      ctx.moveTo(-88, -50);
+      ctx.lineTo(0, -94);
+      ctx.lineTo(88, -50);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(245, 232, 194, 0.96)';
       ctx.font = `bold ${12 / camera.zoom}px ui-monospace, monospace`;
       ctx.textAlign = 'center';
-      ctx.fillText(site.shortLabel, site.position.x, site.position.y + 5 / camera.zoom);
-      ctx.fillStyle = 'rgba(235, 228, 207, 0.60)';
-      ctx.font = `${9 / camera.zoom}px ui-monospace, monospace`;
-      ctx.fillText('V4.1予定', site.position.x, site.position.y + 24 / camera.zoom);
+      ctx.fillText('兵舎', 0, 79 / camera.zoom);
+      ctx.restore();
+    }
+  }
+
+  private drawUpgradeFacilities(camera: Camera, snapshot: GameSnapshot): void {
+    if (!snapshot.equipmentEnabled) return;
+    const { ctx } = this;
+    for (const facility of UPGRADE_FACILITIES) {
+      if (!this.pointVisible(facility.position, camera, 220)) continue;
+      ctx.save();
+      ctx.translate(facility.position.x, facility.position.y);
+      const teamTint = facility.team === 'blue' ? 'rgba(48, 85, 130, 0.88)' : 'rgba(131, 57, 55, 0.88)';
+      ctx.fillStyle = teamTint;
+      ctx.strokeStyle = facility.kind === 'foundry' ? 'rgba(214, 173, 88, 0.96)' : 'rgba(221, 209, 177, 0.94)';
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.fillRect(-66, -45, 132, 90);
+      ctx.strokeRect(-66, -45, 132, 90);
+      ctx.fillStyle = facility.kind === 'foundry' ? 'rgba(60, 54, 48, 0.98)' : 'rgba(73, 51, 30, 0.98)';
+      ctx.beginPath();
+      ctx.moveTo(-78, -43);
+      ctx.lineTo(0, -82);
+      ctx.lineTo(78, -43);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      if (facility.kind === 'foundry') {
+        ctx.fillStyle = 'rgba(45, 43, 40, 0.98)';
+        ctx.fillRect(34, -78, 18, 40);
+        ctx.fillStyle = 'rgba(221, 181, 86, 0.86)';
+        ctx.beginPath();
+        ctx.arc(-18, 5, 14 / camera.zoom, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = 'rgba(239, 219, 168, 0.88)';
+        ctx.lineWidth = 5 / camera.zoom;
+        ctx.beginPath();
+        ctx.moveTo(-24, 18);
+        ctx.lineTo(24, -18);
+        ctx.moveTo(-24, -18);
+        ctx.lineTo(24, 18);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(246, 232, 194, 0.98)';
+      ctx.font = `bold ${12 / camera.zoom}px ui-monospace, monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(facility.kind === 'foundry' ? '砲兵工廠' : '工房', 0, 70 / camera.zoom);
       ctx.restore();
     }
   }
@@ -340,6 +566,68 @@ export class Renderer {
     }
   }
 
+  private drawCapturePoints(snapshot: GameSnapshot, camera: Camera): void {
+    if (!snapshot.conquestEnabled) return;
+    const { ctx } = this;
+    for (const point of snapshot.capturePoints) {
+      if (!this.pointVisible(point.position, camera, 560)) continue;
+      const displayTeam = point.owner ?? point.captureTeam;
+      const flagHeight = Math.max(0, Math.min(1, point.progress));
+      ctx.save();
+      ctx.translate(point.position.x, point.position.y);
+      ctx.fillStyle = point.contested
+        ? 'rgba(230, 196, 92, 0.12)'
+        : displayTeam === 'blue' ? 'rgba(64, 126, 214, 0.12)'
+          : displayTeam === 'red' ? 'rgba(201, 68, 68, 0.12)'
+            : 'rgba(232, 222, 186, 0.08)';
+      ctx.strokeStyle = point.contested
+        ? 'rgba(245, 205, 88, 0.85)'
+        : displayTeam === 'blue' ? 'rgba(103, 167, 245, 0.75)'
+          : displayTeam === 'red' ? 'rgba(238, 102, 102, 0.75)'
+            : 'rgba(225, 217, 188, 0.55)';
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.beginPath();
+      ctx.arc(0, 0, 430, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      const poleTop = -92 / camera.zoom;
+      const poleBottom = 42 / camera.zoom;
+      ctx.strokeStyle = 'rgba(227, 218, 184, 0.92)';
+      ctx.lineWidth = 4 / camera.zoom;
+      ctx.beginPath();
+      ctx.moveTo(0, poleBottom);
+      ctx.lineTo(0, poleTop);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(214, 198, 151, 0.95)';
+      ctx.beginPath();
+      ctx.arc(0, poleTop, 5 / camera.zoom, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (displayTeam && flagHeight > 0.01) {
+        const raiseY = poleBottom + (poleTop - poleBottom) * flagHeight;
+        const width = 56 / camera.zoom;
+        const height = 28 / camera.zoom;
+        this.drawFactionFlag(this.factionForTeam(displayTeam), 2 / camera.zoom, raiseY, width, height);
+      }
+
+      ctx.font = `bold ${24 / camera.zoom}px Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#f1e7c6';
+      const status = point.contested ? `CONTESTED ${point.bluePresence}-${point.redPresence}`
+        : point.owner && point.captureTeam && point.captureTeam !== point.owner
+          ? `${point.captureTeam.toUpperCase()} ATTACK ${point.bluePresence}-${point.redPresence}`
+        : point.owner ? point.owner.toUpperCase()
+          : point.captureTeam ? `${point.captureTeam.toUpperCase()} ${Math.round(flagHeight * 100)}%`
+            : 'NEUTRAL';
+      ctx.fillText(`${point.id} · ${point.label}`, 0, -126 / camera.zoom);
+      ctx.font = `${16 / camera.zoom}px system-ui, sans-serif`;
+      ctx.fillStyle = point.contested ? '#f4cb64' : '#d8d0b6';
+      ctx.fillText(status, 0, -104 / camera.zoom);
+      ctx.restore();
+    }
+  }
+
   private drawBanners(banners: Banner[], camera: Camera, selectedWeapon: WeaponType): void {
     for (const banner of banners) {
       if (!this.pointVisible(banner.position, camera, 180)) continue;
@@ -376,16 +664,7 @@ export class Renderer {
     ctx.stroke();
 
     if (!banner.destroyed) {
-      ctx.fillStyle = banner.team === 'blue' ? '#376eaf' : '#aa3b3b';
-      ctx.beginPath();
-      ctx.moveTo(4, -67);
-      ctx.lineTo(72, -48);
-      ctx.lineTo(4, -22);
-      ctx.closePath();
-      ctx.fill();
-      ctx.strokeStyle = banner.team === 'blue' ? '#b8d6ff' : '#ffd0c7';
-      ctx.lineWidth = 2 / camera.zoom;
-      ctx.stroke();
+      this.drawFactionFlag(this.factionForTeam(banner.team), 4, -68, 70, 42);
     } else {
       ctx.rotate(0.74);
       ctx.strokeStyle = '#352b1f';
@@ -414,7 +693,7 @@ export class Renderer {
     ctx.fillStyle = '#f5e8c9';
     ctx.font = `bold ${14 / camera.zoom}px ui-monospace, monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${banner.team.toUpperCase()} BANNER`, 0, -119 / camera.zoom);
+    ctx.fillText(`${banner.team.toUpperCase()} · ${factionShortLabel(this.factionForTeam(banner.team))}`, 0, -119 / camera.zoom);
     ctx.restore();
   }
 
@@ -554,13 +833,18 @@ export class Renderer {
 
   private drawCannon(formation: Formation, camera: Camera, routed = false): void {
     const { ctx } = this;
-    const profile = artilleryProfile(formation.squadClass);
-    const rightX = -Math.sin(formation.direction);
-    const rightY = Math.cos(formation.direction);
+    const profile = artilleryProfile(formation.squadClass, formation.artilleryPerformanceTier, formation.artilleryBatteryTier);
+    const forwardX = Math.cos(formation.direction);
+    const forwardY = Math.sin(formation.direction);
+    const rightX = -forwardY;
+    const rightY = forwardX;
     for (let i = 0; i < profile.guns; i += 1) {
-      const lateral = (i - (profile.guns - 1) / 2) * 34;
+      const offset = artilleryGunLocalOffset(formation.formationShape, i, profile.guns, 34, 42);
       ctx.save();
-      ctx.translate(formation.center.x + rightX * lateral, formation.center.y + rightY * lateral);
+      ctx.translate(
+        formation.center.x + forwardX * offset.forward + rightX * offset.lateral,
+        formation.center.y + forwardY * offset.forward + rightY * offset.lateral,
+      );
       ctx.rotate(formation.direction);
       const heavy = formation.squadClass === 'heavyArtillery';
       const horse = formation.squadClass === 'horseArtillery';
@@ -798,6 +1082,89 @@ export class Renderer {
     ctx.restore();
   }
 
+  private drawConstructionGhost(): void {
+    const ghost = this.constructionGhost;
+    if (!ghost) return;
+    const { ctx } = this;
+    const grid = GAME_CONFIG.world.grid;
+    const half = grid * 0.47;
+    ctx.save();
+    ctx.translate(ghost.position.x, ghost.position.y);
+    ctx.rotate(ghost.direction * Math.PI / 2);
+    ctx.globalAlpha = 0.48;
+    ctx.fillStyle = ghost.valid ? '#56c271' : ghost.cooldown ? '#d36b64' : '#c64f4f';
+    ctx.fillRect(-half, -half, half * 2, half * 2);
+    ctx.globalAlpha = 0.92;
+    ctx.strokeStyle = ghost.valid ? '#a5f0b7' : '#ff9a91';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-half, -half, half * 2, half * 2);
+    if (ghost.kind === 'loophole') {
+      ctx.fillStyle = '#1a1d19';
+      ctx.fillRect(half * 0.15, -half * 0.18, half * 0.88, half * 0.36);
+    } else if (ghost.kind === 'door') {
+      ctx.fillStyle = '#3d2a1c'; ctx.fillRect(-half * 0.42, -half * 0.72, half * 0.84, half * 1.44);
+    } else if (ghost.kind === 'roadTile') {
+      ctx.fillStyle = '#8a7657'; ctx.fillRect(-half, -half * 0.52, half * 2, half * 1.04);
+    } else if (ghost.kind === 'bridgeTile') {
+      ctx.fillStyle = '#9a7043';
+      for (let y = -half * 0.75; y <= half * 0.75; y += half * 0.38) ctx.fillRect(-half, y, half * 2, half * 0.18);
+    }
+    ctx.restore();
+  }
+
+  private drawConstructionBlocks(blocks: ConstructionBlock[], camera: Camera): void {
+    void camera;
+    const { ctx } = this;
+    const grid = GAME_CONFIG.world.grid;
+    for (const block of blocks) {
+      if (!block.active) continue;
+      const p = block.position;
+      const half = grid * 0.47;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(block.direction * Math.PI / 2);
+      const ratio = block.ratio();
+      if (block.kind === 'ironWall') ctx.fillStyle = '#5e6468';
+      else if (block.kind === 'loophole') ctx.fillStyle = '#6f5338';
+      else if (block.kind === 'door') ctx.fillStyle = '#64452e';
+      else if (block.kind === 'roadTile') ctx.fillStyle = '#75654f';
+      else if (block.kind === 'bridgeTile') ctx.fillStyle = '#8b623b';
+      else ctx.fillStyle = '#7c5a39';
+      ctx.fillRect(-half, -half, half * 2, half * 2);
+      ctx.strokeStyle = block.team === 'blue' ? '#7898c7' : '#c77b80';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(-half, -half, half * 2, half * 2);
+      if (block.kind === 'loophole') {
+        ctx.fillStyle = '#171b18';
+        ctx.fillRect(half * 0.15, -half * 0.18, half * 0.88, half * 0.36);
+      } else if (block.kind === 'door') {
+        ctx.fillStyle = '#332117'; ctx.fillRect(-half * 0.38, -half * 0.72, half * 0.76, half * 1.44);
+        ctx.fillStyle = '#c8a35f'; ctx.beginPath(); ctx.arc(half * 0.22, 0, 3, 0, Math.PI * 2); ctx.fill();
+      } else if (block.kind === 'roadTile') {
+        ctx.strokeStyle = 'rgba(220,205,168,0.38)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-half, 0); ctx.lineTo(half, 0); ctx.stroke();
+      } else if (block.kind === 'bridgeTile') {
+        ctx.fillStyle = '#b1834d';
+        for (let y = -half * 0.75; y <= half * 0.75; y += half * 0.38) ctx.fillRect(-half, y, half * 2, half * 0.16);
+      }
+      if (ratio <= 0.75) {
+        ctx.strokeStyle = ratio <= 0.25 ? '#2b1c16' : ratio <= 0.5 ? '#493024' : '#5b4030';
+        ctx.lineWidth = ratio <= 0.25 ? 5 : 3;
+        ctx.beginPath();
+        ctx.moveTo(-half * 0.75, -half * 0.55);
+        ctx.lineTo(-half * 0.15, half * 0.05);
+        ctx.lineTo(-half * 0.45, half * 0.7);
+        if (ratio <= 0.5) {
+          ctx.moveTo(half * 0.55, -half * 0.75);
+          ctx.lineTo(half * 0.1, -half * 0.05);
+          ctx.lineTo(half * 0.65, half * 0.55);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
   private drawPlayerArtilleryRange(
     formations: Formation[],
     snapshot: GameSnapshot,
@@ -810,7 +1177,7 @@ export class Renderer {
       : formations.find((formation) => formation.isPlayerControlled);
     if (!player || player.aliveCount() === 0) return;
 
-    const profile = artilleryProfile(snapshot.playerClass);
+    const profile = artilleryProfile(snapshot.playerClass, snapshot.playerArtilleryPerformanceTier as 1 | 2 | 3, snapshot.playerArtilleryBatteryTier as 1 | 2 | 3);
     const origin = snapshot.playerArtilleryRangeOrigin ?? player.center;
     const { ctx } = this;
     ctx.save();
@@ -868,7 +1235,7 @@ export class Renderer {
     }
   }
 
-  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot, localFormationId: string | null): void {
+  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot, localFormationId: string | null, resourceNodes: readonly ResourceNodeState[]): void {
     const { ctx } = this;
     const { x, y, width, height } = minimapRect(this.minimapPosition);
     const sx = width / GAME_CONFIG.world.width;
@@ -889,7 +1256,7 @@ export class Renderer {
         ? formations.find((formation) => formation.id === localFormationId)
         : formations.find((formation) => formation.isPlayerControlled);
       if (player && player.aliveCount() > 0) {
-        const profile = artilleryProfile(snapshot.playerClass);
+        const profile = artilleryProfile(snapshot.playerClass, snapshot.playerArtilleryPerformanceTier as 1 | 2 | 3, snapshot.playerArtilleryBatteryTier as 1 | 2 | 3);
         const origin = snapshot.playerArtilleryRangeOrigin ?? player.center;
         const px = x + origin.x * sx;
         const py = y + origin.y * sy;
@@ -907,6 +1274,25 @@ export class Renderer {
           ctx.stroke();
           ctx.setLineDash([]);
         }
+      }
+    }
+
+    if (snapshot.conquestEnabled) {
+      for (const point of snapshot.capturePoints) {
+        const px = x + point.position.x * sx;
+        const py = y + point.position.y * sy;
+        const team = point.owner ?? point.captureTeam;
+        ctx.fillStyle = point.contested ? '#f0c75e' : team === 'blue' ? '#5f9de8' : team === 'red' ? '#dc6666' : '#d0c8a8';
+        ctx.strokeStyle = '#182016';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(px, py, point.contested ? 6 : 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#f3ead0';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(point.id, px, py - 8);
       }
     }
 
@@ -937,16 +1323,33 @@ export class Renderer {
       }
     }
 
-    for (const site of MAP_SITES) {
-      const px = x + site.position.x * sx;
-      const py = y + site.position.y * sy;
-      ctx.fillStyle = site.team === 'blue' ? 'rgba(125, 176, 232, 0.75)'
-        : site.team === 'red' ? 'rgba(226, 124, 124, 0.75)'
-          : 'rgba(236, 211, 116, 0.85)';
-      const r = site.resource === 'alloy' ? 3.4 : 2.1;
-      ctx.beginPath();
-      ctx.arc(px, py, r, 0, Math.PI * 2);
-      ctx.fill();
+    if (snapshot.resourcesEnabled) {
+      for (const node of resourceNodes) {
+        const px = x + node.position.x * sx;
+        const py = y + node.position.y * sy;
+        const depleted = node.amount <= 0.01;
+        ctx.fillStyle = depleted ? 'rgba(132, 124, 108, 0.65)'
+          : node.resource === 'wood' ? 'rgba(122, 174, 102, 0.92)'
+            : node.resource === 'iron' ? 'rgba(185, 194, 196, 0.92)'
+              : node.resource === 'gunpowder' ? 'rgba(209, 157, 83, 0.92)'
+                : 'rgba(248, 220, 104, 0.96)';
+        const r = node.resource === 'alloy' ? 3.8 : node.rich ? 3.0 : 2.5;
+        ctx.beginPath();
+        ctx.arc(px, py, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    if (snapshot.recruitmentEnabled) {
+      for (const barracks of BARRACKS) {
+        const px = x + barracks.position.x * sx;
+        const py = y + barracks.position.y * sy;
+        ctx.fillStyle = barracks.team === 'blue' ? '#b6d5ff' : '#ffc0b8';
+        ctx.fillRect(px - 3.5, py - 3.5, 7, 7);
+        ctx.strokeStyle = 'rgba(44, 35, 24, 0.85)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px - 3.5, py - 3.5, 7, 7);
+      }
     }
 
     for (const banner of banners) {
@@ -1021,30 +1424,52 @@ export class Renderer {
     const { ctx } = this;
     if (snapshot.introStage === 'pan-enemy' || snapshot.introStage === 'return-player') return;
 
-    const isEnemy = snapshot.introStage === 'enemy-banner';
+    const secondStage = snapshot.introStage === 'enemy-banner';
     ctx.save();
-    const panelWidth = isEnemy ? 560 : 420;
-    const panelHeight = isEnemy ? 132 : 82;
+    const panelWidth = snapshot.conquestEnabled ? 620 : secondStage ? 590 : 500;
+    const panelHeight = snapshot.conquestEnabled ? 144 : secondStage ? 160 : 104;
     const x = GAME_CONFIG.viewport.width / 2 - panelWidth / 2;
     const y = GAME_CONFIG.viewport.height * 0.68 - panelHeight / 2;
-    ctx.fillStyle = 'rgba(18, 14, 10, 0.82)';
+    ctx.fillStyle = 'rgba(18, 14, 10, 0.84)';
     ctx.fillRect(x, y, panelWidth, panelHeight);
     ctx.strokeStyle = 'rgba(236, 218, 174, 0.82)';
     ctx.strokeRect(x, y, panelWidth, panelHeight);
     ctx.textAlign = 'center';
     ctx.fillStyle = '#f4e7c7';
     ctx.font = 'bold 25px Georgia, serif';
-    ctx.fillText(isEnemy ? 'ENEMY BANNER' : 'YOUR BANNER', GAME_CONFIG.viewport.width / 2, y + 35);
-    ctx.font = '14px ui-monospace, monospace';
-    ctx.fillStyle = '#d7c8a8';
-    if (isEnemy) {
-      ctx.fillText('この旗を破壊すれば勝利', GAME_CONFIG.viewport.width / 2, y + 66);
-      ctx.fillStyle = '#ffe08a';
-      ctx.fillText('[3] AXE を選択 → 敵旗を右クリック', GAME_CONFIG.viewport.width / 2, y + 96);
-      ctx.fillStyle = '#b7aa91';
-      ctx.fillText('敵部隊を退け、旗を壊す時間を作れ', GAME_CONFIG.viewport.width / 2, y + 119);
+
+    if (snapshot.conquestEnabled) {
+      ctx.fillText(secondStage ? 'TICKETS & FINAL STAND' : 'CAPTURE THE BANNERS', GAME_CONFIG.viewport.width / 2, y + 34);
+      ctx.font = '14px ui-monospace, monospace';
+      ctx.fillStyle = '#d7c8a8';
+      if (secondStage) {
+        ctx.fillText('2/3拠点以上を保持すると敵Ticketが減少', GAME_CONFIG.viewport.width / 2, y + 66);
+        ctx.fillText('敵部隊を完全壊滅させても Ticket -1', GAME_CONFIG.viewport.width / 2, y + 91);
+        ctx.fillStyle = '#ffe08a';
+        ctx.fillText('Ticket 0 → 増援停止 · 残存部隊全滅で敗北', GAME_CONFIG.viewport.width / 2, y + 121);
+      } else {
+        ctx.fillText('A / B / C の旗へ部隊を送り込め', GAME_CONFIG.viewport.width / 2, y + 66);
+        ctx.fillStyle = '#ffe08a';
+        ctx.fillText('敵旗を下ろし、自軍の旗を掲げれば占領', GAME_CONFIG.viewport.width / 2, y + 94);
+        ctx.fillStyle = '#b7aa91';
+        ctx.fillText('占領力はエリア内の部隊数で決まる', GAME_CONFIG.viewport.width / 2, y + 120);
+      }
     } else {
-      ctx.fillText('この旗を守り抜け', GAME_CONFIG.viewport.width / 2, y + 63);
+      ctx.fillText(secondStage ? 'ENEMY BANNER' : 'YOUR BANNER', GAME_CONFIG.viewport.width / 2, y + 34);
+      ctx.font = '14px ui-monospace, monospace';
+      ctx.fillStyle = '#d7c8a8';
+      if (secondStage) {
+        ctx.fillText('敵Bannerを破壊すれば勝利', GAME_CONFIG.viewport.width / 2, y + 65);
+        ctx.fillStyle = '#ffe08a';
+        ctx.fillText('Bannerへダメージを与えられるのは歩兵系の「斧」のみ', GAME_CONFIG.viewport.width / 2, y + 91);
+        ctx.fillText('[3] AXE を選択 → 敵旗を右クリック', GAME_CONFIG.viewport.width / 2, y + 118);
+        ctx.fillStyle = '#b7aa91';
+        ctx.fillText('銃撃・砲撃・騎兵突撃ではBannerを破壊できない', GAME_CONFIG.viewport.width / 2, y + 140);
+      } else {
+        ctx.fillText('この旗を守り抜け', GAME_CONFIG.viewport.width / 2, y + 66);
+        ctx.fillStyle = '#b7aa91';
+        ctx.fillText('敵歩兵の斧攻撃を許すな', GAME_CONFIG.viewport.width / 2, y + 90);
+      }
     }
     ctx.restore();
   }
@@ -1059,11 +1484,10 @@ export class Renderer {
     ctx.font = 'bold 48px Georgia, serif';
     ctx.fillText('BANNERFALL', GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 - 38);
     ctx.font = 'bold 24px Georgia, serif';
-    ctx.fillText(
-      snapshot.winner === 'blue' ? 'RED BANNER HAS FALLEN — BLUE VICTORY' : 'BLUE BANNER HAS FALLEN — RED VICTORY',
-      GAME_CONFIG.viewport.width / 2,
-      GAME_CONFIG.viewport.height / 2 + 4,
-    );
+    const victoryText = snapshot.conquestEnabled
+      ? snapshot.winner === 'blue' ? 'RED REINFORCEMENTS EXHAUSTED — BLUE VICTORY' : 'BLUE REINFORCEMENTS EXHAUSTED — RED VICTORY'
+      : snapshot.winner === 'blue' ? 'RED BANNER HAS FALLEN — BLUE VICTORY' : 'BLUE BANNER HAS FALLEN — RED VICTORY';
+    ctx.fillText(victoryText, GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 + 4);
     ctx.font = '14px ui-monospace, monospace';
     ctx.fillStyle = '#d6c8aa';
     ctx.fillText('R で再戦', GAME_CONFIG.viewport.width / 2, GAME_CONFIG.viewport.height / 2 + 43);

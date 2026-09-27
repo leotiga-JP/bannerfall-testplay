@@ -28,7 +28,8 @@ export type AiIntent =
   | 'bombard'
   | 'deploy'
   | 'rout'
-  | 'breakthrough';
+  | 'breakthrough'
+  | 'resupply';
 
 export interface AiCommand {
   formation: Formation;
@@ -62,6 +63,7 @@ interface Controller {
   navProgressTimer: number;
   navStuckTimer: number;
   navLastPosition: Vec2 | null;
+  navDetourPhase: number;
 }
 
 function zeroScores(): Record<SquadClass, number> {
@@ -70,6 +72,20 @@ function zeroScores(): Record<SquadClass, number> {
 
 export class BattleAiSystem {
   private readonly controllers = new Map<string, Controller>();
+  private navigationBlockedCells: Record<'blue' | 'red', ReadonlySet<string>> = { blue: new Set(), red: new Set() };
+
+  setNavigationBlockedCells(blue: ReadonlySet<string>, red: ReadonlySet<string> = blue): void {
+    this.navigationBlockedCells = { blue, red };
+  }
+
+  invalidateNavigation(): void {
+    for (const controller of this.controllers.values()) {
+      controller.navPath = [];
+      controller.navTarget = null;
+      controller.navRepathTimer = 0;
+      controller.navStuckTimer = 0;
+    }
+  }
 
   reset(formations: Formation[]): void {
     this.controllers.clear();
@@ -79,8 +95,21 @@ export class BattleAiSystem {
     }
   }
 
+  navigateToObjective(formation: Formation, target: Vec2, dt: number, targetLabel = 'SUPPLY'): Vec2 {
+    const controller = this.controllers.get(formation.id) ?? this.createController();
+    this.controllers.set(formation.id, controller);
+    controller.intent = 'resupply';
+    controller.targetId = null;
+    const move = this.navigateToward(formation, target, controller, dt);
+    this.writeDebug(formation, controller, targetLabel);
+    return move;
+  }
+
   update(formations: Formation[], banners: Banner[], dt: number): AiCommand[] {
-    const aliveById = new Map(formations.filter((f) => f.aliveCount() > 0).map((f) => [f.id, f]));
+    const alive = formations.filter((formation) => formation.aliveCount() > 0);
+    const aliveById = new Map(alive.map((formation) => [formation.id, formation]));
+    const aliveBlue = alive.filter((formation) => formation.team === 'blue');
+    const aliveRed = alive.filter((formation) => formation.team === 'red');
     const locks = new Map<string, number>();
     for (const controller of this.controllers.values()) {
       if (!controller.targetId || !aliveById.has(controller.targetId)) continue;
@@ -102,8 +131,8 @@ export class BattleAiSystem {
       controller.reformCooldown = Math.max(0, controller.reformCooldown - dt);
       controller.navRepathTimer = Math.max(0, controller.navRepathTimer - dt);
 
-      const enemies = formations.filter((candidate) => candidate.team !== formation.team && candidate.aliveCount() > 0);
-      const allies = formations.filter((candidate) => candidate.team === formation.team && candidate.aliveCount() > 0);
+      const enemies = formation.team === 'blue' ? aliveRed : aliveBlue;
+      const allies = formation.team === 'blue' ? aliveBlue : aliveRed;
       const ownBanner = banners.find((banner) => banner.team === formation.team)!;
       const enemyBanner = banners.find((banner) => banner.team !== formation.team)!;
       let target = controller.targetId ? aliveById.get(controller.targetId) ?? null : null;
@@ -221,6 +250,12 @@ export class BattleAiSystem {
         const laneTarget = BATTLEFIELD_MAP.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner.position);
         command.move = this.navigateToward(formation, laneTarget, controller, dt);
       }
+
+      // Friendly formations may overlap physically, but without a small steering bias
+      // multiple AI squads can converge on exactly the same waypoint and remain stacked.
+      // This affects AI movement only (never pushes human-controlled formations) and is
+      // intentionally weak enough that bridges/chokepoints are still usable.
+      command.move = this.applyFriendlyDispersion(formation, command.move, allies);
 
       this.writeDebug(formation, controller);
       commands.push(command);
@@ -403,7 +438,7 @@ export class BattleAiSystem {
     }
 
     const distance = this.distance(formation.center, target.center);
-    const volley = volleyProfile(formation.squadClass);
+    const volley = volleyProfile(formation.squadClass, formation.weaponTier);
     const routedOrBroken = target.mode === 'routed' || target.morale <= GAME_CONFIG.morale.breakthroughMoraleThreshold;
     if (routedOrBroken && formation.morale > 45) {
       controller.intent = 'breakthrough';
@@ -467,7 +502,7 @@ export class BattleAiSystem {
       controller.intent = 'advance';
       return;
     }
-    const profile = volleyProfile('dragoon');
+    const profile = volleyProfile('dragoon', formation.weaponTier);
     const distance = this.distance(formation.center, target.center);
     if (formation.canVolley() && distance <= profile.effectiveRange) {
       command.volley = true;
@@ -488,7 +523,7 @@ export class BattleAiSystem {
     command: AiCommand,
     locks: Map<string, number>,
   ): void {
-    const profile = chargeProfile(formation.squadClass);
+    const profile = chargeProfile(formation.squadClass, formation.weaponTier);
     const distance = this.distance(formation.center, target.center);
     const targetLocks = locks.get(target.id) ?? 0;
     if (formation.morale < 38) {
@@ -515,7 +550,7 @@ export class BattleAiSystem {
     command: AiCommand,
     locks: Map<string, number>,
   ): void {
-    const profile = artilleryProfile(formation.squadClass);
+    const profile = artilleryProfile(formation.squadClass, formation.artilleryPerformanceTier, formation.artilleryBatteryTier);
     const mountedThreat = this.nearestToPoint(
       enemies.filter((enemy) => (isChargeCavalryClass(enemy.squadClass) || enemy.squadClass === 'dragoon')
         && this.distance(enemy.center, formation.center) <= profile.threatRetreatRange),
@@ -601,8 +636,11 @@ export class BattleAiSystem {
   }
 
   private navigateToward(formation: Formation, rawTarget: Vec2, controller: Controller, dt: number): Vec2 {
-    const target = BATTLEFIELD_MAP.nearestPassablePoint(rawTarget, 14);
-    const directDistance = this.distance(formation.center, target);
+    this.adjustFormationForConstructionPassage(formation);
+    // Give every AI formation a stable personal approach point. Friendly units may
+    // overlap physically, but they no longer request exactly the same waypoint/path.
+    let target = this.distributedTarget(formation, rawTarget);
+    let directDistance = this.distance(formation.center, target);
     if (directDistance <= 1) return { x: 0, y: 0 };
 
     controller.navProgressTimer += dt;
@@ -616,8 +654,17 @@ export class BattleAiSystem {
     }
 
     const targetChanged = !controller.navTarget || this.distance(controller.navTarget, target) > 320;
-    const stuck = controller.navStuckTimer >= 1.5;
-    const directClear = BATTLEFIELD_MAP.linePassable(formation.center, target, isArtilleryClass(formation.squadClass) ? 1 : 0);
+    const stuck = controller.navStuckTimer >= 0.95;
+    if (stuck) {
+      controller.navDetourPhase += 1;
+      const phase = controller.navDetourPhase * 1.73 + this.numericFormationIndex(formation.id) * 0.91;
+      target = BATTLEFIELD_MAP.nearestPassablePoint({
+        x: target.x + Math.cos(phase) * 260,
+        y: target.y + Math.sin(phase) * 260,
+      }, 16, this.navigationBlockedCells[formation.team]);
+      directDistance = this.distance(formation.center, target);
+    }
+    const directClear = BATTLEFIELD_MAP.linePassable(formation.center, target, isArtilleryClass(formation.squadClass) ? 1 : 0, this.navigationBlockedCells[formation.team]);
 
     if (directClear && directDistance < 900) {
       controller.navPath = [];
@@ -629,19 +676,115 @@ export class BattleAiSystem {
     }
 
     if (targetChanged || stuck || controller.navRepathTimer <= 0 || controller.navPath.length === 0) {
-      const path = BATTLEFIELD_MAP.findPath(formation.center, target, formation.squadClass);
+      const path = BATTLEFIELD_MAP.findPath(formation.center, target, formation.squadClass, 14000, this.navigationBlockedCells[formation.team]);
       controller.navPath = path;
       controller.navTarget = { ...target };
-      controller.navRepathTimer = 1.25 + Math.random() * 0.75;
+      controller.navRepathTimer = 1.8 + Math.random() * 1.2;
       controller.navStuckTimer = 0;
     }
 
-    while (controller.navPath.length > 0 && this.distance(formation.center, controller.navPath[0]) < 105) {
+    while (controller.navPath.length > 0 && this.distance(formation.center, controller.navPath[0]) < 52) {
       controller.navPath.shift();
     }
     formation.debugNavPath = controller.navPath.slice(0, 8).map((point) => ({ ...point }));
     const waypoint = controller.navPath[0] ?? target;
     return this.toward(formation.center, waypoint);
+  }
+
+  private adjustFormationForConstructionPassage(formation: Formation): void {
+    if (formation.mode !== 'line' && formation.mode !== 'reforming') return;
+    const blocked = this.navigationBlockedCells[formation.team];
+    if (blocked.size === 0) {
+      if (formation.formationShape === 'column') formation.setFormationShape('line');
+      return;
+    }
+    const grid = GAME_CONFIG.world.grid;
+    const col = Math.floor(formation.center.x / grid);
+    const row = Math.floor(formation.center.y / grid);
+    let nearby = false;
+    for (let oy = -2; oy <= 2 && !nearby; oy += 1) {
+      for (let ox = -2; ox <= 2; ox += 1) {
+        if (blocked.has(`${col + ox},${row + oy}`)) { nearby = true; break; }
+      }
+    }
+    if (nearby) {
+      if (formation.formationShape !== 'column') formation.setFormationShape('column');
+      return;
+    }
+    // Once clear of fortifications, return AI squads to their normal broad fighting line.
+    if (formation.formationShape === 'column') formation.setFormationShape('line');
+  }
+
+  private applyFriendlyDispersion(formation: Formation, move: Vec2, allies: Formation[]): Vec2 {
+    const moveLength = Math.hypot(move.x, move.y);
+    if (moveLength < 0.001) return move;
+
+    const separationRadius = isArtilleryClass(formation.squadClass) ? 250 : 210;
+    let steerX = 0;
+    let steerY = 0;
+    let contributors = 0;
+
+    for (const ally of allies) {
+      if (ally === formation || ally.aliveCount() <= 0) continue;
+      const dx = formation.center.x - ally.center.x;
+      const dy = formation.center.y - ally.center.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance >= separationRadius) continue;
+
+      let awayX: number;
+      let awayY: number;
+      if (distance < 1) {
+        // Perfectly overlapping squads need a deterministic direction or they will
+        // make identical decisions forever.
+        const angle = (this.numericFormationIndex(formation.id) * 2.399963229728653)
+          + (formation.team === 'red' ? Math.PI : 0);
+        awayX = Math.cos(angle);
+        awayY = Math.sin(angle);
+      } else {
+        awayX = dx / distance;
+        awayY = dy / distance;
+      }
+
+      const strength = (1 - Math.min(1, distance / separationRadius)) * 0.58;
+      steerX += awayX * strength;
+      steerY += awayY * strength;
+      contributors += 1;
+      if (contributors >= 8) break;
+    }
+
+    if (contributors === 0) return move;
+    const candidateX = move.x + steerX;
+    const candidateY = move.y + steerY;
+    const candidateLength = Math.hypot(candidateX, candidateY);
+    if (candidateLength < 0.001) return move;
+
+    const candidate = { x: candidateX / candidateLength, y: candidateY / candidateLength };
+    const probeDistance = 110;
+    const probe = {
+      x: formation.center.x + candidate.x * probeDistance,
+      y: formation.center.y + candidate.y * probeDistance,
+    };
+    if (!BATTLEFIELD_MAP.linePassable(formation.center, probe, isArtilleryClass(formation.squadClass) ? 1 : 0)) {
+      return move;
+    }
+    return candidate;
+  }
+
+  private numericFormationIndex(id: string): number {
+    const parsed = Number.parseInt(id.slice(1), 10);
+    return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+  }
+
+  private distributedTarget(formation: Formation, rawTarget: Vec2): Vec2 {
+    const index = this.numericFormationIndex(formation.id);
+    const goldenAngle = 2.399963229728653;
+    const angle = index * goldenAngle + (formation.team === 'red' ? Math.PI : 0);
+    const radiusBase = isArtilleryClass(formation.squadClass) ? 185 : isChargeCavalryClass(formation.squadClass) ? 155 : 125;
+    const radius = radiusBase + (index % 4) * 28;
+    return BATTLEFIELD_MAP.nearestPassablePoint({
+      x: rawTarget.x + Math.cos(angle) * radius,
+      y: rawTarget.y + Math.sin(angle) * radius,
+    }, 14);
   }
 
   private selectTarget(formation: Formation, enemies: Formation[], locks: Map<string, number>): Formation | null {
@@ -678,7 +821,7 @@ export class BattleAiSystem {
   }
 
   private selectArtilleryTarget(formation: Formation, enemies: Formation[]): Formation | null {
-    const profile = artilleryProfile(formation.squadClass);
+    const profile = artilleryProfile(formation.squadClass, formation.artilleryPerformanceTier, formation.artilleryBatteryTier);
     let best: Formation | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const enemy of enemies) {
@@ -764,6 +907,7 @@ export class BattleAiSystem {
       navProgressTimer: 0,
       navStuckTimer: 0,
       navLastPosition: null,
+      navDetourPhase: 0,
     };
   }
 

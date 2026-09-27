@@ -1,6 +1,7 @@
 import type { Fieldwork } from '../entities/fieldwork';
 import type { ArtilleryShell } from '../entities/artilleryShell';
 import type { Game } from '../game/game';
+import type { BattlePresentationEvent } from '../network/protocol';
 import { isChargeCavalryClass, type SquadClass, type Vec2 } from '../game/types';
 
 type SampleKey = 'musket' | 'cannon' | 'explosion' | 'cavalryCharge' | 'birds';
@@ -67,12 +68,24 @@ export class AudioManager {
     this.master = null;
   }
 
+  handlePresentationEvents(events: BattlePresentationEvent[], game: Game): void {
+    if (!this.context || this.context.state !== 'running' || this.volume <= 0) return;
+    const listener = game.playerFormation.center;
+    const now = performance.now();
+    for (const event of events) {
+      if (event.kind !== 'volley') continue;
+      const last = this.lastVolleyAt.get(event.formationId) ?? -Infinity;
+      if (now - last < 180) continue;
+      this.lastVolleyAt.set(event.formationId, now);
+      this.playMusketVolley({ x: event.x, y: event.y }, listener, Math.max(1, event.count));
+    }
+  }
+
   update(game: Game): void {
     if (!this.context || this.context.state !== 'running' || this.volume <= 0) return;
     const now = performance.now();
     const listener = game.playerFormation.center;
 
-    this.updateVolleySounds(game, listener, now);
     this.updateShellSounds(game, listener, now);
     this.updateMeleeSounds(game, listener, now);
     this.updateFieldworkSounds(game.fieldworks, listener, now);
@@ -80,25 +93,6 @@ export class AudioManager {
     this.updateAmbient(listener, now);
   }
 
-  private updateVolleySounds(game: Game, listener: Vec2, now: number): void {
-    const bySource = new Map<string, { count: number; maxLife: number; position: Vec2 }>();
-    for (const projectile of game.projectiles) {
-      const source = game.formations.find((formation) => formation.id === projectile.sourceFormationId);
-      if (!source) continue;
-      const entry = bySource.get(projectile.sourceFormationId) ?? { count: 0, maxLife: 0, position: source.center };
-      entry.count += 1;
-      entry.maxLife = Math.max(entry.maxLife, projectile.life);
-      entry.position = source.center;
-      bySource.set(projectile.sourceFormationId, entry);
-    }
-    for (const [sourceId, volley] of bySource) {
-      if (volley.maxLife < 0.72) continue;
-      const last = this.lastVolleyAt.get(sourceId) ?? -Infinity;
-      if (now - last < 520) continue;
-      this.lastVolleyAt.set(sourceId, now);
-      this.playMusketVolley(volley.position, listener, Math.max(1, volley.count));
-    }
-  }
 
   private updateShellSounds(game: Game, listener: Vec2, now: number): void {
     const currentKeys = new Set<string>();
@@ -327,13 +321,12 @@ export class AudioManager {
   }
 
   private playMusketVolley(position: Vec2, listener: Vec2, count: number): void {
-    const layers = count >= 16 ? 3 : count >= 7 ? 2 : 1;
+    // One authoritative volley event = one sample start. The previous implementation
+    // layered the same MP3 2-3 times and the snapshot scanner could also trigger it,
+    // which made a single volley audibly double-fire.
     const baseGain = Math.min(0.62, 0.24 + Math.log2(count + 1) * 0.055);
-    for (let i = 0; i < layers; i += 1) {
-      const rate = 0.97 + Math.random() * 0.06;
-      const delay = i * (0.018 + Math.random() * 0.018);
-      this.playSample('musket', position, listener, baseGain / Math.sqrt(layers), 2200, rate, delay);
-    }
+    const rate = 0.985 + Math.random() * 0.03;
+    this.playSample('musket', position, listener, baseGain, 2200, rate);
   }
 
   private playCannon(position: Vec2, listener: Vec2, squadClass: SquadClass): void {

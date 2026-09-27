@@ -15,6 +15,8 @@ import {
   type RoomState,
   type RoomVisibility,
 } from '../src/network/protocol.ts';
+import { isGameMode, type GameMode } from '../src/game/gameMode.ts';
+import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, ensureDistinctFactions, isFactionId, type FactionId } from '../src/game/factionBanners.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -22,6 +24,8 @@ const MAX_PLAYERS = 20;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const TICK_SECONDS = 1 / 20;
 const SNAPSHOT_SECONDS = 1 / 10;
+const RESOURCE_SYNC_SECONDS = 0.2;
+const SNAPSHOT_BACKPRESSURE_BYTES = 384 * 1024;
 const MATCH_COUNTDOWN_SECONDS = 3;
 const CHAT_HISTORY_LIMIT = 50;
 const RECONNECT_WINDOW_MS = 120_000;
@@ -58,12 +62,13 @@ interface Room {
   phase: 'lobby' | 'countdown' | 'battle';
   ownerId: string;
   password: PasswordRecord | null;
-  settings: { blueSquads: number; redSquads: number; respawnSeconds: number; visibility: RoomVisibility };
+  settings: { blueSquads: number; redSquads: number; respawnSeconds: number; conquestTickets: number; visibility: RoomVisibility; gameMode: GameMode; introEnabled: boolean; constructionEnabled: boolean; blueFaction: FactionId; redFaction: FactionId };
   players: Map<string, ServerPlayer>;
   reservations: Map<string, ReconnectReservation>;
   chat: ChatMessage[];
   game: Game | null;
   snapshotClock: number;
+  resourceClock: number;
   countdownTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -105,6 +110,8 @@ const rooms = new Map<string, Room>();
 const sessions = new Map<string, Session>();
 const tickSamples: number[] = [];
 let tickMaxMs = 0;
+let skippedSnapshots = 0;
+let peakSocketBufferedBytes = 0;
 
 function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
@@ -184,7 +191,8 @@ function teamSlotState(room: Room, team: Team) {
   const total = team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
   const humans = deployedHumanCount(room, team);
   const reserved = room.phase === 'battle' ? reservedCount(room, team) : 0;
-  const available = Math.max(0, total - humans - reserved);
+  const pending = room.phase === 'battle' ? pendingTeamCount(room, team) : 0;
+  const available = Math.max(0, total - humans - reserved - pending);
   return { humans, reserved, available, total };
 }
 
@@ -196,8 +204,14 @@ function publicRoom(room: Room): RoomState {
       blueSquads: room.settings.blueSquads,
       redSquads: room.settings.redSquads,
       respawnSeconds: room.settings.respawnSeconds,
+      conquestTickets: room.settings.conquestTickets,
       passwordProtected: !!room.password,
       visibility: room.settings.visibility,
+      gameMode: room.settings.gameMode,
+      introEnabled: room.settings.introEnabled,
+      constructionEnabled: room.settings.constructionEnabled,
+      blueFaction: room.settings.blueFaction,
+      redFaction: room.settings.redFaction,
     },
     players: [...room.players.values()].map((player) => ({
       id: player.id,
@@ -222,14 +236,99 @@ function broadcast(room: Room, payload: unknown): void {
   }
 }
 
+function systemChat(room: Room, text: string): void {
+  const message: ChatMessage = {
+    id: crypto.randomUUID(),
+    playerId: 'system',
+    playerName: 'SYSTEM',
+    text,
+    at: Date.now(),
+    system: true,
+  };
+  room.chat.push(message);
+  if (room.chat.length > CHAT_HISTORY_LIMIT) room.chat.splice(0, room.chat.length - CHAT_HISTORY_LIMIT);
+  broadcast(room, { type: 'chat_message', message });
+}
+
+function broadcastSnapshot(room: Room): void {
+  if (!room.game) return;
+  const raw = JSON.stringify({ type: 'battle_snapshot', snapshot: room.game.createNetworkSnapshot() });
+  for (const player of room.players.values()) {
+    const ws = player.ws;
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    peakSocketBufferedBytes = Math.max(peakSocketBufferedBytes, ws.bufferedAmount);
+    // Snapshots supersede older snapshots. If a client is behind, drop this frame
+    // rather than queueing seconds of stale world state and forcing a reconnect.
+    if (ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) {
+      skippedSnapshots += 1;
+      continue;
+    }
+    ws.send(raw);
+  }
+}
+
+function broadcastPresentationEvents(room: Room): void {
+  if (!room.game) return;
+  const events = room.game.drainPresentationEvents();
+  if (events.length === 0) return;
+  const raw = JSON.stringify({ type: 'battle_events', events });
+  for (const player of room.players.values()) {
+    const ws = player.ws;
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    // Cosmetic events are droppable under severe backpressure; authoritative state
+    // will still arrive in snapshots and must never queue behind effects.
+    if (ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue;
+    ws.send(raw);
+  }
+}
+
+function sendResourceState(room: Room, ws: WebSocket): void {
+  if (!room.game) return;
+  const state = room.game.createResourceNetworkState();
+  if (!state || ws.readyState !== WebSocket.OPEN) return;
+  send(ws, { type: 'resource_state', state });
+}
+
+function broadcastResourceState(room: Room): void {
+  if (!room.game) return;
+  const state = room.game.createResourceNetworkState();
+  if (!state) return;
+  const raw = JSON.stringify({ type: 'resource_state', state });
+  for (const player of room.players.values()) {
+    const ws = player.ws;
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue;
+    ws.send(raw);
+  }
+  room.game.consumeResourceStateDirty();
+}
+
+function sendConstructionState(room: Room, ws: WebSocket): void {
+  if (!room.game || ws.readyState !== WebSocket.OPEN) return;
+  send(ws, { type: 'construction_state', state: room.game.createConstructionNetworkState() });
+}
+
+function broadcastConstructionState(room: Room): void {
+  if (!room.game) return;
+  const raw = JSON.stringify({ type: 'construction_state', state: room.game.createConstructionNetworkState() });
+  for (const player of room.players.values()) {
+    const ws = player.ws;
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (ws.bufferedAmount > SNAPSHOT_BACKPRESSURE_BYTES) continue;
+    ws.send(raw);
+  }
+  room.game.consumeConstructionStateDirty();
+}
+
 function roomBrowserEntry(room: Room): RoomBrowserEntry {
   const owner = room.players.get(room.ownerId);
   const blue = teamSlotState(room, 'blue');
   const red = teamSlotState(room, 'red');
   const capacity = Math.min(MAX_PLAYERS, room.settings.blueSquads + room.settings.redSquads);
+  const hasHumanCapacity = room.players.size < capacity;
   const joinable = room.phase === 'lobby'
-    ? room.players.size < capacity
-    : room.phase === 'battle' && (blue.available + red.available + blue.reserved + red.reserved > 0);
+    ? hasHumanCapacity
+    : room.phase === 'battle' && hasHumanCapacity && (blue.available + red.available > 0);
   return {
     code: room.code,
     hostName: owner?.name ?? 'Host',
@@ -239,11 +338,16 @@ function roomBrowserEntry(room: Room): RoomBrowserEntry {
     blueSquads: room.settings.blueSquads,
     redSquads: room.settings.redSquads,
     respawnSeconds: room.settings.respawnSeconds,
+    conquestTickets: room.settings.conquestTickets,
     passwordProtected: !!room.password,
     blueHumans: blue.humans,
     redHumans: red.humans,
     blueAvailable: blue.available,
     redAvailable: red.available,
+    gameMode: room.settings.gameMode,
+    introEnabled: room.settings.introEnabled,
+    blueFaction: room.settings.blueFaction,
+    redFaction: room.settings.redFaction,
     joinable,
   };
 }
@@ -328,6 +432,11 @@ function removeFromRoom(session: Session, reason = 'left'): void {
     }
   }
 
+  if (player) {
+    if (reason === 'disconnected') systemChat(room, `${player.name} の接続が切れました。AIが部隊を引き継ぎます。`);
+    else systemChat(room, `${player.name} が退室しました。`);
+  }
+
   if (room.players.size === 0) {
     if (room.countdownTimer) clearTimeout(room.countdownTimer);
     room.countdownTimer = null;
@@ -369,19 +478,27 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
   const blueSquads = clampInt(settings.blueSquads, 1, 50, 20);
   const redSquads = clampInt(settings.redSquads, 1, 50, 20);
   const respawnSeconds = clampInt(settings.respawnSeconds, 5, 60, 20);
+  const conquestTickets = clampInt(settings.conquestTickets, 1, 9999, Math.max(100, Math.min(400, Math.max(blueSquads, redSquads) * 8)));
   const visibility: RoomVisibility = settings.visibility === 'unlisted' ? 'unlisted' : 'public';
+  const gameMode: GameMode = isGameMode(settings.gameMode) ? settings.gameMode : 'BATTLE';
+  const introEnabled = settings.introEnabled !== false;
+  const constructionEnabled = settings.constructionEnabled !== false;
+  const requestedBlueFaction: FactionId = isFactionId(settings.blueFaction) ? settings.blueFaction : DEFAULT_BLUE_FACTION;
+  const requestedRedFaction: FactionId = isFactionId(settings.redFaction) ? settings.redFaction : DEFAULT_RED_FACTION;
+  const factions = ensureDistinctFactions(requestedBlueFaction, requestedRedFaction);
   const code = randomCode();
   const room: Room = {
     code,
     phase: 'lobby',
     ownerId: session.id,
     password: hashPassword(String(message.password ?? '')),
-    settings: { blueSquads, redSquads, respawnSeconds, visibility },
+    settings: { blueSquads, redSquads, respawnSeconds, conquestTickets, visibility, gameMode, introEnabled, constructionEnabled, blueFaction: factions.blue, redFaction: factions.red },
     players: new Map(),
     reservations: new Map(),
     chat: [],
     game: null,
     snapshotClock: 0,
+    resourceClock: 0,
     countdownTimer: null,
   };
   session.name = cleanName(message.name);
@@ -389,11 +506,22 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
   const player = makePlayer(session, session.name, 'blue');
   room.players.set(session.id, player);
   rooms.set(code, room);
+  systemChat(room, `${session.name} が入室しました。`);
   send(session.ws, { type: 'reconnect_token', roomCode: code, token: player.reconnectToken });
   send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
   broadcastRoomList();
-  console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s, ${visibility})`);
+  console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s, tickets ${conquestTickets}, ${visibility}, mode ${gameMode}, factions ${factions.blue}/${factions.red}, intro ${introEnabled ? 'on' : 'skip'})`);
+}
+
+function setConquestTickets(session: Session, message: Record<string, unknown>): void {
+  const room = session.roomCode ? rooms.get(session.roomCode) : null;
+  if (!room) return send(session.ws, { type: 'error', message: 'Room not found.' });
+  if (room.ownerId !== session.id) return send(session.ws, { type: 'error', message: 'Only the host can change tickets.' });
+  if (room.phase !== 'lobby') return send(session.ws, { type: 'error', message: 'Tickets can only be changed in the lobby.' });
+  room.settings.conquestTickets = clampInt(message.tickets, 1, 9999, room.settings.conquestTickets);
+  broadcastRoom(room);
+  broadcastRoomList();
 }
 
 function joinRoom(session: Session, message: Record<string, unknown>): void {
@@ -404,6 +532,48 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
   if (!verifyPassword(String(message.password ?? ''), room.password)) return send(session.ws, { type: 'error', message: 'Incorrect password.' });
 
   const requestedToken = String(message.reconnectToken ?? '').trim();
+
+  // A browser can reconnect before the old WebSocket close reaches the server.
+  // Reconnect tokens therefore also identify an already-active player and atomically
+  // replace the stale socket instead of creating a duplicate player entry.
+  const activePlayer = requestedToken
+    ? [...room.players.values()].find((candidate) => candidate.reconnectToken === requestedToken && candidate.id !== session.id)
+    : undefined;
+  if (activePlayer) {
+    removeFromRoom(session);
+    const previousSession = sessions.get(activePlayer.id);
+    room.players.delete(activePlayer.id);
+    if (previousSession) previousSession.roomCode = null;
+
+    session.name = activePlayer.name;
+    session.roomCode = code;
+    const player = makePlayer(session, activePlayer.name, activePlayer.team);
+    player.reconnectToken = activePlayer.reconnectToken;
+    player.formationId = activePlayer.formationId;
+    player.squadClass = activePlayer.squadClass;
+    player.spawnIndex = activePlayer.spawnIndex;
+    player.ready = activePlayer.ready;
+    room.players.set(session.id, player);
+    if (room.game && player.formationId) room.game.claimHumanFormation(player.formationId, undefined, undefined, false, false);
+
+    send(session.ws, { type: 'reconnect_token', roomCode: code, token: player.reconnectToken });
+    send(session.ws, { type: 'chat_history', messages: room.chat });
+    if (room.phase === 'battle' && room.game && player.formationId) {
+      send(session.ws, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server', joinInProgress: true } });
+      send(session.ws, { type: 'battle_snapshot', snapshot: room.game.createNetworkSnapshot() });
+      sendResourceState(room, session.ws);
+      sendConstructionState(room, session.ws);
+    } else {
+      send(session.ws, { type: 'room_state', room: publicRoom(room) });
+    }
+    broadcastRoom(room);
+    broadcastRoomList();
+    systemChat(room, `${player.name} が再接続しました。`);
+    if (previousSession?.ws.readyState === WebSocket.OPEN) previousSession.ws.close(4001, 'superseded by reconnect');
+    console.log(`[room ${code}] ${player.name} replaced an active stale connection`);
+    return;
+  }
+
   const reservation = requestedToken ? room.reservations.get(requestedToken) : undefined;
   if (room.phase === 'battle' && reservation && reservation.expiresAt > Date.now() && room.game) {
     removeFromRoom(session);
@@ -422,8 +592,11 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
     send(session.ws, { type: 'chat_history', messages: room.chat });
     send(session.ws, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server', joinInProgress: true } });
     send(session.ws, { type: 'battle_snapshot', snapshot: room.game.createNetworkSnapshot() });
+    sendResourceState(room, session.ws);
+    sendConstructionState(room, session.ws);
     broadcastRoom(room);
     broadcastRoomList();
+    systemChat(room, `${player.name} が再接続しました。`);
     console.log(`[room ${code}] ${player.name} reconnected to ${player.formationId}`);
     return;
   }
@@ -441,6 +614,7 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
   session.roomCode = code;
   const player = makePlayer(session, session.name, chooseTeam(room));
   room.players.set(session.id, player);
+  systemChat(room, `${session.name} が入室しました。`);
   send(session.ws, { type: 'reconnect_token', roomCode: code, token: player.reconnectToken });
   send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
@@ -544,18 +718,25 @@ function launchMatch(room: Room): void {
     blueSquads: room.settings.blueSquads,
     redSquads: room.settings.redSquads,
     respawnSeconds: room.settings.respawnSeconds,
+    conquestTickets: room.settings.conquestTickets,
+    gameMode: room.settings.gameMode,
     localFormationId: firstFormationId,
     humanFormationIds,
     initialClasses,
     initialSpawnAreas,
-    introEnabled: true,
+    introEnabled: room.settings.introEnabled,
+    constructionEnabled: room.settings.constructionEnabled,
+    capturePresentationEvents: true,
   });
   room.phase = 'battle';
   room.snapshotClock = 0;
+  room.resourceClock = 0;
   room.countdownTimer = null;
   broadcast(room, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server', joinInProgress: false } });
+  broadcastResourceState(room);
+  broadcastConstructionState(room);
   broadcastRoomList();
-  console.log(`[room ${room.code}] authoritative match started (${humanFormationIds.length} players)`);
+  console.log(`[room ${room.code}] authoritative match started (${humanFormationIds.length} players, mode ${room.settings.gameMode})`);
 }
 
 function deployMidmatch(session: Session): void {
@@ -563,6 +744,7 @@ function deployMidmatch(session: Session): void {
   const player = room?.players.get(session.id);
   if (!room || !player || room.phase !== 'battle' || !room.game || player.formationId) return;
   if (player.spawnIndex === null) return send(session.ws, { type: 'error', message: 'Select a spawn area before deployment.' });
+  if (!room.game.canTeamRespawn(player.team)) return send(session.ws, { type: 'error', message: `${player.team.toUpperCase()} reinforcements are exhausted.` });
 
   const reservedIds = new Set([...room.reservations.values()].filter((entry) => entry.expiresAt > Date.now()).map((entry) => entry.formationId));
   const area = BATTLEFIELD_MAP.spawnArea(player.team, player.spawnIndex);
@@ -589,9 +771,12 @@ function deployMidmatch(session: Session): void {
   room.game.claimHumanFormation(formation.id, player.squadClass, player.spawnIndex, true, true);
   send(session.ws, { type: 'match_start', payload: { room: publicRoom(room), authorityId: 'server', joinInProgress: true } });
   send(session.ws, { type: 'battle_snapshot', snapshot: room.game.createNetworkSnapshot() });
+  sendResourceState(room, session.ws);
+  sendConstructionState(room, session.ws);
   broadcastRoom(room);
   broadcastRoomList();
   broadcast(room, { type: 'notice', message: `${player.name} deployed to ${player.team.toUpperCase()} as ${formation.id}.` });
+  systemChat(room, `${player.name} が ${player.team.toUpperCase()} ${formation.id} として途中参戦しました。`);
 }
 
 function startMatch(session: Session): void {
@@ -656,6 +841,7 @@ function handleMessage(session: Session, raw: RawData): void {
     case 'set_ready': setReady(session, message.ready); break;
     case 'deploy_midmatch': deployMidmatch(session); break;
     case 'chat_send': sendChat(session, message.text); break;
+    case 'set_conquest_tickets': setConquestTickets(session, message); break;
     case 'start_match': startMatch(session); break;
     case 'control': applyControl(session, message.control as ContinuousControl); break;
     case 'action': applyAction(session, message.action as PlayerAction); break;
@@ -684,10 +870,21 @@ setInterval(() => {
   for (const room of rooms.values()) {
     if (room.phase !== 'battle' || !room.game) continue;
     room.game.update(TICK_SECONDS);
+    broadcastPresentationEvents(room);
     room.snapshotClock += TICK_SECONDS;
     if (room.snapshotClock >= SNAPSHOT_SECONDS) {
       room.snapshotClock = 0;
-      broadcast(room, { type: 'battle_snapshot', snapshot: room.game.createNetworkSnapshot() });
+      broadcastSnapshot(room);
+    }
+    if (room.game.modeRules.resources) {
+      room.resourceClock += TICK_SECONDS;
+      const shouldSyncProgress = room.game.hasActiveResourceGathering() && room.resourceClock >= RESOURCE_SYNC_SECONDS;
+      const shouldSyncChange = room.game.resourceStateDirty() && room.resourceClock >= RESOURCE_SYNC_SECONDS;
+      if (shouldSyncProgress || shouldSyncChange) {
+        room.resourceClock = 0;
+        broadcastResourceState(room);
+      }
+      if (room.game.constructionStateDirty()) broadcastConstructionState(room);
     }
   }
   const elapsed = performance.now() - started;
@@ -704,6 +901,8 @@ const server = http.createServer((req, res) => {
       return sum + room.game.formations.reduce((formationSum, formation) => formationSum + formation.soldiers.length, 0);
     }, 0);
     const tickAvgMs = tickSamples.length > 0 ? tickSamples.reduce((sum, value) => sum + value, 0) / tickSamples.length : 0;
+    const battleModeRooms = [...rooms.values()].filter((room) => room.settings.gameMode === 'BATTLE').length;
+    const conquestModeRooms = [...rooms.values()].filter((room) => room.settings.gameMode === 'CONQUEST').length;
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify({
       ok: true,
@@ -711,6 +910,7 @@ const server = http.createServer((req, res) => {
       version: GAME_VERSION,
       protocolVersion: PROTOCOL_VERSION,
       rooms: rooms.size,
+      gameModeRooms: { battle: battleModeRooms, conquest: conquestModeRooms },
       battles,
       players: sessions.size,
       soldiers,
@@ -718,6 +918,8 @@ const server = http.createServer((req, res) => {
       snapshotHz: Math.round(1 / SNAPSHOT_SECONDS),
       tickAvgMs: Number(tickAvgMs.toFixed(2)),
       tickMaxMs: Number(tickMaxMs.toFixed(2)),
+      skippedSnapshots,
+      peakSocketBufferedKB: Number((peakSocketBufferedBytes / 1024).toFixed(1)),
     }));
     return;
   }

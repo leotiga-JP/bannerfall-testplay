@@ -1,9 +1,13 @@
 import { Formation } from '../entities/formation';
 import { Projectile } from '../entities/projectile';
 import { Fieldwork } from '../entities/fieldwork';
+import { ConstructionBlock, CONSTRUCTION_DEFINITIONS } from '../entities/constructionBlock';
 import { GAME_CONFIG } from '../game/config';
+import { BATTLEFIELD_MAP } from '../game/battlefieldMap';
+import { LOOPHOLE_ENEMY_PASS_CHANCE, constructionBlocksProjectiles, isLoopholeFriendlyShot, segmentIntersectsConstructionBlock } from '../game/constructionSystem';
 import { volleyProfile } from '../game/classProfiles';
 import { isMountedClass, type Team, type Vec2 } from '../game/types';
+import { armorDamageMultiplier } from '../game/upgradeSystem';
 
 export interface SmokeParticle {
   position: Vec2;
@@ -39,7 +43,7 @@ export function fireVolley(formation: Formation): VolleyResult {
   const projectiles: Projectile[] = [];
   const smoke: SmokeParticle[] = [];
   const flashes: MuzzleFlash[] = [];
-  const profile = volleyProfile(formation.squadClass);
+  const profile = volleyProfile(formation.squadClass, formation.weaponTier);
 
   for (const soldier of formation.aliveSoldiers()) {
     const angle = formation.direction + (Math.random() * 2 - 1) * profile.spread;
@@ -119,6 +123,7 @@ export function updateProjectiles(
   projectiles: Projectile[],
   formations: Formation[],
   fieldworks: Fieldwork[],
+  constructionBlocks: ConstructionBlock[],
   dt: number,
   onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
 ): void {
@@ -133,6 +138,25 @@ export function updateProjectiles(
     const segmentMid = { x: (previous.x + projectile.position.x) / 2, y: (previous.y + projectile.position.y) / 2 };
 
     let hit = false;
+    const mountainHit = BATTLEFIELD_MAP.segmentHitsMountain(previous, projectile.position);
+    if (mountainHit) {
+      projectile.position = mountainHit;
+      projectile.life = 0;
+      continue;
+    }
+    for (const block of constructionBlocks) {
+      if (!block.active || !constructionBlocksProjectiles(block.kind) || !segmentIntersectsConstructionBlock(previous, projectile.position, block, GAME_CONFIG.musket.bulletRadius)) continue;
+      const friendlyLoopholePass = isLoopholeFriendlyShot(block, projectile.team, projectile.velocity);
+      const enemyLoopholePass = block.kind === 'loophole' && block.team !== projectile.team && Math.random() < LOOPHOLE_ENEMY_PASS_CHANCE;
+      if (friendlyLoopholePass || enemyLoopholePass) continue;
+      if (block.team !== projectile.team) {
+        block.takeDamage(projectile.damage * CONSTRUCTION_DEFINITIONS[block.kind].bulletDamageMultiplier);
+      }
+      projectile.life = 0;
+      hit = true;
+      break;
+    }
+    if (hit) continue;
     for (const fieldwork of fieldworks) {
       if (!fieldwork.active || fieldwork.team === projectile.team) continue;
       if (!projectileHitsFieldwork(previous, projectile.position, fieldwork)) continue;
@@ -153,9 +177,10 @@ export function updateProjectiles(
         const hitRadius = GAME_CONFIG.soldier.radius + bulletRadius;
         if (distanceToSegmentSquared(target.position, previous, projectile.position) > hitRadius * hitRadius) continue;
         const sourceFormation = formations.find((candidate) => candidate.id === projectile.sourceFormationId);
+        const armorMultiplier = armorDamageMultiplier(formation.squadClass, formation.armorTier, 'bullet');
         const damage = sourceFormation?.squadClass === 'sharpshooter' && isMountedClass(formation.squadClass)
-          ? Math.max(projectile.damage, target.hp + 1)
-          : projectile.damage;
+          ? Math.max(projectile.damage * armorMultiplier, target.hp + 1)
+          : projectile.damage * armorMultiplier;
         const killed = target.takeDamage(damage);
         formation.applyMoraleDamage(projectile.moraleDamage + (killed ? 1.8 : 0));
         projectile.life = 0;

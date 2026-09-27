@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Version 4.0.7 - Grand River Front" />
-    <title>Bannerfall - Version 4.0.7 Grand River Front</title>
+    <meta name="description" content="Bannerfall Version 4.4.4 - Construction / Siege Polish" />
+    <title>Bannerfall - Version 4.4.4 Construction / Siege Polish</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">PHASE 3.10 · 戦闘教義拡張</span>
+            <span class="eyebrow">VERSION 4.4.4 · CONSTRUCTION / SIEGE POLISH</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
@@ -48,7 +48,14 @@
             <label class="field"><span>援軍ウェーブ間隔</span><input id="respawn-seconds" type="number" min="5" max="60" value="20" /></label>
             <label class="field"><span>パスワード · 任意</span><input id="create-password" maxlength="32" type="password" placeholder="パスワードなし" /></label>
             <label class="field"><span>公開設定</span><select id="create-visibility"><option value="public" selected>公開 · 部屋一覧に表示</option><option value="unlisted">非公開 · コード参加のみ</option></select></label>
+            <label class="field"><span>ゲームモード</span><select id="create-game-mode"><option value="BATTLE" selected>戦闘モード</option><option value="CONQUEST">コンクエストモード</option></select></label>
+            <label class="field faction-field"><span>BLUE 軍旗</span><select id="create-blue-faction"><option value="FRENCH" selected>フランス風</option><option value="PRUSSIAN">プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="blue-faction-swatch" class="faction-swatch faction-french" aria-hidden="true"></i></label>
+            <label class="field faction-field"><span>RED 軍旗</span><select id="create-red-faction"><option value="FRENCH">フランス風</option><option value="PRUSSIAN" selected>プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="red-faction-swatch" class="faction-swatch faction-prussian" aria-hidden="true"></i></label>
+            <label class="field"><span>開始ムービー</span><select id="create-intro"><option value="on" selected>再生する</option><option value="off">スキップ</option></select></label>
+            <label class="field"><span>ブロック建築</span><select id="create-construction"><option value="on" selected>許可する</option><option value="off">禁止する</option></select></label>
           </div>
+          <p class="muted faction-note">BLUE / REDで同じ軍旗は選択できません。軍旗は本陣・占領拠点・Lobby表示に反映されます。</p>
+          <p id="create-game-mode-description" class="muted">戦闘モード：完成した部隊ですぐに大規模戦闘を楽しみます。Version 4.0.9までの戦闘体験を維持します。</p>
           <p class="muted">総部隊数です。人間プレイヤーが入った分だけAI部隊が置き換わります。1 vs 1〜50 vs 50。</p>
           <button id="create-room" class="primary wide">部屋を作成</button>
         </div>
@@ -80,6 +87,11 @@
             <div class="lobby-buttons"><button id="copy-invite">招待をコピー</button><button id="leave-room">退出</button></div>
           </div>
           <div id="lobby-settings" class="lobby-settings"></div>
+          <div id="lobby-ticket-controls" class="lobby-ticket-controls hidden">
+            <label for="lobby-conquest-tickets"><span>CONQUEST TICKETS</span><input id="lobby-conquest-tickets" type="number" min="1" max="9999" value="160" /></label>
+            <button id="lobby-ticket-apply" type="button">適用</button>
+            <small>Hostのみ変更可能 · 1～9999</small>
+          </div>
 
           <div class="deployment-layout">
             <section class="deployment-column">
@@ -150,7 +162,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Version 4.0.7 — 大河戦線</p>
+            <p id="battle-subtitle">Version 4.4.4 — Builder UX / Navigation Stability</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
@@ -174,6 +186,13 @@
             </div>
           </div>
 
+          <div id="resource-stockpile" class="resource-stockpile hidden" aria-label="Team resources">
+            <span>木材 <strong id="resource-wood">0</strong></span>
+            <span>鉄 <strong id="resource-iron">0</strong></span>
+            <span>火薬 <strong id="resource-gunpowder">0</strong></span>
+            <span>合金 <strong id="resource-alloy">0</strong></span>
+          </div>
+
           <div id="notice" class="notice hidden">NOTICE</div>
           <div id="objective-progress" class="objective-progress hidden">DESTROYING BANNER</div>
 
@@ -188,7 +207,7 @@
           <div id="scoreboard" class="scoreboard hidden" aria-label="Battle statistics">
             <div class="scoreboard-card">
               <div class="scoreboard-head"><strong>戦闘統計</strong><span>TAB長押し</span></div>
-              <div class="scoreboard-columns"><span>プレイヤー / 部隊</span><span>陣営</span><span>兵科</span><span>撃破</span><span>損失</span><span>旗ダメージ</span></div>
+              <div class="scoreboard-columns"><span>プレイヤー / 部隊</span><span>陣営</span><span>兵科</span><span>撃破</span><span>損失</span><span>旗ダメージ</span><span class="resource-score-column">採取資源</span><span class="resource-score-column">戦利品</span></div>
               <div id="scoreboard-body" class="scoreboard-body"></div>
             </div>
           </div>
@@ -199,6 +218,42 @@
           </div>
 
           <div id="context-hint" class="context-hint hidden"></div>
+          <div id="construction-work" class="construction-work hidden" aria-label="Construction work progress">
+            <div class="construction-work-head"><strong id="construction-work-label">建築中</strong><span id="construction-work-time">1.5秒</span></div>
+            <div class="construction-work-track"><span id="construction-work-bar"></span></div>
+          </div>
+
+          <div id="resource-gather" class="resource-gather hidden" aria-label="Resource gathering progress">
+            <div class="resource-gather-head"><strong id="resource-gather-label">資源採取中</strong><span>E 長押し</span></div>
+            <div class="resource-gather-track"><span id="resource-gather-bar"></span></div>
+            <small id="resource-gather-detail"></small>
+          </div>
+
+          <div id="recruitment-panel" class="recruitment-panel hidden" aria-label="兵舎 増員">
+            <div class="recruitment-head"><div><small>CONQUEST · BARRACKS</small><h2 id="recruitment-title">兵舎 · 部隊増員</h2></div><button id="recruitment-close" type="button">閉じる</button></div>
+            <p id="recruitment-status">現在兵力</p>
+            <div id="recruitment-progress" class="recruitment-progress hidden"><span id="recruitment-progress-bar"></span></div>
+            <div class="recruitment-actions">
+              <button type="button" data-recruit-count="1"><strong>+1人</strong><small id="recruit-cost-1">木材 / 鉄</small></button>
+              <button type="button" data-recruit-count="5"><strong>+5人</strong><small id="recruit-cost-5">木材 / 鉄</small></button>
+            </div>
+            <button id="recruit-upgrade-cap" class="recruit-upgrade-cap" type="button"><strong>兵員上限を拡張</strong><small id="recruit-upgrade-cost">木材 / 鉄</small></button>
+            <button id="recruitment-cancel" class="recruitment-cancel hidden" type="button">増員を中止</button>
+            <p id="recruitment-note" class="muted">資源は増員完了時に消費されます。移動すると中断します。</p>
+          </div>
+
+
+          <div id="upgrade-panel" class="upgrade-panel hidden" aria-label="装備強化">
+            <div class="upgrade-head"><div><small>CONQUEST · UPGRADE</small><h2 id="upgrade-title">工房 · 装備強化</h2></div><button id="upgrade-close" type="button">閉じる</button></div>
+            <p id="upgrade-status">武器 T1 · 防具 T1</p>
+            <div class="upgrade-actions">
+              <button type="button" data-equipment-upgrade="weapon"><strong>武器 T1 → T2</strong><small class="upgrade-detail">射撃・白兵性能を強化</small><small class="upgrade-cost">木 / 鉄 / 火薬 / 合金</small></button>
+              <button type="button" data-equipment-upgrade="armor"><strong>防具 T1 → T2</strong><small class="upgrade-detail">被ダメージ耐性を強化</small><small class="upgrade-cost">木 / 鉄 / 火薬 / 合金</small></button>
+              <button type="button" data-equipment-upgrade="artillery-performance"><strong>砲性能 T1 → T2</strong><small class="upgrade-detail">射程・装填・精度・威力を強化</small><small class="upgrade-cost">木 / 鉄 / 火薬 / 合金</small></button>
+              <button type="button" data-equipment-upgrade="artillery-battery"><strong>砲門数 T1 → T2</strong><small class="upgrade-detail">運用する大砲の数を増加</small><small class="upgrade-cost">木 / 鉄 / 火薬 / 合金</small></button>
+            </div>
+            <p id="upgrade-note" class="muted">強化は兵科ごとに保存されます。</p>
+          </div>
 
           <div id="hotbar" class="hotbar" aria-label="Action hotbar">
             <div class="slot" data-slot="1"><span class="key">1</span><span class="icon">━</span><small>MUSKET</small></div>
@@ -249,10 +304,11 @@
           <span><kbd>RMB</kbd> 突撃</span>
           <span><kbd>LMB</kbd> 射撃 / 砲撃</span>
           <span><kbd>4</kbd> 擲弾兵：手榴弾</span>
-          <span><kbd>5</kbd> 馬防柵を設置</span>
+          <span><kbd>5</kbd> 工兵：Builder Mode</span>
           <span><kbd>F</kbd> 再整列 / 離脱</span>
           <span><kbd>Shift</kbd> 強行軍（士気消費・1で停止）</span>
           <span><kbd>N</kbd> 次回兵科 / Spawnを予約</span>
+          <span><kbd>E</kbd> 資源採取 / 兵舎</span>
           <span><kbd>Enter</kbd> チャット</span>
           <span><kbd>Wheel</kbd> ズーム</span>
           <span><kbd>Minimap Click</kbd> カメラ移動</span>

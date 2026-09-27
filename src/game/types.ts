@@ -1,5 +1,17 @@
 export type Team = 'blue' | 'red';
 export type WeaponType = 'musket' | 'bayonet' | 'axe';
+export const FORMATION_SHAPES = ['line', 'column', 'block'] as const;
+export type FormationShape = typeof FORMATION_SHAPES[number];
+
+export function isFormationShape(value: unknown): value is FormationShape {
+  return typeof value === 'string' && (FORMATION_SHAPES as readonly string[]).includes(value);
+}
+
+export function formationShapeLabel(value: FormationShape): string {
+  if (value === 'column') return '縦列';
+  if (value === 'block') return '方形';
+  return '横列';
+}
 
 export const SQUAD_CLASSES = [
   'infantry',
@@ -45,6 +57,16 @@ export function canBannerAttackClass(value: SquadClass): boolean {
 
 export function isArtilleryClass(value: SquadClass): boolean {
   return value === 'artillery' || value === 'heavyArtillery' || value === 'horseArtillery';
+}
+
+export function formationShapesForClass(value: SquadClass): readonly FormationShape[] {
+  return isArtilleryClass(value) ? ['line', 'column', 'block'] : ['line', 'column'];
+}
+
+export function nextFormationShape(value: SquadClass, current: FormationShape): FormationShape {
+  const shapes = formationShapesForClass(value);
+  const index = Math.max(0, shapes.indexOf(current));
+  return shapes[(index + 1) % shapes.length] ?? 'line';
 }
 
 export function isChargeCavalryClass(value: SquadClass): boolean {

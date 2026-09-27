@@ -5,6 +5,7 @@ export class InputManager {
   private readonly keys = new Set<string>();
   private readonly pressed = new Set<string>();
   private readonly released = new Set<string>();
+  private readonly suppressedUntilKeyUp = new Set<string>();
   private leftClickPoint: Vec2 | null = null;
   private rightMouseDown = false;
   private rightMousePressed = false;
@@ -20,9 +21,13 @@ export class InputManager {
     window.addEventListener('keydown', (event) => {
       if (this.isEditableTarget(event.target)) return;
       const key = event.key.toLowerCase();
+      if (this.suppressedUntilKeyUp.has(key)) {
+        if (['w', 'a', 's', 'd', 'shift'].includes(key)) event.preventDefault();
+        return;
+      }
       if (!event.repeat) this.pressed.add(key);
       this.keys.add(key);
-      if (['w', 'a', 's', 'd', 'f', 'shift', 'n', 'p', 'r', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
+      if (['w', 'a', 's', 'd', 'e', 'f', 'shift', 'n', 'p', 'r', 'escape', ' ', 'f3', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'z', 'x', 'v'].includes(key)) {
         event.preventDefault();
       }
     }, { signal: this.eventController.signal });
@@ -30,6 +35,7 @@ export class InputManager {
     window.addEventListener('keyup', (event) => {
       const key = event.key.toLowerCase();
       this.keys.delete(key);
+      this.suppressedUntilKeyUp.delete(key);
       if (this.isEditableTarget(event.target)) return;
       this.released.add(key);
     }, { signal: this.eventController.signal });
@@ -216,6 +222,15 @@ export class InputManager {
     return delta;
   }
 
+  suppressMovementUntilRelease(): void {
+    for (const key of ['w', 'a', 's', 'd', 'shift']) {
+      if (this.keys.has(key)) this.suppressedUntilKeyUp.add(key);
+      this.keys.delete(key);
+      this.pressed.delete(key);
+      this.released.delete(key);
+    }
+  }
+
   clearActionInputs(): void {
     this.leftClickPoint = null;
     this.rightMousePressed = false;
@@ -236,6 +251,7 @@ export class InputManager {
     this.keys.clear();
     this.pressed.clear();
     this.released.clear();
+    this.suppressedUntilKeyUp.clear();
   }
 
   private isEditableTarget(target: EventTarget | null): boolean {
