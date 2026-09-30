@@ -1,6 +1,6 @@
 import { GAME_CONFIG } from '../game/config';
 import { Game } from '../game/game';
-import { canBannerAttackClass, classLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, isSquadClass, nextFormationShape, type Team, type Vec2, type WeaponType } from '../game/types';
+import { TEAM_IDS, canBannerAttackClass, classLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, isSquadClass, nextFormationShape, type Team, type Vec2, type WeaponType } from '../game/types';
 import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
 import { artilleryTargetIssue } from '../game/classProfiles';
 import { InputManager } from '../input/inputManager';
@@ -35,6 +35,7 @@ export class MultiplayerBattle {
   private constructionPlacementArmed = false;
   private constructionKind: ConstructionBlockKind = 'woodWall';
   private constructionDirection = 0;
+  private nextToolWeapon: 'axe' | 'pickaxe' = 'axe';
   private settingsOpen = false;
   private minimapPosition: MinimapPosition = 'bottom-right';
   private recruitmentPanelOpen = false;
@@ -72,6 +73,9 @@ export class MultiplayerBattle {
     this.game = new Game(this.input, {
       blueSquads: payload.room.settings.blueSquads,
       redSquads: payload.room.settings.redSquads,
+      yellowSquads: payload.room.settings.yellowSquads,
+      greenSquads: payload.room.settings.greenSquads,
+      teamCount: payload.room.settings.teamCount,
       respawnSeconds: payload.room.settings.respawnSeconds,
       conquestTickets: payload.room.settings.conquestTickets,
       gameMode: payload.room.settings.gameMode,
@@ -81,6 +85,7 @@ export class MultiplayerBattle {
       initialSpawnAreas,
       introEnabled: payload.room.settings.introEnabled && !payload.joinInProgress,
       constructionEnabled: payload.room.settings.constructionEnabled,
+      mapId: payload.room.settings.mapId,
       // Cannon fire is confirmed by the authoritative server before shells/audio appear.
       predictArtilleryShots: false,
     });
@@ -90,7 +95,7 @@ export class MultiplayerBattle {
     ctx.imageSmoothingEnabled = false;
     canvas.width = GAME_CONFIG.viewport.width;
     canvas.height = GAME_CONFIG.viewport.height;
-    this.renderer = new Renderer(ctx, payload.room.settings.blueFaction, payload.room.settings.redFaction);
+    this.renderer = new Renderer(ctx, payload.room.settings.blueFaction, payload.room.settings.redFaction, payload.room.settings.yellowFaction, payload.room.settings.greenFaction);
     this.audio = new AudioManager();
     this.installMapAndAudioControls();
     this.installAudioUnlock();
@@ -255,6 +260,7 @@ export class MultiplayerBattle {
       get('class-selector'), get('class-selector-title'), get('class-selector-description'), get<HTMLButtonElement>('reserve-class-toggle'),
       get('army-composition'), get('class-recommendation'), get('resource-stockpile'), get('resource-gather'),
       factionShortLabel(this.room.settings.blueFaction), factionShortLabel(this.room.settings.redFaction),
+      factionShortLabel(this.room.settings.yellowFaction), factionShortLabel(this.room.settings.greenFaction),
     );
   }
 
@@ -306,6 +312,8 @@ export class MultiplayerBattle {
       this.game.artilleryExplosions,
       this.game.fieldworks,
       this.game.constructionBlocks,
+      this.game.terrainDamage,
+      this.game.battlefieldMap,
       this.game.resourceNodes(),
       this.game.smoke,
       this.game.muzzleFlashes,
@@ -606,7 +614,7 @@ export class MultiplayerBattle {
   private renderScoreboard(): void {
     this.scoreboardBody.innerHTML = '';
     const players = [...this.room.players].sort((a, b) => {
-      if (a.team !== b.team) return a.team === 'blue' ? -1 : 1;
+      if (a.team !== b.team) return TEAM_IDS.indexOf(a.team) - TEAM_IDS.indexOf(b.team);
       return a.name.localeCompare(b.name);
     });
     for (const player of players) {
@@ -617,7 +625,7 @@ export class MultiplayerBattle {
       row.className = `scoreboard-row ${player.team}${player.id === this.network.clientId ? ' local' : ''}`;
       const values = [
         `${player.id === this.network.clientId ? '★ ' : ''}${player.name} · ${player.formationId}`,
-        `${player.team.toUpperCase()} · ${factionShortLabel(player.team === 'blue' ? this.room.settings.blueFaction : this.room.settings.redFaction)}`,
+        `${player.team.toUpperCase()} · ${factionShortLabel(player.team === 'blue' ? this.room.settings.blueFaction : player.team === 'red' ? this.room.settings.redFaction : player.team === 'yellow' ? this.room.settings.yellowFaction : this.room.settings.greenFaction)}`,
         classLabel(formation?.squadClass ?? player.squadClass),
         String(stats.kills),
         String(stats.losses),
@@ -749,10 +757,16 @@ export class MultiplayerBattle {
           event.preventDefault();
           return;
         }
-        if (canBannerAttackClass(formation.squadClass) && this.game.playerInputWeapon() === 'axe') {
+        if (canBannerAttackClass(formation.squadClass) && (this.game.playerInputWeapon() === 'axe' || this.game.playerInputWeapon() === 'pickaxe')) {
           const construction = this.nearestEnemyConstructionBlock(world, formation.team);
           if (construction) {
             send({ type: 'construction_attack', formationId: formation.id, blockId: construction.id });
+            event.preventDefault();
+            return;
+          }
+          const terrain = this.game.terrainDamage.effectiveTerrainAt(world);
+          if (terrain === 'forest' || terrain === 'mountain') {
+            send({ type: 'terrain_attack', formationId: formation.id, target: world });
             event.preventDefault();
             return;
           }
@@ -786,11 +800,12 @@ export class MultiplayerBattle {
         suppressNextRightRelease = true;
         send({ type: 'reform', formationId: formation.id });
       } else if (event.button === 2 && canBannerAttackClass(formation.squadClass) && this.game.playerInputWeapon() === 'axe') {
-        const targetTeam: Team = formation.team === 'blue' ? 'red' : 'blue';
-        const banner = this.game.banners.find((candidate) => candidate.team === targetTeam);
         const world = worldAtEvent(event);
+        const banner = this.game.banners
+          .filter((candidate) => candidate.team !== formation.team && !candidate.destroyed)
+          .sort((a, b) => Math.hypot(world.x - a.position.x, world.y - a.position.y) - Math.hypot(world.x - b.position.x, world.y - b.position.y))[0];
         if (banner && Math.hypot(world.x - banner.position.x, world.y - banner.position.y) <= GAME_CONFIG.banner.clickRadius) {
-          send({ type: 'banner-attack', formationId: formation.id, targetTeam });
+          send({ type: 'banner-attack', formationId: formation.id, targetTeam: banner.team });
         }
       }
     };
@@ -857,9 +872,16 @@ export class MultiplayerBattle {
         event.preventDefault();
       }
       if (formation.aliveCount() > 0 && canBannerAttackClass(formation.squadClass) && (key === '1' || key === '2' || key === '3')) {
-        const weapon: WeaponType = key === '1' ? 'musket' : key === '2' ? 'bayonet' : 'axe';
+        let weapon: WeaponType;
+        if (key === '1') weapon = 'musket';
+        else if (key === '2') weapon = 'bayonet';
+        else {
+          weapon = this.nextToolWeapon;
+          this.nextToolWeapon = weapon === 'axe' ? 'pickaxe' : 'axe';
+        }
         this.game.setLocalWeaponSelection(weapon);
         send({ type: 'weapon', formationId: formation.id, weapon });
+        event.preventDefault();
       }
     };
 

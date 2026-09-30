@@ -132,7 +132,14 @@ export function artilleryProfile(
   batteryTier: UpgradeTier = 1,
 ): ArtilleryProfile {
   let base: ArtilleryProfile;
-  if (squadClass === 'heavyArtillery') {
+  if (squadClass === 'mortar') {
+    base = {
+      guns: 1, deploySeconds: 1.8, range: GAME_CONFIG.mortar.range, minRange: GAME_CONFIG.mortar.minRange,
+      playerReload: 10.8, aiReloadMin: 10.5, aiReloadMax: 12.4, shellSpeed: 720, blastRadius: 154,
+      blastDamage: 176, edgeDamage: 58, moraleDamage: 30, targetJitter: 74, threatRetreatRange: 520,
+      preferredRange: GAME_CONFIG.mortar.preferredRange, smokeScale: 1.35, shakeScale: 1.15,
+    };
+  } else if (squadClass === 'heavyArtillery') {
     base = {
       guns: 1, deploySeconds: 4.2, range: GAME_CONFIG.heavyArtillery.range, minRange: GAME_CONFIG.heavyArtillery.minRange,
       playerReload: 12.8, aiReloadMin: 12.5, aiReloadMax: 14.5, shellSpeed: 1040, blastRadius: 218,
@@ -185,6 +192,11 @@ export function chargeProfile(squadClass: SquadClass, weaponTier: UpgradeTier = 
       maxDistance: GAME_CONFIG.cuirassier.chargeMaxDistance, speed: GAME_CONFIG.cuirassier.chargeSpeed, aiMinDistance: GAME_CONFIG.cuirassier.aiChargeMinDistance, aiMaxDistance: GAME_CONFIG.cuirassier.aiChargeMaxDistance,
       roadkillDamage: GAME_CONFIG.cuirassier.roadkillDamage, roadkillMoraleDamage: 4, roadkillRadius: GAME_CONFIG.cuirassier.roadkillRadius, momentumPerHit: GAME_CONFIG.cuirassier.momentumPerHit, minMomentum: GAME_CONFIG.cuirassier.minMomentum,
     };
+  } else if (squadClass === 'lancer') {
+    base = {
+      maxDistance: GAME_CONFIG.lancer.chargeMaxDistance, speed: GAME_CONFIG.lancer.chargeSpeed, aiMinDistance: GAME_CONFIG.lancer.aiChargeMinDistance, aiMaxDistance: GAME_CONFIG.lancer.aiChargeMaxDistance,
+      roadkillDamage: GAME_CONFIG.lancer.roadkillDamage, roadkillMoraleDamage: 12, roadkillRadius: GAME_CONFIG.lancer.roadkillRadius, momentumPerHit: GAME_CONFIG.lancer.momentumPerHit, minMomentum: GAME_CONFIG.lancer.minMomentum,
+    };
   } else if (squadClass === 'cavalry') {
     base = {
       maxDistance: GAME_CONFIG.cavalry.chargeMaxDistance, speed: GAME_CONFIG.cavalry.chargeSpeed, aiMinDistance: GAME_CONFIG.cavalry.aiChargeMinDistance, aiMaxDistance: GAME_CONFIG.cavalry.aiChargeMaxDistance,
@@ -211,9 +223,12 @@ export function meleeProfile(squadClass: SquadClass, weaponTier: UpgradeTier = 1
     case 'cavalry': base = { damage: GAME_CONFIG.cavalry.meleeDamage, cooldown: GAME_CONFIG.cavalry.meleeCooldown, moveSpeed: GAME_CONFIG.cavalry.meleeMoveSpeed, moraleDamage: 4.5 }; break;
     case 'hussar': base = { damage: GAME_CONFIG.hussar.meleeDamage, cooldown: GAME_CONFIG.hussar.meleeCooldown, moveSpeed: GAME_CONFIG.hussar.meleeMoveSpeed, moraleDamage: 9.0 }; break;
     case 'cuirassier': base = { damage: GAME_CONFIG.cuirassier.meleeDamage, cooldown: GAME_CONFIG.cuirassier.meleeCooldown, moveSpeed: GAME_CONFIG.cuirassier.meleeMoveSpeed, moraleDamage: 2.0 }; break;
+    case 'lancer': base = { damage: GAME_CONFIG.lancer.meleeDamage, cooldown: GAME_CONFIG.lancer.meleeCooldown, moveSpeed: GAME_CONFIG.lancer.meleeMoveSpeed, moraleDamage: 3.2 }; break;
+    case 'militaryBand': base = { damage: 20, cooldown: 0.82, moveSpeed: 112, moraleDamage: 1.5 }; break;
     case 'artillery': base = { damage: 16, cooldown: 1.05, moveSpeed: 76, moraleDamage: 1.0 }; break;
     case 'heavyArtillery': base = { damage: 14, cooldown: 1.15, moveSpeed: 62, moraleDamage: 0.8 }; break;
     case 'horseArtillery': base = { damage: 18, cooldown: 0.96, moveSpeed: 90, moraleDamage: 1.2 }; break;
+    case 'mortar': base = { damage: 15, cooldown: 1.08, moveSpeed: 72, moraleDamage: 0.9 }; break;
     default: base = { damage: GAME_CONFIG.melee.attackDamage, cooldown: GAME_CONFIG.melee.attackCooldown, moveSpeed: GAME_CONFIG.melee.moveSpeed, moraleDamage: 2.8 }; break;
   }
   const mult = weaponTierMultipliers(squadClass, weaponTier);
@@ -225,6 +240,8 @@ export function moraleResistance(squadClass: SquadClass): number {
     case 'grenadier': return 0.66;
     case 'hussar': return 0.78;
     case 'cuirassier': return 0.62;
+    case 'lancer': return 0.82;
+    case 'militaryBand': return 0.72;
     case 'sharpshooter': return 0.92;
     case 'engineer': return 0.90;
     case 'cavalry': return 0.84;
@@ -233,6 +250,7 @@ export function moraleResistance(squadClass: SquadClass): number {
     case 'heavyArtillery': return 1.2;
     case 'artillery': return 1.12;
     case 'horseArtillery': return 1.0;
+    case 'mortar': return 1.08;
     default: return 1;
   }
 }

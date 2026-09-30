@@ -63,9 +63,12 @@ const GROWTH_STEPS: Readonly<Record<SquadClass, readonly number[]>> = Object.fre
   cavalry: Object.freeze([12, 15, 18]),
   hussar: Object.freeze([10, 14, 17]),
   cuirassier: Object.freeze([10, 12, 15]),
+  lancer: Object.freeze([11, 14, 17]),
+  militaryBand: Object.freeze([10, 12, 14]),
   artillery: Object.freeze([6]),
   heavyArtillery: Object.freeze([7]),
   horseArtillery: Object.freeze([6]),
+  mortar: Object.freeze([6]),
 });
 
 const COST_PER_SOLDIER: Readonly<Record<SquadClass, RecruitmentCost>> = Object.freeze({
@@ -81,9 +84,12 @@ const COST_PER_SOLDIER: Readonly<Record<SquadClass, RecruitmentCost>> = Object.f
   cavalry: Object.freeze({ wood: 7, iron: 10 }),
   hussar: Object.freeze({ wood: 6, iron: 9 }),
   cuirassier: Object.freeze({ wood: 8, iron: 14 }),
+  lancer: Object.freeze({ wood: 8, iron: 11 }),
+  militaryBand: Object.freeze({ wood: 3, iron: 4 }),
   artillery: Object.freeze({ wood: 0, iron: 0 }),
   heavyArtillery: Object.freeze({ wood: 0, iron: 0 }),
   horseArtillery: Object.freeze({ wood: 0, iron: 0 }),
+  mortar: Object.freeze({ wood: 0, iron: 0 }),
 });
 
 export function isRecruitableClass(squadClass: SquadClass): boolean {

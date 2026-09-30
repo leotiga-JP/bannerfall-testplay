@@ -1,7 +1,11 @@
 import { GAME_CONFIG } from './config';
-import { isArtilleryClass, isMountedClass, type SquadClass, type Team, type Vec2 } from './types';
+import { isArtilleryClass, isMountedClass, teamStartingDirection, type SquadClass, type Team, type Vec2 } from './types';
 
 export type TerrainType = 'plain' | 'road' | 'forest' | 'mountain' | 'river' | 'ford' | 'bridge';
+export const MAP_IDS = ['GRAND_RIVER', 'OPEN_FIELD'] as const;
+export type MapId = typeof MAP_IDS[number];
+export function isMapId(value: unknown): value is MapId { return typeof value === 'string' && (MAP_IDS as readonly string[]).includes(value); }
+export function mapLabel(value: MapId): string { return value === 'OPEN_FIELD' ? '平原' : '河川'; }
 
 const TERRAIN_CODE: Record<TerrainType, number> = {
   plain: 0,
@@ -55,6 +59,26 @@ const RED_SPAWN_AREAS: readonly SpawnArea[] = BLUE_SPAWN_AREAS.map((area) => ({
     x: GAME_CONFIG.world.width - area.center.x,
     y: GAME_CONFIG.world.height - area.center.y,
   },
+}));
+
+const OPEN_BLUE_SPAWN_AREAS: readonly SpawnArea[] = [
+  { index: 0, label: 'A 南翼', shortLabel: 'A', center: { x: 3050, y: 6250 }, radiusX: 640, radiusY: 420 },
+  { index: 1, label: 'B 中央', shortLabel: 'B', center: { x: 3050, y: 4864 }, radiusX: 640, radiusY: 420 },
+  { index: 2, label: 'C 北翼', shortLabel: 'C', center: { x: 3050, y: 3478 }, radiusX: 640, radiusY: 420 },
+];
+const OPEN_RED_SPAWN_AREAS: readonly SpawnArea[] = OPEN_BLUE_SPAWN_AREAS.map((area) => ({
+  ...area,
+  center: { x: GAME_CONFIG.world.width - area.center.x, y: GAME_CONFIG.world.height - area.center.y },
+}));
+
+const OPEN_YELLOW_SPAWN_AREAS: readonly SpawnArea[] = [
+  { index: 0, label: 'A 西翼', shortLabel: 'A', center: { x: 6600, y: 2500 }, radiusX: 640, radiusY: 420 },
+  { index: 1, label: 'B 中央', shortLabel: 'B', center: { x: GAME_CONFIG.world.width / 2, y: 2500 }, radiusX: 640, radiusY: 420 },
+  { index: 2, label: 'C 東翼', shortLabel: 'C', center: { x: GAME_CONFIG.world.width - 6600, y: 2500 }, radiusX: 640, radiusY: 420 },
+];
+const OPEN_GREEN_SPAWN_AREAS: readonly SpawnArea[] = OPEN_YELLOW_SPAWN_AREAS.map((area) => ({
+  ...area,
+  center: { x: area.center.x, y: GAME_CONFIG.world.height - area.center.y },
 }));
 
 const SPAWN_ANCHOR_OFFSETS: readonly Vec2[] = [
@@ -141,8 +165,18 @@ export class BattlefieldMap {
   private readonly pathHeapIndices: number[] = [];
   private readonly pathHeapScores: number[] = [];
 
-  constructor() {
+  constructor(readonly mapId: MapId = 'GRAND_RIVER') {
     this.generate();
+  }
+
+  bannerPosition(team: Team): Vec2 {
+    if (this.mapId === 'OPEN_FIELD') {
+      if (team === 'blue') return { x: 4300, y: GAME_CONFIG.world.height / 2 };
+      if (team === 'red') return { x: GAME_CONFIG.world.width - 4300, y: GAME_CONFIG.world.height / 2 };
+      if (team === 'yellow') return { x: GAME_CONFIG.world.width / 2, y: 3450 };
+      return { x: GAME_CONFIG.world.width / 2, y: GAME_CONFIG.world.height - 3450 };
+    }
+    return team === 'blue' ? { ...BLUE_BANNER } : { ...RED_BANNER };
   }
 
   terrainAt(point: Vec2): TerrainType {
@@ -210,6 +244,12 @@ export class BattlefieldMap {
   }
 
   spawnAreas(team: Team): readonly SpawnArea[] {
+    if (this.mapId === 'OPEN_FIELD') {
+      if (team === 'blue') return OPEN_BLUE_SPAWN_AREAS;
+      if (team === 'red') return OPEN_RED_SPAWN_AREAS;
+      if (team === 'yellow') return OPEN_YELLOW_SPAWN_AREAS;
+      return OPEN_GREEN_SPAWN_AREAS;
+    }
     return team === 'blue' ? BLUE_SPAWN_AREAS : RED_SPAWN_AREAS;
   }
 
@@ -221,10 +261,12 @@ export class BattlefieldMap {
   spawnPoint(team: Team, areaIndex: number, seed: number): Vec2 {
     const area = this.spawnArea(team, areaIndex);
     const offset = SPAWN_ANCHOR_OFFSETS[Math.abs(Math.floor(seed)) % SPAWN_ANCHOR_OFFSETS.length];
-    const rotation = team === 'blue' ? 1 : -1;
+    const angle = teamStartingDirection(team);
+    const forward = { x: Math.cos(angle), y: Math.sin(angle) };
+    const right = { x: -forward.y, y: forward.x };
     const point = {
-      x: area.center.x + offset.x * rotation,
-      y: area.center.y + offset.y * rotation,
+      x: area.center.x + right.x * offset.x + forward.x * offset.y,
+      y: area.center.y + right.y * offset.x + forward.y * offset.y,
     };
     return this.nearestPassablePoint(point, 8);
   }
@@ -253,7 +295,13 @@ export class BattlefieldMap {
     ));
   }
 
-  linePassable(from: Vec2, to: Vec2, clearanceTiles = 1, blockedCells?: ReadonlySet<string>): boolean {
+  private navigationTerrain(col: number, row: number, openedCells?: ReadonlySet<string>): TerrainType {
+    const terrain = this.terrainAtTile(col, row);
+    if (terrain === 'mountain' && openedCells?.has(`${col},${row}`)) return 'plain';
+    return terrain;
+  }
+
+  linePassable(from: Vec2, to: Vec2, clearanceTiles = 1, blockedCells?: ReadonlySet<string>, openedCells?: ReadonlySet<string>): boolean {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const distance = Math.hypot(dx, dy);
@@ -266,7 +314,7 @@ export class BattlefieldMap {
       const row = Math.floor(point.y / TILE);
       for (let oy = -clearanceTiles; oy <= clearanceTiles; oy += 1) {
         for (let ox = -clearanceTiles; ox <= clearanceTiles; ox += 1) {
-          if (this.terrainAtTile(col + ox, row + oy) === 'mountain') return false;
+          if (this.navigationTerrain(col + ox, row + oy, openedCells) === 'mountain') return false;
           if (blockedCells?.has(`${col + ox},${row + oy}`)) return false;
         }
       }
@@ -274,9 +322,9 @@ export class BattlefieldMap {
     return true;
   }
 
-  findPath(from: Vec2, to: Vec2, squadClass: SquadClass, maxExpanded = 14000, blockedCells?: ReadonlySet<string>): Vec2[] {
-    const startPoint = this.nearestPassablePoint(from, 10, blockedCells);
-    const goalPoint = this.nearestPassablePoint(to, 14, blockedCells);
+  findPath(from: Vec2, to: Vec2, squadClass: SquadClass, maxExpanded = 14000, blockedCells?: ReadonlySet<string>, openedCells?: ReadonlySet<string>): Vec2[] {
+    const startPoint = this.nearestPassablePoint(from, 10, blockedCells, openedCells);
+    const goalPoint = this.nearestPassablePoint(to, 14, blockedCells, openedCells);
     const startCol = Math.max(0, Math.min(this.columns - 1, Math.floor(startPoint.x / TILE)));
     const startRow = Math.max(0, Math.min(this.rows - 1, Math.floor(startPoint.y / TILE)));
     const goalCol = Math.max(0, Math.min(this.columns - 1, Math.floor(goalPoint.x / TILE)));
@@ -358,8 +406,8 @@ export class BattlefieldMap {
         const nextCol = col + ox;
         const nextRow = row + oy;
         if (nextCol < 0 || nextRow < 0 || nextCol >= this.columns || nextRow >= this.rows) continue;
-        if (this.terrainAtTile(nextCol, nextRow) === 'mountain' || blockedCells?.has(`${nextCol},${nextRow}`)) continue;
-        if (ox !== 0 && oy !== 0 && (this.terrainAtTile(col + ox, row) === 'mountain' || this.terrainAtTile(col, row + oy) === 'mountain'
+        if (this.navigationTerrain(nextCol, nextRow, openedCells) === 'mountain' || blockedCells?.has(`${nextCol},${nextRow}`)) continue;
+        if (ox !== 0 && oy !== 0 && (this.navigationTerrain(col + ox, row, openedCells) === 'mountain' || this.navigationTerrain(col, row + oy, openedCells) === 'mountain'
           || blockedCells?.has(`${col + ox},${row}`) || blockedCells?.has(`${col},${row + oy}`))) continue;
         const next = nextRow * this.columns + nextCol;
         if (closed[next]) continue;
@@ -389,7 +437,7 @@ export class BattlefieldMap {
     while (anchor < raw.length - 1) {
       let next = Math.min(raw.length - 1, anchor + 1);
       for (let candidate = Math.min(raw.length - 1, anchor + 12); candidate > next; candidate -= 1) {
-        if (this.linePassable(raw[anchor], raw[candidate], 0, blockedCells)) {
+        if (this.linePassable(raw[anchor], raw[candidate], 0, blockedCells, openedCells)) {
           next = candidate;
           break;
         }
@@ -424,6 +472,25 @@ export class BattlefieldMap {
   attackLaneTarget(team: Team, formationId: string, from: Vec2, enemyBanner: Vec2): Vec2 {
     const numeric = Number.parseInt(formationId.replace(/\D/g, ''), 10);
     const lane = Number.isFinite(numeric) ? (Math.max(1, numeric) - 1) % 3 : 1;
+
+    if (this.mapId === 'OPEN_FIELD') {
+      // Generic 2/3/4-team approach lane: advance toward the selected enemy banner
+      // while distributing formations perpendicular to the attack axis.
+      const dx = enemyBanner.x - from.x;
+      const dy = enemyBanner.y - from.y;
+      const distance = Math.hypot(dx, dy) || 1;
+      const ux = dx / distance;
+      const uy = dy / distance;
+      const px = -uy;
+      const py = ux;
+      const laneOffset = [-980, 0, 980][lane] ?? 0;
+      const advance = Math.min(distance, 2200);
+      return {
+        x: Math.max(900, Math.min(GAME_CONFIG.world.width - 900, from.x + ux * advance + px * laneOffset)),
+        y: Math.max(900, Math.min(GAME_CONFIG.world.height - 900, from.y + uy * advance + py * laneOffset)),
+      };
+    }
+
     const crossing = CROSSINGS[[1, 2, 3][lane]];
     const riverY = riverCenterY(crossing.x);
     const nearSide = team === 'blue' ? riverY + 620 : riverY - 620;
@@ -451,9 +518,9 @@ export class BattlefieldMap {
     return { ...from };
   }
 
-  nearestPassablePoint(point: Vec2, maxRadiusTiles = 16, blockedCells?: ReadonlySet<string>): Vec2 {
+  nearestPassablePoint(point: Vec2, maxRadiusTiles = 16, blockedCells?: ReadonlySet<string>, openedCells?: ReadonlySet<string>): Vec2 {
     const originKey = `${Math.floor(point.x / TILE)},${Math.floor(point.y / TILE)}`;
-    if (this.isPassable(point) && !blockedCells?.has(originKey)) return { ...point };
+    if ((this.isPassable(point) || openedCells?.has(originKey)) && !blockedCells?.has(originKey)) return { ...point };
     const originCol = Math.max(0, Math.min(this.columns - 1, Math.floor(point.x / TILE)));
     const originRow = Math.max(0, Math.min(this.rows - 1, Math.floor(point.y / TILE)));
     let best: Vec2 | null = null;
@@ -462,7 +529,7 @@ export class BattlefieldMap {
       for (let row = originRow - radius; row <= originRow + radius; row += 1) {
         for (let col = originCol - radius; col <= originCol + radius; col += 1) {
           if (Math.abs(col - originCol) !== radius && Math.abs(row - originRow) !== radius) continue;
-          if (this.terrainAtTile(col, row) === 'mountain') continue;
+          if (this.navigationTerrain(col, row, openedCells) === 'mountain') continue;
           const candidate = this.tileCenter(col, row);
           const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
           if (distance < bestDistance) {
@@ -576,6 +643,11 @@ export class BattlefieldMap {
   }
 
   private generate(): void {
+    if (this.mapId === 'OPEN_FIELD') {
+      // Deliberately empty: Uint8Array initializes to plain terrain. The effective
+      // battle area is compact because spawn/banner anchors are pulled toward the center.
+      return;
+    }
     // The arena is exactly 2x wider and 2x taller than v4.0: ~4x total battlefield area.
     // Terrain is 180-degree rotationally symmetric for the current two-team mode.
     const forests: Array<[Vec2, number, number]> = [
@@ -650,4 +722,5 @@ export class BattlefieldMap {
   }
 }
 
-export const BATTLEFIELD_MAP = new BattlefieldMap();
+export const BATTLEFIELD_MAP = new BattlefieldMap('GRAND_RIVER');
+export const OPEN_FIELD_MAP = new BattlefieldMap('OPEN_FIELD');

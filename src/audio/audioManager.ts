@@ -4,7 +4,7 @@ import type { Game } from '../game/game';
 import type { BattlePresentationEvent } from '../network/protocol';
 import { isChargeCavalryClass, type SquadClass, type Vec2 } from '../game/types';
 
-type SampleKey = 'musket' | 'cannon' | 'explosion' | 'cavalryCharge' | 'birds';
+type SampleKey = 'musket' | 'cannon' | 'explosion' | 'cavalryCharge' | 'birds' | 'militaryBand';
 
 interface ChargeVoice {
   source: AudioBufferSourceNode;
@@ -73,11 +73,16 @@ export class AudioManager {
     const listener = game.playerFormation.center;
     const now = performance.now();
     for (const event of events) {
-      if (event.kind !== 'volley') continue;
-      const last = this.lastVolleyAt.get(event.formationId) ?? -Infinity;
-      if (now - last < 180) continue;
-      this.lastVolleyAt.set(event.formationId, now);
-      this.playMusketVolley({ x: event.x, y: event.y }, listener, Math.max(1, event.count));
+      if (event.kind === 'volley') {
+        const last = this.lastVolleyAt.get(event.formationId) ?? -Infinity;
+        if (now - last < 180) continue;
+        this.lastVolleyAt.set(event.formationId, now);
+        this.playMusketVolley({ x: event.x, y: event.y }, listener, Math.max(1, event.count));
+        continue;
+      }
+      if (event.kind === 'band_perform') {
+        this.playBandCadence({ x: event.x, y: event.y }, listener);
+      }
     }
   }
 
@@ -221,6 +226,7 @@ export class AudioManager {
       explosion: new URL('explosion.mp3', base).toString(),
       cavalryCharge: new URL('cavalry_charge.mp3', base).toString(),
       birds: new URL('birds.mp3', base).toString(),
+      militaryBand: new URL('military_band.mp3', base).toString(),
     };
 
     await Promise.all((Object.entries(assets) as Array<[SampleKey, string]>).map(async ([key, url]) => {
@@ -318,6 +324,36 @@ export class AudioManager {
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     return source;
+  }
+
+  private playBandCadence(position: Vec2, listener: Vec2): void {
+    // All factions intentionally share the user-provided Drum March in v4.6.1.
+    // The gameplay support buff lasts 10 seconds, so play the first 10 seconds of
+    // the 40-second source track as an audible buff window rather than letting the
+    // music continue after the effect has expired.
+    const ctx = this.context;
+    const buffer = this.buffers.get('militaryBand');
+    const out = this.output(position, listener, 0.20, 2400);
+    if (ctx && buffer && out) {
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(out);
+      source.start(ctx.currentTime, 0, Math.min(10, buffer.duration));
+      return;
+    }
+
+    // Very small fallback only if the MP3 failed to load.
+    if (!ctx || !out) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = 392;
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.6);
+    osc.connect(gain);
+    gain.connect(out);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.62);
   }
 
   private playMusketVolley(position: Vec2, listener: Vec2, count: number): void {

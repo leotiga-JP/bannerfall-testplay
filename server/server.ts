@@ -2,9 +2,9 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { Game } from '../src/game/game.ts';
-import { BATTLEFIELD_MAP, SPAWN_AREA_COUNT } from '../src/game/battlefieldMap.ts';
+import { BATTLEFIELD_MAP, OPEN_FIELD_MAP, SPAWN_AREA_COUNT, isMapId, type MapId } from '../src/game/battlefieldMap.ts';
 import type { InputManager } from '../src/input/inputManager.ts';
-import { isSquadClass, type SquadClass, type Team, type Vec2, type WeaponType } from '../src/game/types.ts';
+import { TEAM_IDS, isSquadClass, isTeam, teamPrefix, type SquadClass, type Team, type Vec2, type WeaponType } from '../src/game/types.ts';
 import {
   GAME_VERSION,
   PROTOCOL_VERSION,
@@ -16,7 +16,7 @@ import {
   type RoomVisibility,
 } from '../src/network/protocol.ts';
 import { isGameMode, type GameMode } from '../src/game/gameMode.ts';
-import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, ensureDistinctFactions, isFactionId, type FactionId } from '../src/game/factionBanners.ts';
+import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, DEFAULT_YELLOW_FACTION, DEFAULT_GREEN_FACTION, FACTION_IDS, isFactionId, type FactionId } from '../src/game/factionBanners.ts';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -62,7 +62,7 @@ interface Room {
   phase: 'lobby' | 'countdown' | 'battle';
   ownerId: string;
   password: PasswordRecord | null;
-  settings: { blueSquads: number; redSquads: number; respawnSeconds: number; conquestTickets: number; visibility: RoomVisibility; gameMode: GameMode; introEnabled: boolean; constructionEnabled: boolean; blueFaction: FactionId; redFaction: FactionId };
+  settings: { blueSquads: number; redSquads: number; yellowSquads: number; greenSquads: number; teamCount: 2 | 3 | 4; respawnSeconds: number; conquestTickets: number; visibility: RoomVisibility; gameMode: GameMode; introEnabled: boolean; constructionEnabled: boolean; blueFaction: FactionId; redFaction: FactionId; yellowFaction: FactionId; greenFaction: FactionId; mapId: MapId };
   players: Map<string, ServerPlayer>;
   reservations: Map<string, ReconnectReservation>;
   chat: ChatMessage[];
@@ -160,6 +160,24 @@ function verifyPassword(password: string, record: PasswordRecord | null): boolea
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+function activeTeams(room: Room): Team[] {
+  return TEAM_IDS.slice(0, room.settings.teamCount) as Team[];
+}
+
+function squadCapacity(room: Room, team: Team): number {
+  if (team === 'blue') return room.settings.blueSquads;
+  if (team === 'red') return room.settings.redSquads;
+  if (team === 'yellow') return room.settings.yellowSquads;
+  return room.settings.greenSquads;
+}
+
+function factionForTeam(room: Room, team: Team): FactionId {
+  if (team === 'blue') return room.settings.blueFaction;
+  if (team === 'red') return room.settings.redFaction;
+  if (team === 'yellow') return room.settings.yellowFaction;
+  return room.settings.greenFaction;
+}
+
 function reservedCount(room: Room, team: Team): number {
   let count = 0;
   const now = Date.now();
@@ -188,7 +206,7 @@ function pendingTeamCount(room: Room, team: Team, excludeId?: string): number {
 }
 
 function teamSlotState(room: Room, team: Team) {
-  const total = team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
+  const total = squadCapacity(room, team);
   const humans = deployedHumanCount(room, team);
   const reserved = room.phase === 'battle' ? reservedCount(room, team) : 0;
   const pending = room.phase === 'battle' ? pendingTeamCount(room, team) : 0;
@@ -203,6 +221,9 @@ function publicRoom(room: Room): RoomState {
     settings: {
       blueSquads: room.settings.blueSquads,
       redSquads: room.settings.redSquads,
+      yellowSquads: room.settings.yellowSquads,
+      greenSquads: room.settings.greenSquads,
+      teamCount: room.settings.teamCount,
       respawnSeconds: room.settings.respawnSeconds,
       conquestTickets: room.settings.conquestTickets,
       passwordProtected: !!room.password,
@@ -212,6 +233,9 @@ function publicRoom(room: Room): RoomState {
       constructionEnabled: room.settings.constructionEnabled,
       blueFaction: room.settings.blueFaction,
       redFaction: room.settings.redFaction,
+      yellowFaction: room.settings.yellowFaction,
+      greenFaction: room.settings.greenFaction,
+      mapId: room.settings.mapId,
     },
     players: [...room.players.values()].map((player) => ({
       id: player.id,
@@ -225,7 +249,12 @@ function publicRoom(room: Room): RoomState {
       ready: player.ready,
     })),
     ownerId: room.ownerId,
-    slots: { blue: teamSlotState(room, 'blue'), red: teamSlotState(room, 'red') },
+    slots: {
+      blue: teamSlotState(room, 'blue'),
+      red: teamSlotState(room, 'red'),
+      yellow: teamSlotState(room, 'yellow'),
+      green: teamSlotState(room, 'green'),
+    },
   };
 }
 
@@ -324,11 +353,14 @@ function roomBrowserEntry(room: Room): RoomBrowserEntry {
   const owner = room.players.get(room.ownerId);
   const blue = teamSlotState(room, 'blue');
   const red = teamSlotState(room, 'red');
-  const capacity = Math.min(MAX_PLAYERS, room.settings.blueSquads + room.settings.redSquads);
+  const yellow = teamSlotState(room, 'yellow');
+  const green = teamSlotState(room, 'green');
+  const teams = activeTeams(room);
+  const capacity = Math.min(MAX_PLAYERS, teams.reduce((sum, team) => sum + squadCapacity(room, team), 0));
   const hasHumanCapacity = room.players.size < capacity;
   const joinable = room.phase === 'lobby'
     ? hasHumanCapacity
-    : room.phase === 'battle' && hasHumanCapacity && (blue.available + red.available > 0);
+    : room.phase === 'battle' && hasHumanCapacity && teams.some((team) => teamSlotState(room, team).available > 0);
   return {
     code: room.code,
     hostName: owner?.name ?? 'Host',
@@ -337,6 +369,9 @@ function roomBrowserEntry(room: Room): RoomBrowserEntry {
     maxPlayers: capacity,
     blueSquads: room.settings.blueSquads,
     redSquads: room.settings.redSquads,
+    yellowSquads: room.settings.yellowSquads,
+    greenSquads: room.settings.greenSquads,
+    teamCount: room.settings.teamCount,
     respawnSeconds: room.settings.respawnSeconds,
     conquestTickets: room.settings.conquestTickets,
     passwordProtected: !!room.password,
@@ -344,10 +379,17 @@ function roomBrowserEntry(room: Room): RoomBrowserEntry {
     redHumans: red.humans,
     blueAvailable: blue.available,
     redAvailable: red.available,
+    yellowHumans: yellow.humans,
+    greenHumans: green.humans,
+    yellowAvailable: yellow.available,
+    greenAvailable: green.available,
     gameMode: room.settings.gameMode,
     introEnabled: room.settings.introEnabled,
     blueFaction: room.settings.blueFaction,
     redFaction: room.settings.redFaction,
+    yellowFaction: room.settings.yellowFaction,
+    greenFaction: room.settings.greenFaction,
+    mapId: room.settings.mapId,
     joinable,
   };
 }
@@ -382,11 +424,13 @@ function teamCount(room: Room, team: Team): number {
 }
 
 function chooseTeam(room: Room): Team {
-  const blue = room.phase === 'battle' ? teamSlotState(room, 'blue') : { humans: teamCount(room, 'blue'), available: room.settings.blueSquads - teamCount(room, 'blue') };
-  const red = room.phase === 'battle' ? teamSlotState(room, 'red') : { humans: teamCount(room, 'red'), available: room.settings.redSquads - teamCount(room, 'red') };
-  if (blue.available <= 0) return 'red';
-  if (red.available <= 0) return 'blue';
-  return blue.humans <= red.humans ? 'blue' : 'red';
+  const states = activeTeams(room).map((team) => {
+    const count = teamCount(room, team);
+    return room.phase === 'battle'
+      ? { team, ...teamSlotState(room, team) }
+      : { team, humans: count, available: squadCapacity(room, team) - count, reserved: 0, total: squadCapacity(room, team) };
+  });
+  return states.filter((state) => state.available > 0).sort((a, b) => a.humans - b.humans || b.available - a.available)[0]?.team ?? states[0]?.team ?? 'blue';
 }
 
 function allPlayersReady(room: Room): boolean {
@@ -477,22 +521,38 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
   const settings = (message.settings ?? {}) as Record<string, unknown>;
   const blueSquads = clampInt(settings.blueSquads, 1, 50, 20);
   const redSquads = clampInt(settings.redSquads, 1, 50, 20);
+  const yellowSquads = clampInt(settings.yellowSquads, 1, 50, 20);
+  const greenSquads = clampInt(settings.greenSquads, 1, 50, 20);
+  const mapId: MapId = isMapId(settings.mapId) ? settings.mapId : 'GRAND_RIVER';
+  const requestedTeamCount = clampInt(settings.teamCount, 2, 4, 2) as 2 | 3 | 4;
+  const teamCount: 2 | 3 | 4 = mapId === 'OPEN_FIELD' ? requestedTeamCount : 2;
   const respawnSeconds = clampInt(settings.respawnSeconds, 5, 60, 20);
   const conquestTickets = clampInt(settings.conquestTickets, 1, 9999, Math.max(100, Math.min(400, Math.max(blueSquads, redSquads) * 8)));
   const visibility: RoomVisibility = settings.visibility === 'unlisted' ? 'unlisted' : 'public';
-  const gameMode: GameMode = isGameMode(settings.gameMode) ? settings.gameMode : 'BATTLE';
-  const introEnabled = settings.introEnabled !== false;
-  const constructionEnabled = settings.constructionEnabled !== false;
-  const requestedBlueFaction: FactionId = isFactionId(settings.blueFaction) ? settings.blueFaction : DEFAULT_BLUE_FACTION;
-  const requestedRedFaction: FactionId = isFactionId(settings.redFaction) ? settings.redFaction : DEFAULT_RED_FACTION;
-  const factions = ensureDistinctFactions(requestedBlueFaction, requestedRedFaction);
+  const requestedMode: GameMode = isGameMode(settings.gameMode) ? settings.gameMode : 'BATTLE';
+  const gameMode: GameMode = teamCount > 2 ? 'BATTLE' : requestedMode;
+  const introEnabled = teamCount > 2 ? false : settings.introEnabled !== false;
+  const constructionEnabled = gameMode === 'CONQUEST' && teamCount === 2 && settings.constructionEnabled !== false;
+  const requestedFactions: FactionId[] = [
+    isFactionId(settings.blueFaction) ? settings.blueFaction : DEFAULT_BLUE_FACTION,
+    isFactionId(settings.redFaction) ? settings.redFaction : DEFAULT_RED_FACTION,
+    isFactionId(settings.yellowFaction) ? settings.yellowFaction : DEFAULT_YELLOW_FACTION,
+    isFactionId(settings.greenFaction) ? settings.greenFaction : DEFAULT_GREEN_FACTION,
+  ];
+  const used = new Set<FactionId>();
+  const resolvedFactions = requestedFactions.map((requested) => {
+    const faction = !used.has(requested) ? requested : (FACTION_IDS.find((candidate) => !used.has(candidate)) ?? requested);
+    used.add(faction);
+    return faction;
+  });
+  const [blueFaction, redFaction, yellowFaction, greenFaction] = resolvedFactions;
   const code = randomCode();
   const room: Room = {
     code,
     phase: 'lobby',
     ownerId: session.id,
     password: hashPassword(String(message.password ?? '')),
-    settings: { blueSquads, redSquads, respawnSeconds, conquestTickets, visibility, gameMode, introEnabled, constructionEnabled, blueFaction: factions.blue, redFaction: factions.red },
+    settings: { blueSquads, redSquads, yellowSquads, greenSquads, teamCount, respawnSeconds, conquestTickets, visibility, gameMode, introEnabled, constructionEnabled, blueFaction, redFaction, yellowFaction, greenFaction, mapId },
     players: new Map(),
     reservations: new Map(),
     chat: [],
@@ -511,7 +571,7 @@ function createRoom(session: Session, message: Record<string, unknown>): void {
   send(session.ws, { type: 'chat_history', messages: room.chat });
   broadcastRoom(room);
   broadcastRoomList();
-  console.log(`[room ${code}] created by ${session.name} (${blueSquads}v${redSquads}, respawn ${respawnSeconds}s, tickets ${conquestTickets}, ${visibility}, mode ${gameMode}, factions ${factions.blue}/${factions.red}, intro ${introEnabled ? 'on' : 'skip'})`);
+  console.log(`[room ${code}] created by ${session.name} (${teamCount} teams, ${blueSquads}/${redSquads}/${yellowSquads}/${greenSquads}, respawn ${respawnSeconds}s, tickets ${conquestTickets}, ${visibility}, mode ${gameMode}, intro ${introEnabled ? 'on' : 'skip'})`);
 }
 
 function setConquestTickets(session: Session, message: Record<string, unknown>): void {
@@ -601,12 +661,12 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
     return;
   }
 
-  const totalSlots = room.settings.blueSquads + room.settings.redSquads;
+  const totalSlots = activeTeams(room).reduce((sum, team) => sum + squadCapacity(room, team), 0);
   if (room.players.size >= Math.min(MAX_PLAYERS, totalSlots)) return send(session.ws, { type: 'error', message: 'Room is full.' });
   if (room.phase === 'battle') {
-    const blue = teamSlotState(room, 'blue');
-    const red = teamSlotState(room, 'red');
-    if (blue.available + red.available <= 0) return send(session.ws, { type: 'error', message: 'No AI squad slots are currently available.' });
+    if (!activeTeams(room).some((team) => teamSlotState(room, team).available > 0)) {
+      return send(session.ws, { type: 'error', message: 'No AI squad slots are currently available.' });
+    }
   }
 
   removeFromRoom(session);
@@ -624,10 +684,10 @@ function joinRoom(session: Session, message: Record<string, unknown>): void {
 
 function changeTeam(session: Session, team: unknown): void {
   const room = session.roomCode ? rooms.get(session.roomCode) : null;
-  if (!room || (team !== 'blue' && team !== 'red')) return;
+  if (!room || !isTeam(team) || !activeTeams(room).includes(team)) return;
   const player = room.players.get(session.id);
   if (!player || (room.phase === 'battle' && player.formationId !== null) || room.phase === 'countdown') return;
-  const capacity = team === 'blue' ? room.settings.blueSquads : room.settings.redSquads;
+  const capacity = squadCapacity(room, team);
   const occupied = room.phase === 'battle'
     ? teamSlotState(room, team).humans + teamSlotState(room, team).reserved + pendingTeamCount(room, team, player.id)
     : teamCount(room, team) - (player.team === team ? 1 : 0);
@@ -703,11 +763,11 @@ function launchMatch(room: Room): void {
   const initialClasses: Record<string, SquadClass> = {};
   const initialSpawnAreas: Record<string, number> = {};
   const humanFormationIds: string[] = [];
-  for (const team of ['blue', 'red'] as const) {
+  for (const team of activeTeams(room)) {
     const teamPlayers = [...room.players.values()].filter((player) => player.team === team);
     teamPlayers.forEach((player, slotIndex) => {
       if (player.spawnIndex === null) return;
-      player.formationId = `${team === 'blue' ? 'B' : 'R'}${String(slotIndex + 1).padStart(2, '0')}`;
+      player.formationId = `${teamPrefix(team)}${String(slotIndex + 1).padStart(2, '0')}`;
       humanFormationIds.push(player.formationId);
       initialClasses[player.formationId] = player.squadClass;
       initialSpawnAreas[player.formationId] = player.spawnIndex;
@@ -717,6 +777,9 @@ function launchMatch(room: Room): void {
   room.game = new Game(new HeadlessInput() as unknown as InputManager, {
     blueSquads: room.settings.blueSquads,
     redSquads: room.settings.redSquads,
+    yellowSquads: room.settings.yellowSquads,
+    greenSquads: room.settings.greenSquads,
+    teamCount: room.settings.teamCount,
     respawnSeconds: room.settings.respawnSeconds,
     conquestTickets: room.settings.conquestTickets,
     gameMode: room.settings.gameMode,
@@ -726,6 +789,7 @@ function launchMatch(room: Room): void {
     initialSpawnAreas,
     introEnabled: room.settings.introEnabled,
     constructionEnabled: room.settings.constructionEnabled,
+    mapId: room.settings.mapId,
     capturePresentationEvents: true,
   });
   room.phase = 'battle';
@@ -747,7 +811,8 @@ function deployMidmatch(session: Session): void {
   if (!room.game.canTeamRespawn(player.team)) return send(session.ws, { type: 'error', message: `${player.team.toUpperCase()} reinforcements are exhausted.` });
 
   const reservedIds = new Set([...room.reservations.values()].filter((entry) => entry.expiresAt > Date.now()).map((entry) => entry.formationId));
-  const area = BATTLEFIELD_MAP.spawnArea(player.team, player.spawnIndex);
+  const roomMap = room.settings.mapId === 'OPEN_FIELD' ? OPEN_FIELD_MAP : BATTLEFIELD_MAP;
+  const area = roomMap.spawnArea(player.team, player.spawnIndex);
   const candidates = room.game.formations
     .filter((formation) => formation.team === player.team && !room.game!.humanFormationIds.has(formation.id) && !reservedIds.has(formation.id))
     .sort((a, b) => {
@@ -784,7 +849,7 @@ function startMatch(session: Session): void {
   if (!room || room.phase !== 'lobby') return;
   if (room.ownerId !== session.id) return send(session.ws, { type: 'error', message: 'Only the room host can start.' });
   if (!allPlayersReady(room)) return send(session.ws, { type: 'error', message: 'Every player must select a spawn point and READY first.' });
-  if (teamCount(room, 'blue') > room.settings.blueSquads || teamCount(room, 'red') > room.settings.redSquads) {
+  if (activeTeams(room).some((team) => teamCount(room, team) > squadCapacity(room, team))) {
     return send(session.ws, { type: 'error', message: 'Too many players for the selected army size.' });
   }
 

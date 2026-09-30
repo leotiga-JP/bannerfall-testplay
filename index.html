@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Bannerfall Version 4.4.4 - Construction / Siege Polish" />
-    <title>Bannerfall - Version 4.4.4 Construction / Siege Polish</title>
+    <meta name="description" content="Bannerfall Version 4.6.0 - Multi-Team Foundation" />
+    <title>Bannerfall - Version 4.6.0 Multi-Team Foundation</title>
   </head>
   <body>
     <main id="app">
       <section id="menu-shell" class="menu-shell">
         <div class="menu-panel" id="title-screen">
           <div class="brand-block">
-            <span class="eyebrow">VERSION 4.4.4 · CONSTRUCTION / SIEGE POLISH</span>
+            <span class="eyebrow">VERSION 4.6.0 · MULTI-TEAM FOUNDATION</span>
             <h1>BANNERFALL</h1>
             <p>AI軍の一部隊として、友人と同じ戦場へ。</p>
           </div>
@@ -25,7 +25,7 @@
             <summary>接続サーバー</summary>
             <label class="field">
               <span>サーバーURL</span>
-              <input id="server-url" spellcheck="false" placeholder="https://xxxxx.trycloudflare.com" />
+              <input id="server-url" spellcheck="false" placeholder="wss://your-pc.your-tailnet.ts.net" />
             </label>
             <div class="connection-line"><span id="connection-dot" class="dot"></span><strong id="connection-status">未接続</strong></div>
           </details>
@@ -43,18 +43,33 @@
           <button class="back-button" data-back="title">← 戻る</button>
           <h2>部屋を作成</h2>
           <div class="settings-grid">
+            <label class="field"><span>チーム数</span><select id="create-team-count"><option value="2" selected>2 Teams</option><option value="3">3 Teams</option><option value="4">4 Teams</option></select></label>
             <label class="field"><span>BLUE 部隊数</span><input id="blue-squads" type="number" min="1" max="50" value="20" /></label>
             <label class="field"><span>RED 部隊数</span><input id="red-squads" type="number" min="1" max="50" value="20" /></label>
+            <label class="field multi-team-extra team-yellow-setting hidden"><span>YELLOW 部隊数</span><input id="yellow-squads" type="number" min="1" max="50" value="20" /></label>
+            <label class="field multi-team-extra team-green-setting hidden"><span>GREEN 部隊数</span><input id="green-squads" type="number" min="1" max="50" value="20" /></label>
             <label class="field"><span>援軍ウェーブ間隔</span><input id="respawn-seconds" type="number" min="5" max="60" value="20" /></label>
             <label class="field"><span>パスワード · 任意</span><input id="create-password" maxlength="32" type="password" placeholder="パスワードなし" /></label>
             <label class="field"><span>公開設定</span><select id="create-visibility"><option value="public" selected>公開 · 部屋一覧に表示</option><option value="unlisted">非公開 · コード参加のみ</option></select></label>
             <label class="field"><span>ゲームモード</span><select id="create-game-mode"><option value="BATTLE" selected>戦闘モード</option><option value="CONQUEST">コンクエストモード</option></select></label>
-            <label class="field faction-field"><span>BLUE 軍旗</span><select id="create-blue-faction"><option value="FRENCH" selected>フランス風</option><option value="PRUSSIAN">プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="blue-faction-swatch" class="faction-swatch faction-french" aria-hidden="true"></i></label>
-            <label class="field faction-field"><span>RED 軍旗</span><select id="create-red-faction"><option value="FRENCH">フランス風</option><option value="PRUSSIAN" selected>プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="red-faction-swatch" class="faction-swatch faction-prussian" aria-hidden="true"></i></label>
+            <label class="field"><span>マップ</span><select id="create-map"><option value="GRAND_RIVER" selected>河川</option><option value="OPEN_FIELD">平原</option></select></label>
             <label class="field"><span>開始ムービー</span><select id="create-intro"><option value="on" selected>再生する</option><option value="off">スキップ</option></select></label>
-            <label class="field"><span>ブロック建築</span><select id="create-construction"><option value="on" selected>許可する</option><option value="off">禁止する</option></select></label>
+            <div class="team-option-grid faction-option-grid" aria-label="Team faction selectors">
+              <label class="field faction-field"><span>BLUE 軍旗</span><select id="create-blue-faction"><option value="FRENCH" selected>フランス風</option><option value="PRUSSIAN">プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="blue-faction-swatch" class="faction-swatch faction-french" aria-hidden="true"></i></label>
+              <label class="field faction-field"><span>RED 軍旗</span><select id="create-red-faction"><option value="FRENCH">フランス風</option><option value="PRUSSIAN" selected>プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="red-faction-swatch" class="faction-swatch faction-prussian" aria-hidden="true"></i></label>
+              <label class="field faction-field multi-team-extra team-yellow-setting hidden"><span>YELLOW 軍旗</span><select id="create-yellow-faction"><option value="FRENCH">フランス風</option><option value="PRUSSIAN">プロイセン風</option><option value="BRITISH" selected>イギリス風</option><option value="RUSSIAN">ロシア風</option></select><i id="yellow-faction-swatch" class="faction-swatch faction-british" aria-hidden="true"></i></label>
+              <label class="field faction-field multi-team-extra team-green-setting hidden"><span>GREEN 軍旗</span><select id="create-green-faction"><option value="FRENCH">フランス風</option><option value="PRUSSIAN">プロイセン風</option><option value="BRITISH">イギリス風</option><option value="RUSSIAN" selected>ロシア風</option></select><i id="green-faction-swatch" class="faction-swatch faction-russian" aria-hidden="true"></i></label>
+            </div>
+            <label class="field construction-setting-field"><span>ブロック建築</span><select id="create-construction"><option value="on" selected>許可する</option><option value="off">禁止する</option></select></label>
           </div>
-          <p class="muted faction-note">BLUE / REDで同じ軍旗は選択できません。軍旗は本陣・占領拠点・Lobby表示に反映されます。</p>
+          <div class="create-map-preview-block">
+            <div class="create-map-preview-head"><strong id="create-map-preview-title">河川</strong><span id="create-map-preview-caption">河川・橋・浅瀬を巡る広域戦</span></div>
+            <div id="create-map-preview" class="deployment-map create-map-preview" aria-label="選択マップ preview">
+              <div id="create-map-preview-features" class="map-preview-features"></div>
+            </div>
+          </div>
+          <p class="muted faction-note">BLUE / REDで同じ軍旗は選択できません。軍旗は常に2列配置で表示し、将来Teamが増えた場合も2Teamずつ並べます。</p>
+          <p id="create-army-balance" class="muted army-balance-note">BLUE 20 vs RED 20 · 対称戦</p>
           <p id="create-game-mode-description" class="muted">戦闘モード：完成した部隊ですぐに大規模戦闘を楽しみます。Version 4.0.9までの戦闘体験を維持します。</p>
           <p class="muted">総部隊数です。人間プレイヤーが入った分だけAI部隊が置き換わります。1 vs 1〜50 vs 50。</p>
           <button id="create-room" class="primary wide">部屋を作成</button>
@@ -100,6 +115,8 @@
                   <span>陣営</span>
                   <button id="join-blue" class="team-choice blue-choice">BLUE</button>
                   <button id="join-red" class="team-choice red-choice">RED</button>
+                  <button id="join-yellow" class="team-choice yellow-choice hidden">YELLOW</button>
+                  <button id="join-green" class="team-choice green-choice hidden">GREEN</button>
                 </div>
                 <div class="deployment-summary">
                   <strong id="deployment-status">出撃地点を選択</strong>
@@ -107,15 +124,8 @@
                 </div>
               </div>
 
-              <div id="deployment-map" class="deployment-map" aria-label="大河戦線 deployment map">
-                <div class="deployment-zone blue-zone"><span>BLUE 出撃区域 · 左下</span></div>
-                <div class="deployment-zone red-zone"><span>RED 出撃区域 · 右上</span></div>
-                <div class="deployment-river"><span>大河</span></div>
-                <div class="deployment-crossing crossing-west">浅瀬</div>
-                <div class="deployment-crossing crossing-center">中央橋 · 合金予定地</div>
-                <div class="deployment-crossing crossing-east">浅瀬</div>
-                <div class="map-banner blue-banner-marker" title="BLUE 旗">⚑</div>
-                <div class="map-banner red-banner-marker" title="RED 旗">⚑</div>
+              <div id="deployment-map" class="deployment-map" aria-label="deployment map">
+                <div id="deployment-map-features" class="map-preview-features"></div>
                 <div id="spawn-points" class="spawn-points"></div>
               </div>
 
@@ -132,6 +142,14 @@
                 <section class="team-card red-team">
                   <div class="team-title"><h3>RED</h3><span id="red-ready-count">準備 0</span></div>
                   <div id="red-players" class="player-list"></div>
+                </section>
+                <section class="team-card yellow-team hidden">
+                  <div class="team-title"><h3>YELLOW</h3><span id="yellow-ready-count">準備 0</span></div>
+                  <div id="yellow-players" class="player-list"></div>
+                </section>
+                <section class="team-card green-team hidden">
+                  <div class="team-title"><h3>GREEN</h3><span id="green-ready-count">準備 0</span></div>
+                  <div id="green-players" class="player-list"></div>
                 </section>
               </div>
 
@@ -162,7 +180,7 @@
         <header class="topbar">
           <div>
             <h1>BANNERFALL</h1>
-            <p id="battle-subtitle">Version 4.4.4 — Builder UX / Navigation Stability</p>
+            <p id="battle-subtitle">Version 4.6.0 — Multi-Team Foundation</p>
           </div>
           <div class="top-status">
             <span id="network-status">NET</span>
@@ -183,6 +201,14 @@
             <div id="red-banner-card" class="banner-card red">
               <div class="banner-card-head"><span>RED 旗</span><strong id="red-banner-hp">100%</strong></div>
               <div class="hp-track"><div id="red-banner-bar" class="hp-fill"></div></div>
+            </div>
+            <div id="yellow-banner-card" class="banner-card yellow hidden">
+              <div class="banner-card-head"><span>YELLOW 旗</span><strong id="yellow-banner-hp">100%</strong></div>
+              <div class="hp-track"><div id="yellow-banner-bar" class="hp-fill"></div></div>
+            </div>
+            <div id="green-banner-card" class="banner-card green hidden">
+              <div class="banner-card-head"><span>GREEN 旗</span><strong id="green-banner-hp">100%</strong></div>
+              <div class="hp-track"><div id="green-banner-bar" class="hp-fill"></div></div>
             </div>
           </div>
 

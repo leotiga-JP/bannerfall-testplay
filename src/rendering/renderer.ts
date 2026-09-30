@@ -7,15 +7,16 @@ import { ConstructionBlock } from '../entities/constructionBlock';
 import { Camera } from '../game/camera';
 import { GAME_CONFIG } from '../game/config';
 import { minimapRect, type MinimapPosition } from '../game/minimapLayout';
-import { BATTLEFIELD_MAP, CROSSINGS, type TerrainType } from '../game/battlefieldMap';
+import { BATTLEFIELD_MAP, CROSSINGS, type BattlefieldMap, type TerrainType } from '../game/battlefieldMap';
 import { RESOURCE_LABELS, type ResourceNodeState } from '../game/resourceSystem';
 import { BARRACKS } from '../game/recruitmentSystem';
 import { UPGRADE_FACILITIES } from '../game/upgradeSystem';
 import type { AxeStrike, GameSnapshot } from '../game/game';
-import { classShortLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
+import type { TerrainDamageSystem } from '../game/terrainDamageSystem';
+import { classShortLabel, isArtilleryClass, isChargeCavalryClass, teamDisplayColor, type SquadClass, type Team, type Vec2, type WeaponType } from '../game/types';
 import { artilleryProfile } from '../game/classProfiles';
 import { artilleryGunLocalOffset } from '../game/formationSystem';
-import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, factionShortLabel, type FactionId } from '../game/factionBanners';
+import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, DEFAULT_YELLOW_FACTION, DEFAULT_GREEN_FACTION, factionShortLabel, type FactionId } from '../game/factionBanners';
 import type { ArtilleryExplosion } from '../systems/artillerySystem';
 import type { CorpseParticle, MuzzleFlash, SmokeParticle } from '../systems/combatSystem';
 import type { MeleeStrike } from '../systems/meleeSystem';
@@ -30,6 +31,8 @@ export class Renderer {
     private readonly ctx: CanvasRenderingContext2D,
     private readonly blueFaction: FactionId = DEFAULT_BLUE_FACTION,
     private readonly redFaction: FactionId = DEFAULT_RED_FACTION,
+    private readonly yellowFaction: FactionId = DEFAULT_YELLOW_FACTION,
+    private readonly greenFaction: FactionId = DEFAULT_GREEN_FACTION,
   ) {}
 
   setMinimapOpacity(value: number): void {
@@ -45,7 +48,32 @@ export class Renderer {
   }
 
   private factionForTeam(team: Team): FactionId {
-    return team === 'blue' ? this.blueFaction : this.redFaction;
+    if (team === 'blue') return this.blueFaction;
+    if (team === 'red') return this.redFaction;
+    if (team === 'yellow') return this.yellowFaction;
+    return this.greenFaction;
+  }
+
+  private teamRgba(team: Team, alpha: number): string {
+    const rgb: Record<Team, [number, number, number]> = {
+      blue: [95, 157, 232], red: [220, 102, 102], yellow: [210, 173, 61], green: [88, 173, 114],
+    };
+    const [r, g, b] = rgb[team];
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private teamLightColor(team: Team): string {
+    if (team === 'blue') return '#a9cfff';
+    if (team === 'red') return '#ffb0b0';
+    if (team === 'yellow') return '#f2dc79';
+    return '#9ce0af';
+  }
+
+  private teamDarkColor(team: Team): string {
+    if (team === 'blue') return '#233e68';
+    if (team === 'red') return '#742226';
+    if (team === 'yellow') return '#6f5b16';
+    return '#225c36';
   }
 
   private drawFactionFlag(faction: FactionId, x: number, y: number, width: number, height: number): void {
@@ -136,26 +164,18 @@ export class Renderer {
   }
 
   private routedPalette(team: Team): { body: string; skin: string; dark: string; label: string; morale: string; minimap: string; minimapLocal: string } {
-    return team === 'blue'
-      ? {
-          body: '#687b91',
-          skin: '#a6afb9',
-          dark: '#526578',
-          label: '#aebfd2',
-          morale: '#71869e',
-          minimap: '#7890aa',
-          minimapLocal: '#a9bfd8',
-        }
-      : {
-          body: '#8b6b70',
-          skin: '#b6a6a7',
-          dark: '#73565b',
-          label: '#d0afb2',
-          morale: '#9a747a',
-          minimap: '#ad7f84',
-          minimapLocal: '#d6a6aa',
-        };
+    const base = teamDisplayColor(team);
+    return {
+      body: team === 'blue' ? '#687b91' : team === 'red' ? '#8b6b70' : team === 'yellow' ? '#8b825e' : '#5f806a',
+      skin: '#b6afa2',
+      dark: team === 'blue' ? '#526578' : team === 'red' ? '#73565b' : team === 'yellow' ? '#716a4d' : '#4b6855',
+      label: base,
+      morale: base,
+      minimap: base,
+      minimapLocal: base,
+    };
   }
+
 
   render(
     formations: Formation[],
@@ -165,6 +185,8 @@ export class Renderer {
     artilleryExplosions: ArtilleryExplosion[],
     fieldworks: Fieldwork[],
     constructionBlocks: ConstructionBlock[],
+    terrainDamage: TerrainDamageSystem,
+    battlefieldMap: BattlefieldMap,
     resourceNodes: readonly ResourceNodeState[],
     smoke: SmokeParticle[],
     flashes: MuzzleFlash[],
@@ -189,9 +211,10 @@ export class Renderer {
     ctx.save();
     ctx.translate(shakeX, shakeY);
     camera.applyTransform(ctx);
-    this.drawBattlefield(camera, snapshot, resourceNodes);
+    this.drawBattlefield(camera, snapshot, resourceNodes, terrainDamage, battlefieldMap);
     this.drawCapturePoints(snapshot, camera);
-    this.drawBanners(banners, camera, snapshot.selectedWeapon);
+    const localTeam = localFormationId ? formations.find((formation) => formation.id === localFormationId)?.team ?? null : null;
+    this.drawBanners(banners, camera, snapshot.selectedWeapon, localTeam);
     this.drawCorpses(corpses, camera);
     this.drawSmoke(smoke, camera);
     this.drawProjectiles(projectiles, camera);
@@ -216,32 +239,51 @@ export class Renderer {
     if (snapshot.debugAi) this.drawAiDebug(formations, camera);
     ctx.restore();
 
-    this.drawMinimap(formations, banners, camera, snapshot, localFormationId, resourceNodes);
+    this.drawMinimap(formations, banners, camera, snapshot, localFormationId, resourceNodes, battlefieldMap);
     this.drawPlayerMode(snapshot);
     if (snapshot.introActive) this.drawIntro(snapshot);
     this.drawResult(snapshot);
   }
 
-  private drawBattlefield(camera: Camera, snapshot: GameSnapshot, resourceNodes: readonly ResourceNodeState[]): void {
+  private drawBattlefield(camera: Camera, snapshot: GameSnapshot, resourceNodes: readonly ResourceNodeState[], terrainDamage: TerrainDamageSystem, battlefieldMap: BattlefieldMap): void {
     const { ctx } = this;
     ctx.fillStyle = '#536746';
     ctx.fillRect(0, 0, GAME_CONFIG.world.width, GAME_CONFIG.world.height);
 
     const bounds = camera.visibleBounds(160);
-    const tile = BATTLEFIELD_MAP.tileSize;
+    const tile = battlefieldMap.tileSize;
     const startCol = Math.max(0, Math.floor(bounds.left / tile));
-    const endCol = Math.min(BATTLEFIELD_MAP.columns - 1, Math.ceil(bounds.right / tile));
+    const endCol = Math.min(battlefieldMap.columns - 1, Math.ceil(bounds.right / tile));
     const startRow = Math.max(0, Math.floor(bounds.top / tile));
-    const endRow = Math.min(BATTLEFIELD_MAP.rows - 1, Math.ceil(bounds.bottom / tile));
+    const endRow = Math.min(battlefieldMap.rows - 1, Math.ceil(bounds.bottom / tile));
 
-    for (let row = startRow; row <= endRow; row += 1) {
-      for (let col = startCol; col <= endCol; col += 1) {
-        const terrain = BATTLEFIELD_MAP.terrainAtTile(col, row);
-        const x = col * tile;
-        const y = row * tile;
-        ctx.fillStyle = this.terrainColor(terrain);
-        ctx.fillRect(x, y, tile + 1, tile + 1);
-        this.drawTerrainDetail(terrain, x, y, tile, col, row, camera);
+    // OPEN_FIELD is entirely plain static terrain. The base fill above already draws
+    // the correct ground, so avoid hundreds of redundant per-tile fillRect/detail
+    // calls every frame. River map and any destructible static terrain keep the full
+    // tile renderer. Player-built roads/bridges are rendered separately as construction.
+    if (battlefieldMap.mapId !== 'OPEN_FIELD') {
+      for (let row = startRow; row <= endRow; row += 1) {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const terrain = terrainDamage.effectiveTerrainAtTile(col, row);
+          const x = col * tile;
+          const y = row * tile;
+          ctx.fillStyle = this.terrainColor(terrain);
+          ctx.fillRect(x, y, tile + 1, tile + 1);
+          this.drawTerrainDetail(terrain, x, y, tile, col, row, camera);
+          const damageState = terrainDamage.stateAtTile(col, row);
+          if (damageState && !damageState.destroyed && damageState.hp > 0 && damageState.hp < damageState.maxHp) {
+            const ratio = damageState.maxHp <= 0 ? 0 : damageState.hp / damageState.maxHp;
+            ctx.strokeStyle = ratio > 0.66 ? 'rgba(65,38,28,0.35)' : ratio > 0.33 ? 'rgba(65,38,28,0.58)' : 'rgba(40,25,18,0.78)';
+            ctx.lineWidth = (ratio > 0.33 ? 2 : 3) / camera.zoom;
+            ctx.beginPath();
+            ctx.moveTo(x + tile * 0.18, y + tile * 0.24);
+            ctx.lineTo(x + tile * 0.48, y + tile * 0.46);
+            ctx.lineTo(x + tile * 0.34, y + tile * 0.78);
+            if (ratio < 0.5) { ctx.moveTo(x + tile * 0.48, y + tile * 0.46); ctx.lineTo(x + tile * 0.82, y + tile * 0.30); }
+            if (ratio < 0.25) { ctx.moveTo(x + tile * 0.50, y + tile * 0.50); ctx.lineTo(x + tile * 0.76, y + tile * 0.82); }
+            ctx.stroke();
+          }
+        }
       }
     }
 
@@ -266,17 +308,17 @@ export class Renderer {
 
     this.drawHomeGround('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.blueY }, camera);
     this.drawHomeGround('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.redY }, camera);
-    this.drawSpawnCamp('blue', BATTLEFIELD_MAP.spawnCenter('blue'), camera);
-    this.drawSpawnCamp('red', BATTLEFIELD_MAP.spawnCenter('red'), camera);
+    this.drawSpawnCamp('blue', battlefieldMap.spawnCenter('blue'), camera);
+    this.drawSpawnCamp('red', battlefieldMap.spawnCenter('red'), camera);
     this.drawMapSites(camera, snapshot, resourceNodes);
     this.drawBarracks(camera, snapshot);
     this.drawUpgradeFacilities(camera, snapshot);
-    this.drawCrossingLabels(camera);
+    if (battlefieldMap.mapId === 'GRAND_RIVER') this.drawCrossingLabels(camera, battlefieldMap);
 
     ctx.fillStyle = 'rgba(30, 42, 27, 0.28)';
     ctx.font = `${28 / camera.zoom}px Georgia, serif`;
     ctx.textAlign = 'center';
-    ctx.fillText('大河戦線 · GRAND RIVER FRONT', GAME_CONFIG.world.width / 2, GAME_CONFIG.world.height / 2 - 420);
+    ctx.fillText(battlefieldMap.mapId === 'OPEN_FIELD' ? '平原' : '河川', GAME_CONFIG.world.width / 2, GAME_CONFIG.world.height / 2 - 420);
   }
 
   private terrainColor(terrain: TerrainType): string {
@@ -480,10 +522,10 @@ export class Renderer {
     }
   }
 
-  private drawCrossingLabels(camera: Camera): void {
+  private drawCrossingLabels(camera: Camera, battlefieldMap: BattlefieldMap): void {
     const { ctx } = this;
     for (const crossing of CROSSINGS) {
-      const point = { x: crossing.x, y: BATTLEFIELD_MAP.riverY(crossing.x) };
+      const point = { x: crossing.x, y: battlefieldMap.riverY(crossing.x) };
       if (!this.pointVisible(point, camera, 150)) continue;
       ctx.save();
       ctx.fillStyle = 'rgba(245, 232, 194, 0.72)';
@@ -497,7 +539,7 @@ export class Renderer {
   private drawHomeGround(team: 'blue' | 'red', point: Vec2, camera: Camera): void {
     const { ctx } = this;
     ctx.save();
-    ctx.strokeStyle = team === 'blue' ? 'rgba(93, 151, 225, 0.16)' : 'rgba(225, 93, 93, 0.16)';
+    ctx.strokeStyle = this.teamRgba(team, 0.16);
     ctx.lineWidth = 12 / camera.zoom;
     ctx.beginPath();
     ctx.arc(point.x, point.y, 360, 0, Math.PI * 2);
@@ -508,8 +550,8 @@ export class Renderer {
   private drawSpawnCamp(team: 'blue' | 'red', point: Vec2, camera: Camera): void {
     const { ctx } = this;
     ctx.save();
-    ctx.strokeStyle = team === 'blue' ? 'rgba(122, 176, 238, 0.48)' : 'rgba(238, 122, 122, 0.48)';
-    ctx.fillStyle = team === 'blue' ? 'rgba(49, 88, 133, 0.13)' : 'rgba(140, 54, 54, 0.13)';
+    ctx.strokeStyle = this.teamRgba(team, 0.48);
+    ctx.fillStyle = this.teamRgba(team, 0.13);
     ctx.lineWidth = 4 / camera.zoom;
     ctx.setLineDash([18 / camera.zoom, 12 / camera.zoom]);
     ctx.fillRect(point.x - 430, point.y - 360, 860, 720);
@@ -518,7 +560,7 @@ export class Renderer {
     ctx.fillStyle = 'rgba(235, 226, 198, 0.68)';
     ctx.font = `bold ${18 / camera.zoom}px ui-monospace, monospace`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${team === 'blue' ? 'BLUE' : 'RED'} RESPAWN CAMP`, point.x, point.y - 390);
+    ctx.fillText(`${team.toUpperCase()} RESPAWN CAMP`, point.x, point.y - 390);
     ctx.font = `${11 / camera.zoom}px ui-monospace, monospace`;
     ctx.fillStyle = 'rgba(235, 226, 198, 0.46)';
     ctx.fillText('ここで待機すると兵員・士気・資材を回復', point.x, point.y - 365);
@@ -531,7 +573,7 @@ export class Renderer {
       if (!fieldwork.active || !this.pointVisible(fieldwork.position, camera, 180)) continue;
       const { a, b } = fieldwork.endpoints();
       ctx.save();
-      ctx.strokeStyle = fieldwork.team === 'blue' ? '#77889b' : '#9b7777';
+      ctx.strokeStyle = teamDisplayColor(fieldwork.team);
       ctx.lineWidth = 12 / camera.zoom;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
@@ -628,25 +670,25 @@ export class Renderer {
     }
   }
 
-  private drawBanners(banners: Banner[], camera: Camera, selectedWeapon: WeaponType): void {
+  private drawBanners(banners: Banner[], camera: Camera, selectedWeapon: WeaponType, localTeam: Team | null): void {
     for (const banner of banners) {
       if (!this.pointVisible(banner.position, camera, 180)) continue;
-      this.drawBanner(banner, camera, selectedWeapon);
+      this.drawBanner(banner, camera, selectedWeapon, localTeam);
     }
   }
 
-  private drawBanner(banner: Banner, camera: Camera, selectedWeapon: WeaponType): void {
+  private drawBanner(banner: Banner, camera: Camera, selectedWeapon: WeaponType, localTeam: Team | null): void {
     const { ctx } = this;
     const pulse = banner.underAttackTimer > 0 ? 1 + Math.sin(performance.now() * 0.018) * 0.12 : 1;
     ctx.save();
     ctx.translate(banner.position.x, banner.position.y);
 
-    ctx.fillStyle = banner.team === 'blue' ? 'rgba(69, 125, 205, 0.16)' : 'rgba(196, 69, 69, 0.16)';
+    ctx.fillStyle = this.teamRgba(banner.team, 0.16);
     ctx.beginPath();
     ctx.arc(0, 0, GAME_CONFIG.banner.visualRadius * 1.65 * pulse, 0, Math.PI * 2);
     ctx.fill();
 
-    if (selectedWeapon === 'axe' && banner.team === 'red' && !banner.destroyed) {
+    if (selectedWeapon === 'axe' && localTeam !== null && banner.team !== localTeam && !banner.destroyed) {
       ctx.strokeStyle = 'rgba(255, 215, 92, 0.72)';
       ctx.lineWidth = 4 / camera.zoom;
       ctx.setLineDash([11 / camera.zoom, 8 / camera.zoom]);
@@ -684,7 +726,7 @@ export class Renderer {
     const barHeight = 10 / camera.zoom;
     ctx.fillStyle = 'rgba(25, 20, 15, 0.82)';
     ctx.fillRect(-barWidth / 2, -105 / camera.zoom, barWidth, barHeight);
-    ctx.fillStyle = banner.team === 'blue' ? '#6ba3e8' : '#e66d6d';
+    ctx.fillStyle = teamDisplayColor(banner.team);
     ctx.fillRect(-barWidth / 2, -105 / camera.zoom, barWidth * banner.ratio, barHeight);
     ctx.strokeStyle = 'rgba(244, 234, 210, 0.75)';
     ctx.lineWidth = 1 / camera.zoom;
@@ -731,7 +773,7 @@ export class Renderer {
   private drawSoldier(
     position: Vec2,
     direction: number,
-    team: 'blue' | 'red',
+    team: Team,
     hitFlashTimer: number,
     stabTimer: number,
     squadClass: SquadClass,
@@ -748,7 +790,7 @@ export class Renderer {
     const routedColors = this.routedPalette(team);
     const routedBody = routedColors.body;
     const routedSkin = routedColors.skin;
-    const teamBody = routed ? routedBody : team === 'blue' ? '#315f99' : '#a43d3d';
+    const teamBody = routed ? routedBody : team === 'blue' ? '#315f99' : team === 'red' ? '#a43d3d' : team === 'yellow' ? '#b2922f' : '#3f8b5c';
     if (isChargeCavalryClass(squadClass) || squadClass === 'dragoon' || squadClass === 'horseArtillery') {
       ctx.fillStyle = hitFlashTimer > 0 ? '#fff1c6' : routed ? routedColors.dark : '#5a4633';
       ctx.beginPath();
@@ -782,7 +824,7 @@ export class Renderer {
 
     const body = hitFlashTimer > 0
       ? '#fff1c6'
-      : routed ? routedBody : team === 'blue' ? '#315f99' : '#a43d3d';
+      : routed ? routedBody : team === 'blue' ? '#315f99' : team === 'red' ? '#a43d3d' : team === 'yellow' ? '#b2922f' : '#3f8b5c';
     ctx.fillStyle = body;
     ctx.fillRect(
       -GAME_CONFIG.soldier.bodyLength / 2,
@@ -848,25 +890,83 @@ export class Renderer {
       ctx.rotate(formation.direction);
       const heavy = formation.squadClass === 'heavyArtillery';
       const horse = formation.squadClass === 'horseArtillery';
+      const mortar = formation.squadClass === 'mortar';
       const routedColors = this.routedPalette(formation.team);
-      ctx.strokeStyle = routed ? routedColors.dark : '#2c2923';
-      ctx.lineWidth = (heavy ? 10 : horse ? 5 : 7) / Math.max(0.7, camera.zoom);
-      ctx.beginPath();
-      ctx.moveTo(-10, 0);
-      ctx.lineTo(heavy ? 58 : horse ? 37 : 43, 0);
-      ctx.stroke();
-      ctx.fillStyle = routed ? routedColors.body : '#4b4032';
-      const wheel = heavy ? 13 : horse ? 8 : 10;
-      ctx.beginPath();
-      ctx.arc(-5, -10, wheel, 0, Math.PI * 2);
-      ctx.arc(-5, 10, wheel, 0, Math.PI * 2);
-      ctx.fill();
-      if (formation.artilleryDeployed) {
-        ctx.strokeStyle = 'rgba(255, 219, 115, 0.75)';
-        ctx.lineWidth = 2 / camera.zoom;
+
+      if (mortar) {
+        // Mortars are deliberately drawn as a separate weapon silhouette rather than
+        // a shortened field cannon: broad base plate, short elevated tube, open muzzle
+        // and two support legs. This keeps the class readable even at low zoom.
+        const body = routed ? routedColors.body : '#49433a';
+        const dark = routed ? routedColors.dark : '#24231f';
+        const metal = routed ? routedColors.dark : '#34332e';
+        const invZoom = 1 / Math.max(0.7, camera.zoom);
+
+        // Circular base plate.
+        ctx.fillStyle = body;
         ctx.beginPath();
-        ctx.arc(0, 0, heavy ? 34 : 28, 0, Math.PI * 2);
+        ctx.ellipse(-5, 0, 15, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = dark;
+        ctx.lineWidth = 2.2 * invZoom;
         ctx.stroke();
+
+        // Bipod/support legs.
+        ctx.strokeStyle = dark;
+        ctx.lineWidth = 3.2 * invZoom;
+        ctx.beginPath();
+        ctx.moveTo(3, -2);
+        ctx.lineTo(-9, -13);
+        ctx.moveTo(3, 2);
+        ctx.lineTo(-9, 13);
+        ctx.stroke();
+
+        // Short, thick high-angle tube represented from above.
+        ctx.strokeStyle = metal;
+        ctx.lineCap = 'round';
+        ctx.lineWidth = 12 * invZoom;
+        ctx.beginPath();
+        ctx.moveTo(-1, 0);
+        ctx.lineTo(19, 0);
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+
+        // Large open muzzle makes it visually distinct from cannon barrels.
+        ctx.fillStyle = '#161613';
+        ctx.beginPath();
+        ctx.arc(20, 0, 7.2 * invZoom, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = routed ? routedColors.dark : '#77736a';
+        ctx.lineWidth = 2.4 * invZoom;
+        ctx.stroke();
+
+        if (formation.artilleryDeployed) {
+          ctx.strokeStyle = 'rgba(255, 219, 115, 0.75)';
+          ctx.lineWidth = 2 / camera.zoom;
+          ctx.beginPath();
+          ctx.arc(0, 0, 25, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else {
+        ctx.strokeStyle = routed ? routedColors.dark : '#2c2923';
+        ctx.lineWidth = (heavy ? 10 : horse ? 5 : 7) / Math.max(0.7, camera.zoom);
+        ctx.beginPath();
+        ctx.moveTo(-10, 0);
+        ctx.lineTo(heavy ? 58 : horse ? 37 : 43, 0);
+        ctx.stroke();
+        ctx.fillStyle = routed ? routedColors.body : '#4b4032';
+        const wheel = heavy ? 13 : horse ? 8 : 10;
+        ctx.beginPath();
+        ctx.arc(-5, -10, wheel, 0, Math.PI * 2);
+        ctx.arc(-5, 10, wheel, 0, Math.PI * 2);
+        ctx.fill();
+        if (formation.artilleryDeployed) {
+          ctx.strokeStyle = 'rgba(255, 219, 115, 0.75)';
+          ctx.lineWidth = 2 / camera.zoom;
+          ctx.beginPath();
+          ctx.arc(0, 0, heavy ? 34 : 28, 0, Math.PI * 2);
+          ctx.stroke();
+        }
       }
       ctx.restore();
     }
@@ -912,7 +1012,7 @@ export class Renderer {
       ? routedColors.label
       : customLabel
         ? (isLocal ? '#ffe18a' : '#fff0b8')
-        : formation.team === 'blue' ? '#a9cfff' : '#ffb0b0';
+        : this.teamLightColor(formation.team);
     const suffix = isLocal ? ' · YOU' : '';
     const objective = formation.mode === 'bannerAttack' ? ' · AXE' : '';
     const classTag = classShortLabel(formation.squadClass);
@@ -935,7 +1035,7 @@ export class Renderer {
     ctx.lineWidth = 1.6 / camera.zoom;
     for (const projectile of projectiles) {
       if (!this.pointVisible(projectile.position, camera, 80)) continue;
-      ctx.strokeStyle = projectile.team === 'blue' ? '#e8f2ff' : '#ffe9dc';
+      ctx.strokeStyle = this.teamLightColor(projectile.team);
       ctx.beginPath();
       const tail = projectile.trail[projectile.trail.length - 1] ?? projectile.position;
       ctx.moveTo(tail.x, tail.y);
@@ -1016,7 +1116,7 @@ export class Renderer {
       ctx.translate(corpse.position.x, corpse.position.y);
       ctx.rotate(corpse.angle);
       ctx.globalAlpha = Math.max(0, alpha);
-      ctx.fillStyle = corpse.team === 'blue' ? '#233e68' : '#742226';
+      ctx.fillStyle = this.teamDarkColor(corpse.team);
       ctx.fillRect(-9, -4.5, 18, 9);
       ctx.restore();
     }
@@ -1027,9 +1127,7 @@ export class Renderer {
     for (const strike of strikes) {
       if (!this.pointVisible(strike.start, camera, 60)) continue;
       const alpha = Math.max(0, strike.life / GAME_CONFIG.effects.meleeStrikeLifetime);
-      ctx.strokeStyle = strike.team === 'blue'
-        ? `rgba(208, 231, 255, ${alpha})`
-        : `rgba(255, 218, 205, ${alpha})`;
+      ctx.strokeStyle = this.teamRgba(strike.team, alpha);
       ctx.lineWidth = 2.4 / camera.zoom;
       ctx.beginPath();
       ctx.moveTo(strike.start.x, strike.start.y);
@@ -1131,7 +1229,7 @@ export class Renderer {
       else if (block.kind === 'bridgeTile') ctx.fillStyle = '#8b623b';
       else ctx.fillStyle = '#7c5a39';
       ctx.fillRect(-half, -half, half * 2, half * 2);
-      ctx.strokeStyle = block.team === 'blue' ? '#7898c7' : '#c77b80';
+      ctx.strokeStyle = teamDisplayColor(block.team);
       ctx.lineWidth = 3;
       ctx.strokeRect(-half, -half, half * 2, half * 2);
       if (block.kind === 'loophole') {
@@ -1211,9 +1309,7 @@ export class Renderer {
       if (formation.aliveCount() === 0 || formation.isPlayerControlled || !this.pointVisible(formation.center, camera, 300)) continue;
       const target = formation.debugTargetId ? byId.get(formation.debugTargetId) : undefined;
       if (target) {
-        ctx.strokeStyle = formation.team === 'blue'
-          ? 'rgba(123, 182, 255, 0.24)'
-          : 'rgba(255, 125, 125, 0.24)';
+        ctx.strokeStyle = this.teamRgba(formation.team, 0.24);
         ctx.lineWidth = 2 / camera.zoom;
         ctx.beginPath();
         ctx.moveTo(formation.center.x, formation.center.y);
@@ -1235,7 +1331,7 @@ export class Renderer {
     }
   }
 
-  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot, localFormationId: string | null, resourceNodes: readonly ResourceNodeState[]): void {
+  private drawMinimap(formations: Formation[], banners: Banner[], camera: Camera, snapshot: GameSnapshot, localFormationId: string | null, resourceNodes: readonly ResourceNodeState[], battlefieldMap: BattlefieldMap): void {
     const { ctx } = this;
     const { x, y, width, height } = minimapRect(this.minimapPosition);
     const sx = width / GAME_CONFIG.world.width;
@@ -1243,7 +1339,7 @@ export class Renderer {
 
     ctx.save();
     ctx.globalAlpha = this.minimapOpacity;
-    if (!this.minimapTerrainCache) this.minimapTerrainCache = this.buildMinimapTerrainCache(width, height);
+    if (!this.minimapTerrainCache || this.minimapTerrainCache.dataset.mapId !== battlefieldMap.mapId) this.minimapTerrainCache = this.buildMinimapTerrainCache(width, height, battlefieldMap);
     ctx.drawImage(this.minimapTerrainCache, x, y, width, height);
     ctx.fillStyle = 'rgba(15, 16, 12, 0.16)';
     ctx.fillRect(x, y, width, height);
@@ -1303,7 +1399,7 @@ export class Renderer {
         ? (formation.id === localFormationId ? routedColors.minimapLocal : routedColors.minimap)
         : formation.id === localFormationId
           ? '#ffe073'
-          : formation.team === 'blue' ? '#78aef1' : '#e46e6e';
+          : teamDisplayColor(formation.team);
       const px = x + formation.center.x * sx;
       const py = y + formation.center.y * sy;
       const size = formation.id === localFormationId ? 7 : formation.mode === 'bannerAttack' ? 6 : 4;
@@ -1355,7 +1451,7 @@ export class Renderer {
     for (const banner of banners) {
       const px = x + banner.position.x * sx;
       const py = y + banner.position.y * sy;
-      ctx.fillStyle = banner.destroyed ? '#5b5142' : banner.team === 'blue' ? '#95c5ff' : '#ff9090';
+      ctx.fillStyle = banner.destroyed ? '#5b5142' : teamDisplayColor(banner.team);
       ctx.beginPath();
       ctx.moveTo(px, py - 7);
       ctx.lineTo(px + 7, py);
@@ -1381,17 +1477,18 @@ export class Renderer {
     ctx.restore();
   }
 
-  private buildMinimapTerrainCache(width: number, height: number): HTMLCanvasElement {
+  private buildMinimapTerrainCache(width: number, height: number, battlefieldMap: BattlefieldMap = BATTLEFIELD_MAP): HTMLCanvasElement {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return canvas;
-    const tileW = width / BATTLEFIELD_MAP.columns;
-    const tileH = height / BATTLEFIELD_MAP.rows;
-    for (let row = 0; row < BATTLEFIELD_MAP.rows; row += 1) {
-      for (let col = 0; col < BATTLEFIELD_MAP.columns; col += 1) {
-        ctx.fillStyle = this.terrainColor(BATTLEFIELD_MAP.terrainAtTile(col, row));
+    canvas.dataset.mapId = battlefieldMap.mapId;
+    const tileW = width / battlefieldMap.columns;
+    const tileH = height / battlefieldMap.rows;
+    for (let row = 0; row < battlefieldMap.rows; row += 1) {
+      for (let col = 0; col < battlefieldMap.columns; col += 1) {
+        ctx.fillStyle = this.terrainColor(battlefieldMap.terrainAtTile(col, row));
         ctx.fillRect(col * tileW, row * tileH, tileW + 1, tileH + 1);
       }
     }

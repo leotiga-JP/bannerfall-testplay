@@ -9,12 +9,9 @@ import {
   type PlayerAction,
   type RoomBrowserEntry,
   type RoomState,
-  type RoomVisibility,
   type ServerMessage,
 } from './protocol';
 import type { SquadClass, Team } from '../game/types';
-import type { GameMode } from '../game/gameMode';
-import type { FactionId } from '../game/factionBanners';
 import type { ResourceNetworkState } from '../game/resourceSystem';
 import type { ConstructionNetworkState } from '../game/constructionSystem';
 
@@ -76,15 +73,14 @@ export class NetworkClient {
     await this.openSocket(url, false);
   }
 
-  createRoom(name: string, password: string, blueSquads: number, redSquads: number, respawnSeconds: number, conquestTickets: number, visibility: RoomVisibility, gameMode: GameMode, introEnabled: boolean, constructionEnabled: boolean, blueFaction: FactionId, redFaction: FactionId): void {
+  createRoom(
+    name: string,
+    password: string,
+    settings: Omit<import('./protocol').RoomSettings, 'passwordProtected'>,
+  ): void {
     this.pendingPassword = password;
     this.joinMemory = { name, code: '', password };
-    this.send({
-      type: 'create_room',
-      name,
-      password,
-      settings: { blueSquads, redSquads, respawnSeconds, conquestTickets, visibility, gameMode, introEnabled, constructionEnabled, blueFaction, redFaction },
-    });
+    this.send({ type: 'create_room', name, password, settings });
   }
 
   setConquestTickets(tickets: number): void {

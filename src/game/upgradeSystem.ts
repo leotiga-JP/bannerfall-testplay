@@ -75,9 +75,12 @@ const WEAPON_T2_COST: Readonly<Record<SquadClass, ResourceStockpile>> = Object.f
   cavalry: Object.freeze({ wood: 130, iron: 190, gunpowder: 0, alloy: 8 }),
   hussar: Object.freeze({ wood: 120, iron: 170, gunpowder: 0, alloy: 8 }),
   cuirassier: Object.freeze({ wood: 150, iron: 240, gunpowder: 0, alloy: 15 }),
+  lancer: Object.freeze({ wood: 145, iron: 210, gunpowder: 0, alloy: 12 }),
+  militaryBand: Object.freeze({ wood: 70, iron: 100, gunpowder: 0, alloy: 0 }),
   artillery: ZERO_COST,
   heavyArtillery: ZERO_COST,
   horseArtillery: ZERO_COST,
+  mortar: ZERO_COST,
 });
 
 const ARMOR_T2_COST: Readonly<Record<SquadClass, ResourceStockpile>> = Object.freeze({
@@ -90,21 +93,26 @@ const ARMOR_T2_COST: Readonly<Record<SquadClass, ResourceStockpile>> = Object.fr
   cavalry: Object.freeze({ wood: 95, iron: 255, gunpowder: 0, alloy: 12 }),
   hussar: Object.freeze({ wood: 80, iron: 215, gunpowder: 0, alloy: 10 }),
   cuirassier: Object.freeze({ wood: 105, iron: 330, gunpowder: 0, alloy: 20 }),
+  lancer: Object.freeze({ wood: 90, iron: 270, gunpowder: 0, alloy: 14 }),
+  militaryBand: Object.freeze({ wood: 50, iron: 125, gunpowder: 0, alloy: 0 }),
   artillery: ZERO_COST,
   heavyArtillery: ZERO_COST,
   horseArtillery: ZERO_COST,
+  mortar: ZERO_COST,
 });
 
-const ARTILLERY_PERFORMANCE_T2: Readonly<Record<'artillery' | 'heavyArtillery' | 'horseArtillery', ResourceStockpile>> = Object.freeze({
+const ARTILLERY_PERFORMANCE_T2: Readonly<Record<'artillery' | 'heavyArtillery' | 'horseArtillery' | 'mortar', ResourceStockpile>> = Object.freeze({
   artillery: Object.freeze({ wood: 120, iron: 210, gunpowder: 180, alloy: 12 }),
   heavyArtillery: Object.freeze({ wood: 150, iron: 300, gunpowder: 250, alloy: 22 }),
   horseArtillery: Object.freeze({ wood: 140, iron: 240, gunpowder: 190, alloy: 16 }),
+  mortar: Object.freeze({ wood: 135, iron: 225, gunpowder: 210, alloy: 14 }),
 });
 
-const ARTILLERY_BATTERY_T2: Readonly<Record<'artillery' | 'heavyArtillery' | 'horseArtillery', ResourceStockpile>> = Object.freeze({
+const ARTILLERY_BATTERY_T2: Readonly<Record<'artillery' | 'heavyArtillery' | 'horseArtillery' | 'mortar', ResourceStockpile>> = Object.freeze({
   artillery: Object.freeze({ wood: 190, iron: 330, gunpowder: 150, alloy: 20 }),
   heavyArtillery: Object.freeze({ wood: 250, iron: 460, gunpowder: 220, alloy: 35 }),
   horseArtillery: Object.freeze({ wood: 240, iron: 390, gunpowder: 180, alloy: 28 }),
+  mortar: Object.freeze({ wood: 180, iron: 300, gunpowder: 175, alloy: 20 }),
 });
 
 function cloneCost(cost: ResourceStockpile): ResourceStockpile {
@@ -176,7 +184,7 @@ export function upgradeCost(squadClass: SquadClass, kind: EquipmentUpgradeKind, 
     return next === 2 ? cloneCost(base) : tierThreeCost(base, 28);
   }
   if (!isArtilleryClass(squadClass)) return cloneCost(ZERO_COST);
-  const key = squadClass as 'artillery' | 'heavyArtillery' | 'horseArtillery';
+  const key = squadClass as 'artillery' | 'heavyArtillery' | 'horseArtillery' | 'mortar';
   const base = kind === 'artillery-performance' ? ARTILLERY_PERFORMANCE_T2[key] : ARTILLERY_BATTERY_T2[key];
   const alloyFloor = kind === 'artillery-battery' ? 55 : 42;
   return next === 2 ? cloneCost(base) : tierThreeCost(base, alloyFloor);
@@ -219,6 +227,10 @@ export function weaponTierMultipliers(squadClass: SquadClass, tier: UpgradeTier)
       return { damage: 1, reload: 1, spread: 1, range: 1, morale: 1, melee: top ? 1.18 : 1.08, charge: top ? 1.18 : 1.08, chargeMorale: top ? 1.16 : 1.08, axe: 1, grenade: 1 };
     case 'hussar':
       return { damage: 1, reload: 1, spread: 1, range: 1, morale: 1, melee: top ? 1.12 : 1.05, charge: top ? 1.12 : 1.06, chargeMorale: top ? 1.28 : 1.12, axe: 1, grenade: 1 };
+    case 'lancer':
+      return { damage: 1, reload: 1, spread: 1, range: 1, morale: 1, melee: top ? 1.16 : 1.08, charge: top ? 1.22 : 1.10, chargeMorale: top ? 1.18 : 1.08, axe: 1, grenade: 1 };
+    case 'militaryBand':
+      return { damage: 1, reload: 1, spread: 1, range: 1, morale: top ? 1.15 : 1.08, melee: top ? 1.12 : 1.06, charge: 1, chargeMorale: 1, axe: 1, grenade: 1 };
     case 'cuirassier':
       return { damage: 1, reload: 1, spread: 1, range: 1, morale: 1, melee: top ? 1.16 : 1.08, charge: top ? 1.16 : 1.08, chargeMorale: top ? 1.12 : 1.06, axe: 1, grenade: 1 };
     default:
@@ -272,6 +284,7 @@ export function artilleryPerformanceMultipliers(tier: UpgradeTier): ArtilleryTie
 
 export function artilleryGunCount(squadClass: SquadClass, batteryTier: UpgradeTier): number {
   const tier = Math.max(1, Math.min(3, batteryTier));
+  if (squadClass === 'mortar') return tier === 1 ? 1 : tier === 2 ? 2 : 3;
   if (squadClass === 'heavyArtillery') return tier === 1 ? 1 : tier === 2 ? 2 : 3;
   if (squadClass === 'horseArtillery') return tier === 1 ? 3 : tier === 2 ? 4 : 5;
   if (squadClass === 'artillery') return tier === 1 ? 2 : tier === 2 ? 3 : 4;
