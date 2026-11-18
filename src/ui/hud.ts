@@ -1,5 +1,5 @@
 import type { GameSnapshot } from '../game/game';
-import { canBannerAttackClass, classLabel as squadClassLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass } from '../game/types';
+import { TEAM_IDS, canBannerAttackClass, classLabel as squadClassLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, type SquadClass, type Team } from '../game/types';
 import { artilleryProfile } from '../game/classProfiles';
 import type { ConstructionBlockKind } from '../entities/constructionBlock';
 import { CONSTRUCTION_COSTS } from '../game/constructionSystem';
@@ -48,6 +48,8 @@ export class Hud {
     private readonly resourceGather: HTMLElement,
     private readonly blueFactionName: string = 'BLUE',
     private readonly redFactionName: string = 'RED',
+    private readonly yellowFactionName: string = 'YELLOW',
+    private readonly greenFactionName: string = 'GREEN',
   ) {
     this.slots = Array.from(hotbar.querySelectorAll<HTMLElement>('.slot[data-slot]'));
     this.classCards = Array.from(classSelector.querySelectorAll<HTMLElement>('.class-card[data-class]'));
@@ -66,6 +68,22 @@ export class Hud {
     this.resourceGatherDetail = requireChild(this.resourceGather, '#resource-gather-detail');
   }
 
+  private factionName(team: Team): string {
+    if (team === 'blue') return this.blueFactionName;
+    if (team === 'red') return this.redFactionName;
+    if (team === 'yellow') return this.yellowFactionName;
+    return this.greenFactionName;
+  }
+
+  private bannerElements(team: Team): { card: HTMLElement; hp: HTMLElement; bar: HTMLElement } | null {
+    if (team === 'blue') return { card: this.blueBannerCard, hp: this.blueBannerHp, bar: this.blueBannerBar };
+    if (team === 'red') return { card: this.redBannerCard, hp: this.redBannerHp, bar: this.redBannerBar };
+    const card = document.querySelector<HTMLElement>(`#${team}-banner-card`);
+    const hp = document.querySelector<HTMLElement>(`#${team}-banner-hp`);
+    const bar = document.querySelector<HTMLElement>(`#${team}-banner-bar`);
+    return card && hp && bar ? { card, hp, bar } : null;
+  }
+
   setBuilderMode(active: boolean, kind: ConstructionBlockKind, available = true): void {
     this.builderMode = active;
     this.builderAvailable = available;
@@ -78,7 +96,7 @@ export class Hud {
     this.statusElement.textContent = snapshot.paused
       ? 'PAUSED'
       : snapshot.winner
-        ? snapshot.winner === 'blue' ? `BLUE · ${this.blueFactionName} VICTORY` : `RED · ${this.redFactionName} VICTORY`
+        ? `${snapshot.winner.toUpperCase()} · ${this.factionName(snapshot.winner)} VICTORY`
         : snapshot.playerRespawn !== null
           ? '兵科選択'
           : snapshot.playerRecruitmentProgress !== null
@@ -106,29 +124,36 @@ export class Hud {
     this.pauseOverlay.classList.toggle('hidden', !snapshot.paused);
     this.cameraElement.textContent = `CAM ${snapshot.cameraFollow ? 'FOLLOW' : 'FREE'} · ${snapshot.cameraZoom.toFixed(2)}x · TIME ${snapshot.timeScale.toFixed(1)}x${snapshot.debugAi ? ' · AI DEBUG' : ''}`;
 
-    const bluePercent = Math.max(0, Math.round((snapshot.blueBannerHp / snapshot.bannerMaxHp) * 100));
-    const redPercent = Math.max(0, Math.round((snapshot.redBannerHp / snapshot.bannerMaxHp) * 100));
-    const blueLabel = this.blueBannerCard.querySelector<HTMLElement>('.banner-card-head span');
-    const redLabel = this.redBannerCard.querySelector<HTMLElement>('.banner-card-head span');
     if (snapshot.conquestEnabled) {
       const initial = Math.max(1, snapshot.conquestInitialTickets);
-      if (blueLabel) blueLabel.textContent = `BLUE · ${this.blueFactionName} TICKETS`;
-      if (redLabel) redLabel.textContent = `RED · ${this.redFactionName} TICKETS`;
-      this.blueBannerHp.textContent = `${snapshot.blueTickets}`;
-      this.redBannerHp.textContent = `${snapshot.redTickets}`;
-      this.blueBannerBar.style.width = `${Math.max(0, Math.min(100, snapshot.blueTickets / initial * 100))}%`;
-      this.redBannerBar.style.width = `${Math.max(0, Math.min(100, snapshot.redTickets / initial * 100))}%`;
-      this.blueBannerCard.classList.remove('under-attack');
-      this.redBannerCard.classList.remove('under-attack');
+      for (const team of TEAM_IDS) {
+        const elements = this.bannerElements(team);
+        if (!elements) continue;
+        const active = team === 'blue' || team === 'red';
+        elements.card.classList.toggle('hidden', !active);
+        if (!active) continue;
+        const tickets = team === 'blue' ? snapshot.blueTickets : snapshot.redTickets;
+        const label = elements.card.querySelector<HTMLElement>('.banner-card-head span');
+        if (label) label.textContent = `${team.toUpperCase()} · ${this.factionName(team)} TICKETS`;
+        elements.hp.textContent = `${tickets}`;
+        elements.bar.style.width = `${Math.max(0, Math.min(100, tickets / initial * 100))}%`;
+        elements.card.classList.remove('under-attack');
+      }
     } else {
-      if (blueLabel) blueLabel.textContent = `BLUE · ${this.blueFactionName} 旗`;
-      if (redLabel) redLabel.textContent = `RED · ${this.redFactionName} 旗`;
-      this.blueBannerHp.textContent = `${bluePercent}%`;
-      this.redBannerHp.textContent = `${redPercent}%`;
-      this.blueBannerBar.style.width = `${bluePercent}%`;
-      this.redBannerBar.style.width = `${redPercent}%`;
-      this.blueBannerCard.classList.toggle('under-attack', snapshot.blueBannerUnderAttack);
-      this.redBannerCard.classList.toggle('under-attack', snapshot.redBannerUnderAttack);
+      const states = new Map(snapshot.bannerStates.map((state) => [state.team, state]));
+      for (const team of TEAM_IDS) {
+        const elements = this.bannerElements(team);
+        if (!elements) continue;
+        const state = states.get(team);
+        elements.card.classList.toggle('hidden', !state);
+        if (!state) continue;
+        const percent = Math.max(0, Math.round((state.hp / Math.max(1, state.maxHp)) * 100));
+        const label = elements.card.querySelector<HTMLElement>('.banner-card-head span');
+        if (label) label.textContent = `${team.toUpperCase()} · ${this.factionName(team)} 旗`;
+        elements.hp.textContent = `${percent}%`;
+        elements.bar.style.width = `${percent}%`;
+        elements.card.classList.toggle('under-attack', state.underAttack);
+      }
     }
 
     this.updatePlayerPanel(snapshot, ready);
@@ -154,7 +179,8 @@ export class Hud {
       }).join('  ·  ');
       this.objectiveProgress.classList.remove('hidden');
     } else if (snapshot.playerMode === 'bannerAttack' && snapshot.playerBannerTargetTeam) {
-      const progress = snapshot.playerBannerTargetTeam === 'red' ? redPercent : bluePercent;
+      const targetState = snapshot.bannerStates.find((state) => state.team === snapshot.playerBannerTargetTeam);
+      const progress = targetState ? Math.max(0, Math.round(targetState.hp / Math.max(1, targetState.maxHp) * 100)) : 0;
       this.objectiveProgress.textContent = snapshot.playerBannerInRange
         ? `DESTROYING ${snapshot.playerBannerTargetTeam.toUpperCase()} BANNER · ${progress}%`
         : `MOVING TO ${snapshot.playerBannerTargetTeam.toUpperCase()} BANNER`;
@@ -167,8 +193,8 @@ export class Hud {
     this.contextHint.classList.toggle('hidden', !snapshot.contextualHint || snapshot.introActive);
 
     document.title = snapshot.conquestEnabled
-      ? `Bannerfall V4.4.5 — BLUE ${this.blueFactionName} ${snapshot.blueTickets} | RED ${this.redFactionName} ${snapshot.redTickets}`
-      : `Bannerfall V4.4.5 — BLUE ${this.blueFactionName} ${bluePercent}% | RED ${this.redFactionName} ${redPercent}%`;
+      ? `Bannerfall V4.6.1 — BLUE ${this.blueFactionName} ${snapshot.blueTickets} | RED ${this.redFactionName} ${snapshot.redTickets}`
+      : `Bannerfall V4.6.1 — ${snapshot.bannerStates.map((state) => `${state.team.toUpperCase()} ${Math.round(state.hp / Math.max(1, state.maxHp) * 100)}%`).join(' | ')}`;
   }
 
   private updateResources(snapshot: GameSnapshot): void {
@@ -244,7 +270,8 @@ export class Hud {
 
     if (snapshot.selectedWeapon === 'musket') this.playerDetail.textContent = ready ? 'MUSKET · READY' : `MUSKET · RELOAD ${snapshot.playerReload.toFixed(1)}s`;
     else if (snapshot.selectedWeapon === 'bayonet') this.playerDetail.textContent = 'BAYONET · CHARGE / MELEE';
-    else this.playerDetail.textContent = 'AXE · OBJECTIVE DAMAGE';
+    else if (snapshot.selectedWeapon === 'pickaxe') this.playerDetail.textContent = 'PICKAXE · MOUNTAIN / REINFORCED WALL';
+    else this.playerDetail.textContent = 'AXE · FOREST / BANNER / WALL';
   }
 
   private updateHotbar(snapshot: GameSnapshot): void {
@@ -270,7 +297,23 @@ export class Hud {
     if (canBannerAttackClass(snapshot.playerClass)) {
       this.configureSlot(0, '1', '━', 'マスケット', snapshot.selectedWeapon === 'musket', snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
       this.configureSlot(1, '2', '†', '銃剣', snapshot.selectedWeapon === 'bayonet');
-      this.configureSlot(2, '3', '⌁', '斧', snapshot.selectedWeapon === 'axe');
+      const toolSelected = snapshot.selectedWeapon === 'axe' || snapshot.selectedWeapon === 'pickaxe';
+      const pickaxeMode = snapshot.selectedWeapon === 'pickaxe';
+      this.configureSlot(
+        2,
+        '3',
+        pickaxeMode ? '⛏' : '⌁',
+        pickaxeMode ? 'ピッケル' : '斧 / ピッケル',
+        toolSelected,
+        null,
+        pickaxeMode ? '3で斧へ切替' : snapshot.selectedWeapon === 'axe' ? '3でピッケルへ切替' : '3でツール選択',
+      );
+    } else if (snapshot.playerClass === 'militaryBand') {
+      const bandProgress = snapshot.playerBandCooldown <= 0 ? 1 : Math.max(0, 1 - snapshot.playerBandCooldown / 24);
+      this.configureSlot(0, 'LMB', '♫', '演奏', snapshot.playerBandCooldown <= 0, bandProgress, snapshot.playerBandCooldown <= 0 ? '演奏可' : '再使用待ち');
+      this.configureSlot(1, 'RMB', '†', '白兵', snapshot.playerMode === 'charging' || snapshot.playerMode === 'melee');
+      this.configureSlot(2, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
+      if (snapshot.playerSupportBuffRemaining > 0) this.configureSlot(7, 'BUFF', '♪', '軍楽効果', true, snapshot.playerSupportBuffRemaining / 10, `${snapshot.playerSupportBuffRemaining.toFixed(1)}s`);
     } else if (snapshot.playerClass === 'sharpshooter') {
       this.configureSlot(0, 'LMB', '━', '狙撃銃', true, snapshot.playerReloadProgress, snapshot.playerReload <= 0 ? 'READY' : 'RELOAD');
       this.configureSlot(1, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
@@ -286,7 +329,7 @@ export class Hud {
       const cannonProgress = snapshot.playerArtilleryDeployed ? snapshot.playerReloadProgress : snapshot.playerArtilleryDeployProgress;
       const cannonState = snapshot.playerArtilleryDeployed ? snapshot.playerReload <= 0 ? 'READY' : 'RELOAD' : '展開';
       const cannonProfile = artilleryProfile(snapshot.playerClass, snapshot.playerArtilleryPerformanceTier as 1 | 2 | 3, snapshot.playerArtilleryBatteryTier as 1 | 2 | 3);
-      const cannonLabel = snapshot.playerClass === 'heavyArtillery' ? `重砲 ${cannonProfile.guns}門` : snapshot.playerClass === 'horseArtillery' ? `騎砲 ${cannonProfile.guns}門` : `野砲 ${cannonProfile.guns}門`;
+      const cannonLabel = snapshot.playerClass === 'heavyArtillery' ? `重砲 ${cannonProfile.guns}門` : snapshot.playerClass === 'horseArtillery' ? `騎砲 ${cannonProfile.guns}門` : snapshot.playerClass === 'mortar' ? `迫撃砲 ${cannonProfile.guns}門` : `野砲 ${cannonProfile.guns}門`;
       this.configureSlot(0, 'LMB', '●', cannonLabel, snapshot.playerArtilleryDeployed && snapshot.playerReload <= 0, cannonProgress, cannonState);
       this.configureSlot(1, 'AUTO', '⌛', snapshot.playerArtilleryDeployed ? '展開済' : '展開', !snapshot.playerArtilleryDeployed);
       this.configureSlot(2, 'F', '↶', '再整列', snapshot.playerMode === 'reforming');
@@ -334,7 +377,7 @@ export class Hud {
       : snapshot.recruitmentEnabled
         ? '次回兵科とSpawnを予約 · CONQUESTも標準編成で出撃します · 兵舎で上限を強化できます · Nで閉じる'
         : '次に部隊が全滅した際の兵科とSpawnを予約します · Nで閉じる';
-    this.armyComposition.textContent = `BLUE ${this.blueFactionName} · 戦列${snapshot.blueClasses.infantry} 軽歩${snapshot.blueClasses.lightInfantry} 擲弾${snapshot.blueClasses.grenadier} 狙撃${snapshot.blueClasses.sharpshooter} 工兵${snapshot.blueClasses.engineer} 竜騎${snapshot.blueClasses.dragoon} 騎兵${snapshot.blueClasses.cavalry} フッサー${snapshot.blueClasses.hussar} 胸甲${snapshot.blueClasses.cuirassier} 野砲${snapshot.blueClasses.artillery} 重砲${snapshot.blueClasses.heavyArtillery} 騎砲${snapshot.blueClasses.horseArtillery}`;
+    this.armyComposition.textContent = `BLUE ${this.blueFactionName} · 戦列${snapshot.blueClasses.infantry} 軽歩${snapshot.blueClasses.lightInfantry} 擲弾${snapshot.blueClasses.grenadier} 狙撃${snapshot.blueClasses.sharpshooter} 工兵${snapshot.blueClasses.engineer} 竜騎${snapshot.blueClasses.dragoon} 騎兵${snapshot.blueClasses.cavalry} フッサー${snapshot.blueClasses.hussar} 胸甲${snapshot.blueClasses.cuirassier} 槍騎${snapshot.blueClasses.lancer} 軍楽${snapshot.blueClasses.militaryBand} 野砲${snapshot.blueClasses.artillery} 重砲${snapshot.blueClasses.heavyArtillery} 騎砲${snapshot.blueClasses.horseArtillery} 迫撃${snapshot.blueClasses.mortar}`;
     this.classRecommendation.textContent = `推奨 · ${this.classLabel(snapshot.playerRecommendedClass)}`;
     for (const card of this.classCards) {
       const value = card.dataset.class as SquadClass | undefined;

@@ -61,3 +61,13 @@ export function ensureDistinctFactions(blue: FactionId, red: FactionId): { blue:
   const alternate = FACTION_IDS.find((candidate) => candidate !== blue) ?? DEFAULT_RED_FACTION;
   return { blue, red: alternate };
 }
+
+export const DEFAULT_YELLOW_FACTION: FactionId = 'BRITISH';
+export const DEFAULT_GREEN_FACTION: FactionId = 'RUSSIAN';
+
+export function defaultFactionForTeam(team: import('./types').Team): FactionId {
+  if (team === 'blue') return DEFAULT_BLUE_FACTION;
+  if (team === 'red') return DEFAULT_RED_FACTION;
+  if (team === 'yellow') return DEFAULT_YELLOW_FACTION;
+  return DEFAULT_GREEN_FACTION;
+}

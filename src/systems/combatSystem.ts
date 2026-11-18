@@ -3,11 +3,11 @@ import { Projectile } from '../entities/projectile';
 import { Fieldwork } from '../entities/fieldwork';
 import { ConstructionBlock, CONSTRUCTION_DEFINITIONS } from '../entities/constructionBlock';
 import { GAME_CONFIG } from '../game/config';
-import { BATTLEFIELD_MAP } from '../game/battlefieldMap';
 import { LOOPHOLE_ENEMY_PASS_CHANCE, constructionBlocksProjectiles, isLoopholeFriendlyShot, segmentIntersectsConstructionBlock } from '../game/constructionSystem';
 import { volleyProfile } from '../game/classProfiles';
 import { isMountedClass, type Team, type Vec2 } from '../game/types';
 import { armorDamageMultiplier } from '../game/upgradeSystem';
+import type { TerrainDamageSystem } from '../game/terrainDamageSystem';
 
 export interface SmokeParticle {
   position: Vec2;
@@ -124,6 +124,7 @@ export function updateProjectiles(
   formations: Formation[],
   fieldworks: Fieldwork[],
   constructionBlocks: ConstructionBlock[],
+  terrainDamage: TerrainDamageSystem,
   dt: number,
   onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
 ): void {
@@ -138,9 +139,10 @@ export function updateProjectiles(
     const segmentMid = { x: (previous.x + projectile.position.x) / 2, y: (previous.y + projectile.position.y) / 2 };
 
     let hit = false;
-    const mountainHit = BATTLEFIELD_MAP.segmentHitsMountain(previous, projectile.position);
+    const mountainHit = terrainDamage.segmentHitsMountain(previous, projectile.position);
     if (mountainHit) {
       projectile.position = mountainHit;
+      terrainDamage.damageAt(mountainHit, projectile.damage, 'bullet');
       projectile.life = 0;
       continue;
     }

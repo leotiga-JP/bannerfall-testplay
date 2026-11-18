@@ -40,13 +40,13 @@ export class ConquestSystem {
   initialTickets: number;
   readonly points: CapturePointState[];
   readonly tickets: Record<Team, number>;
-  private bleedAccumulator: Record<Team, number> = { blue: 0, red: 0 };
+  private bleedAccumulator: Record<Team, number> = { blue: 0, red: 0, yellow: 0, green: 0 };
 
   constructor(blueSquads: number, redSquads: number, configuredTickets?: number) {
     const largestArmy = Math.max(1, blueSquads, redSquads);
     const fallbackTickets = Math.max(100, Math.min(400, largestArmy * 8));
     this.initialTickets = Math.max(1, Math.min(9999, Math.floor(configuredTickets ?? fallbackTickets)));
-    this.tickets = { blue: this.initialTickets, red: this.initialTickets };
+    this.tickets = { blue: this.initialTickets, red: this.initialTickets, yellow: 0, green: 0 };
     this.points = RAW_POINTS.map((raw) => ({
       ...raw,
       position: BATTLEFIELD_MAP.nearestPassablePoint(raw.position, 12),

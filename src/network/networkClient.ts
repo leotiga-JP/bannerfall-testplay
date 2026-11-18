@@ -1,3 +1,4 @@
+import { browserStorage } from '../browserStorage';
 import {
   PROTOCOL_VERSION,
   type BattleNetSnapshot,
@@ -9,12 +10,9 @@ import {
   type PlayerAction,
   type RoomBrowserEntry,
   type RoomState,
-  type RoomVisibility,
   type ServerMessage,
 } from './protocol';
 import type { SquadClass, Team } from '../game/types';
-import type { GameMode } from '../game/gameMode';
-import type { FactionId } from '../game/factionBanners';
 import type { ResourceNetworkState } from '../game/resourceSystem';
 import type { ConstructionNetworkState } from '../game/constructionSystem';
 
@@ -76,15 +74,14 @@ export class NetworkClient {
     await this.openSocket(url, false);
   }
 
-  createRoom(name: string, password: string, blueSquads: number, redSquads: number, respawnSeconds: number, conquestTickets: number, visibility: RoomVisibility, gameMode: GameMode, introEnabled: boolean, constructionEnabled: boolean, blueFaction: FactionId, redFaction: FactionId): void {
+  createRoom(
+    name: string,
+    password: string,
+    settings: Omit<import('./protocol').RoomSettings, 'passwordProtected'>,
+  ): void {
     this.pendingPassword = password;
     this.joinMemory = { name, code: '', password };
-    this.send({
-      type: 'create_room',
-      name,
-      password,
-      settings: { blueSquads, redSquads, respawnSeconds, conquestTickets, visibility, gameMode, introEnabled, constructionEnabled, blueFaction, redFaction },
-    });
+    this.send({ type: 'create_room', name, password, settings });
   }
 
   setConquestTickets(tickets: number): void {
@@ -147,7 +144,7 @@ export class NetworkClient {
   }
 
   leaveRoom(): void {
-    if (this.room?.code) localStorage.removeItem(`bannerfall.reconnect.${this.room.code}`);
+    if (this.room?.code) browserStorage.removeItem(`bannerfall.reconnect.${this.room.code}`);
     this.send({ type: 'leave_room' });
     this.room = null;
     this.joinMemory = null;
@@ -199,6 +196,7 @@ export class NetworkClient {
 
       ws.addEventListener('close', () => {
         window.clearTimeout(timeout);
+        if (!opened) reject(new Error('WebSocket closed before connecting.'));
         if (this.socket !== ws) return;
         this.stopHeartbeat();
         this.socket = null;
@@ -255,7 +253,7 @@ export class NetworkClient {
   }
 
   private sendJoin(memory: JoinMemory): void {
-    const reconnectToken = localStorage.getItem(`bannerfall.reconnect.${memory.code}`) ?? undefined;
+    const reconnectToken = browserStorage.getItem(`bannerfall.reconnect.${memory.code}`) ?? undefined;
     this.send({ type: 'join_room', name: memory.name, code: memory.code, password: memory.password, reconnectToken });
   }
 
@@ -292,7 +290,7 @@ export class NetworkClient {
         }
         break;
       case 'reconnect_token':
-        localStorage.setItem(`bannerfall.reconnect.${message.roomCode}`, message.token);
+        browserStorage.setItem(`bannerfall.reconnect.${message.roomCode}`, message.token);
         if (this.joinMemory && !this.joinMemory.code) this.joinMemory.code = message.roomCode;
         break;
       case 'room_state': {

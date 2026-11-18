@@ -1,11 +1,13 @@
 import './styles.css';
-import { SQUAD_CLASSES, classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
+import { browserStorage } from './browserStorage';
+import { SQUAD_CLASSES, TEAM_IDS, classLabel as squadClassLabel, isSquadClass, type SquadClass, type Team } from './game/types';
+import { loadGameServerUrl, waitForGameServer } from './network/gameServer';
 import { NetworkClient } from './network/networkClient';
-import { BATTLEFIELD_MAP, SPAWN_AREA_COUNT } from './game/battlefieldMap';
+import { BATTLEFIELD_MAP, OPEN_FIELD_MAP, SPAWN_AREA_COUNT, isMapId, mapLabel, type MapId } from './game/battlefieldMap';
 import { MultiplayerBattle } from './network/multiplayerBattle';
 import type { ChatMessage, MatchStartPayload, RoomBrowserEntry, RoomState, RoomVisibility } from './network/protocol';
 import { gameModeDescription, gameModeLabel, isGameMode, type GameMode } from './game/gameMode';
-import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, FACTION_IDS, factionLabel, factionShortLabel, isFactionId, type FactionId } from './game/factionBanners';
+import { DEFAULT_BLUE_FACTION, DEFAULT_RED_FACTION, DEFAULT_YELLOW_FACTION, DEFAULT_GREEN_FACTION, FACTION_IDS, factionLabel, factionShortLabel, isFactionId, type FactionId } from './game/factionBanners';
 
 const menuShell = document.querySelector<HTMLElement>('#menu-shell');
 const battleShell = document.querySelector<HTMLElement>('#battle-shell');
@@ -17,14 +19,20 @@ const roomBrowserList = document.querySelector<HTMLElement>('#room-browser-list'
 const roomBrowserSummary = document.querySelector<HTMLElement>('#room-browser-summary');
 const lobbyScreen = document.querySelector<HTMLElement>('#lobby-screen');
 const playerNameInput = document.querySelector<HTMLInputElement>('#player-name');
-const serverUrlInput = document.querySelector<HTMLInputElement>('#server-url');
 const connectionStatus = document.querySelector<HTMLElement>('#connection-status');
-const connectionDot = document.querySelector<HTMLElement>('#connection-dot');
 const menuError = document.querySelector<HTMLElement>('#menu-error');
 const canvas = document.querySelector<HTMLCanvasElement>('#game');
 const networkStatus = document.querySelector<HTMLElement>('#network-status');
 const spawnPoints = document.querySelector<HTMLElement>('#spawn-points');
 const deploymentStatus = document.querySelector<HTMLElement>('#deployment-status');
+const deploymentMap = document.querySelector<HTMLElement>('#deployment-map');
+const deploymentMapFeatures = document.querySelector<HTMLElement>('#deployment-map-features');
+const createMapSelect = document.querySelector<HTMLSelectElement>('#create-map');
+const createMapPreview = document.querySelector<HTMLElement>('#create-map-preview');
+const createMapPreviewFeatures = document.querySelector<HTMLElement>('#create-map-preview-features');
+const createMapPreviewTitle = document.querySelector<HTMLElement>('#create-map-preview-title');
+const createMapPreviewCaption = document.querySelector<HTMLElement>('#create-map-preview-caption');
+const createArmyBalance = document.querySelector<HTMLElement>('#create-army-balance');
 const readyButton = document.querySelector<HTMLButtonElement>('#toggle-ready');
 const lobbyChatLog = document.querySelector<HTMLElement>('#lobby-chat-log');
 const lobbyChatInput = document.querySelector<HTMLInputElement>('#lobby-chat-input');
@@ -35,15 +43,38 @@ const lobbyCountdownNumber = document.querySelector<HTMLElement>('#lobby-countdo
 
 const required = [
   menuShell, battleShell, titleScreen, createScreen, joinScreen, browserScreen, roomBrowserList, roomBrowserSummary, lobbyScreen,
-  playerNameInput, serverUrlInput, connectionStatus, connectionDot, menuError, canvas, networkStatus,
-  spawnPoints, deploymentStatus, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
+  playerNameInput, connectionStatus, menuError, canvas, networkStatus,
+  spawnPoints, deploymentStatus, deploymentMap, deploymentMapFeatures, createMapSelect, createMapPreview, createMapPreviewFeatures, createMapPreviewTitle, createMapPreviewCaption, createArmyBalance, readyButton, lobbyChatLog, lobbyChatInput, battleChatLog,
   battleChatInput, lobbyCountdown, lobbyCountdownNumber,
 ];
-if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.4.5 UI initialization failed.');
+if (required.some((element) => !element)) throw new Error('Bannerfall Version 4.6.1 UI initialization failed.');
 
 const network = new NetworkClient();
+let roomActionPending = false;
 let currentRoom: RoomState | null = null;
 let currentBattle: MultiplayerBattle | null = null;
+
+function activeTeamsForCount(teamCount: number): Team[] {
+  return TEAM_IDS.slice(0, Math.max(2, Math.min(4, Math.floor(teamCount)))) as Team[];
+}
+
+function activeTeamsForRoom(room: RoomState): Team[] {
+  return activeTeamsForCount(room.settings.teamCount);
+}
+
+function roomFaction(room: RoomState, team: Team): FactionId {
+  if (team === 'blue') return room.settings.blueFaction;
+  if (team === 'red') return room.settings.redFaction;
+  if (team === 'yellow') return room.settings.yellowFaction;
+  return room.settings.greenFaction;
+}
+
+function roomSquads(room: RoomState, team: Team): number {
+  if (team === 'blue') return room.settings.blueSquads;
+  if (team === 'red') return room.settings.redSquads;
+  if (team === 'yellow') return room.settings.yellowSquads;
+  return room.settings.greenSquads;
+}
 
 const CLASS_UI: Record<SquadClass, { summary: string; role: string }> = {
   infantry: { summary: '20兵 · マスケット / 銃剣 / 斧', role: '標準戦列・旗破壊' },
@@ -55,9 +86,12 @@ const CLASS_UI: Record<SquadClass, { summary: string; role: string }> = {
   cavalry: { summary: '12騎 · 高速 / 突撃', role: '突破・砲兵狩り' },
   hussar: { summary: '10騎 · 衝撃突撃', role: '士気破壊・追撃' },
   cuirassier: { summary: '10騎 · 高HP / 重騎兵', role: '耐久戦・戦列拘束' },
+  lancer: { summary: '11騎 · 槍 / 高威力突撃', role: '開けた地形での突破・初撃特化' },
+  militaryBand: { summary: '10兵 · 射撃不可 / 演奏支援', role: '士気・移動・再装填支援' },
   artillery: { summary: '6兵 · 2門 · 長射程', role: '継続砲撃・陣地防御' },
   heavyArtillery: { summary: '7兵 · 1門 · 巨大爆発', role: '超火力・長い再装填' },
   horseArtillery: { summary: '6兵 · 3門 · 高速展開', role: '前線追従砲撃・陣地防御' },
+  mortar: { summary: '6兵 · 曲射 / 遅い着弾', role: '山岳・防壁越しの短射程砲撃' },
 };
 
 function renderClassCatalogs(): void {
@@ -94,8 +128,7 @@ let chatMessages: ChatMessage[] = [];
 let countdownInterval: number | null = null;
 
 const params = new URLSearchParams(window.location.search);
-playerNameInput!.value = localStorage.getItem('bannerfall.playerName') ?? '';
-serverUrlInput!.value = params.get('server') ?? localStorage.getItem('bannerfall.serverUrl') ?? '';
+playerNameInput!.value = browserStorage.getItem('bannerfall.playerName') ?? '';
 const invitedRoom = params.get('room');
 if (invitedRoom) {
   const code = document.querySelector<HTMLInputElement>('#join-code');
@@ -113,13 +146,20 @@ function showScreen(target: 'title' | 'create' | 'join' | 'browser' | 'lobby'): 
 function showError(message: string): void {
   menuError!.textContent = message;
   menuError!.classList.remove('hidden');
-  window.setTimeout(() => menuError!.classList.add('hidden'), 5000);
+  window.clearTimeout(errorTimer);
+  errorTimer = window.setTimeout(() => menuError!.classList.add('hidden'), 5000);
 }
+
+let errorTimer: number | undefined;
 
 async function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText && window.isSecureContext) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Embedded players can restrict the Clipboard API.
+    }
   }
   const textarea = document.createElement('textarea');
   textarea.value = text;
@@ -134,18 +174,38 @@ async function copyText(text: string): Promise<void> {
 }
 
 function cleanPlayerName(): string {
-  const value = playerNameInput!.value.trim().slice(0, 24);
-  if (!value) throw new Error('プレイヤー名を入力してください。');
-  localStorage.setItem('bannerfall.playerName', value);
+  const value = playerNameInput!.value.trim().slice(0, 24) || `ゲスト${Math.floor(1000 + Math.random() * 9000)}`;
+  playerNameInput!.value = value;
+  browserStorage.setItem('bannerfall.playerName', value);
   return value;
 }
 
+async function runRoomAction(action: () => void | Promise<void>): Promise<void> {
+  if (roomActionPending) return;
+  roomActionPending = true;
+  menuError!.classList.add('hidden');
+  try {
+    await action();
+  } catch (error) {
+    showError(error instanceof Error ? error.message : String(error));
+  } finally {
+    connectionStatus!.textContent = '';
+    roomActionPending = false;
+  }
+}
+
 async function ensureConnected(): Promise<void> {
-  const rawUrl = serverUrlInput!.value.trim();
-  if (!rawUrl) throw new Error('Cloudflare Tunnel URLを入力してください。');
-  localStorage.setItem('bannerfall.serverUrl', rawUrl);
   if (network.connected) return;
-  await network.connect(rawUrl);
+  connectionStatus!.textContent = '対戦サーバーを確認しています…';
+  const url = await loadGameServerUrl();
+  connectionStatus!.textContent = '対戦サーバーの応答を待っています。休止中は起動まで約1分かかります。';
+  await waitForGameServer(url);
+  connectionStatus!.textContent = '対戦サーバーに接続しています…';
+  try {
+    await network.connect(url.href);
+  } catch {
+    throw new Error('対戦サーバーに接続できませんでした。もう一度お試しください。');
+  }
 }
 
 function numberInput(id: string, min: number, max: number, fallback: number): number {
@@ -158,10 +218,13 @@ function classLabel(squadClass: SquadClass): string {
   return squadClassLabel(squadClass);
 }
 
-function spawnLabel(team: Team, index: number | null): string {
+function battlefieldForMap(mapId: MapId) {
+  return mapId === 'OPEN_FIELD' ? OPEN_FIELD_MAP : BATTLEFIELD_MAP;
+}
+
+function spawnLabel(team: Team, index: number | null, mapId: MapId = 'GRAND_RIVER'): string {
   if (index === null) return 'NO SPAWN';
-  const area = BATTLEFIELD_MAP.spawnArea(team, index);
-  return area.label;
+  return battlefieldForMap(mapId).spawnArea(team, index).label;
 }
 
 function roomPhaseLabel(phase: RoomBrowserEntry['phase']): string {
@@ -206,10 +269,14 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
     battle.innerHTML = `<span>MODE / BATTLE</span><strong></strong>`;
     const battleStrong = battle.querySelector('strong');
     if (battleStrong) {
-      const factions = `${factionShortLabel(entry.blueFaction)} vs ${factionShortLabel(entry.redFaction)}`;
+      const teams = activeTeamsForCount(entry.teamCount);
+      const factionByTeam: Record<Team, FactionId> = { blue: entry.blueFaction, red: entry.redFaction, yellow: entry.yellowFaction, green: entry.greenFaction };
+      const squadsByTeam: Record<Team, number> = { blue: entry.blueSquads, red: entry.redSquads, yellow: entry.yellowSquads, green: entry.greenSquads };
+      const factions = teams.map((team) => `${team.toUpperCase()} ${factionShortLabel(factionByTeam[team])}`).join(' / ');
+      const armies = teams.map((team) => String(squadsByTeam[team])).join(' / ');
       battleStrong.textContent = entry.gameMode === 'CONQUEST'
-        ? `${gameModeLabel(entry.gameMode)} · ${factions} · ${entry.blueSquads} vs ${entry.redSquads} · T${entry.conquestTickets}`
-        : `${gameModeLabel(entry.gameMode)} · ${factions} · ${entry.blueSquads} vs ${entry.redSquads}`;
+        ? `${gameModeLabel(entry.gameMode)} · ${factions} · ${armies} · T${entry.conquestTickets}`
+        : `${gameModeLabel(entry.gameMode)} · ${entry.teamCount} TEAM · ${factions} · ${armies}`;
     }
 
     const respawn = document.createElement('div');
@@ -229,8 +296,8 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
       : entry.phase === 'battle'
         ? (entry.passwordProtected ? 'PASSWORD' : 'JOIN BATTLE')
         : entry.passwordProtected ? 'PASSWORD' : 'JOIN';
-    join.addEventListener('click', async () => {
-      try {
+    join.addEventListener('click', () => {
+      void runRoomAction(async () => {
         const name = cleanPlayerName();
         await ensureConnected();
         if (entry.passwordProtected) {
@@ -243,9 +310,7 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
           return;
         }
         network.joinRoom(name, entry.code, '');
-      } catch (error) {
-        showError(error instanceof Error ? error.message : String(error));
-      }
+      });
     });
 
     row.append(code, host, players, battle, respawn, status, join);
@@ -254,18 +319,21 @@ function renderRoomBrowser(entries: RoomBrowserEntry[]): void {
 }
 
 function renderPlayers(room: RoomState): void {
-  const bluePlayers = document.querySelector<HTMLElement>('#blue-players');
-  const redPlayers = document.querySelector<HTMLElement>('#red-players');
-  const blueCount = document.querySelector<HTMLElement>('#blue-ready-count');
-  const redCount = document.querySelector<HTMLElement>('#red-ready-count');
-  if (!bluePlayers || !redPlayers || !blueCount || !redCount) return;
-  bluePlayers.innerHTML = '';
-  redPlayers.innerHTML = '';
-  let blueReady = 0;
-  let redReady = 0;
-
+  const teams = activeTeamsForRoom(room);
+  const containers = new Map<Team, HTMLElement>();
+  const counts = new Map<Team, HTMLElement>();
+  for (const team of TEAM_IDS) {
+    const players = document.querySelector<HTMLElement>(`#${team}-players`);
+    const count = document.querySelector<HTMLElement>(`#${team}-ready-count`);
+    const card = document.querySelector<HTMLElement>(`.${team}-team`);
+    const visible = teams.includes(team);
+    card?.classList.toggle('hidden', !visible);
+    if (players) { players.innerHTML = ''; containers.set(team, players); }
+    if (count) counts.set(team, count);
+  }
+  const readyByTeam = new Map<Team, number>(TEAM_IDS.map((team) => [team, 0]));
   for (const player of room.players) {
-    if (player.ready) player.team === 'blue' ? blueReady++ : redReady++;
+    if (player.ready) readyByTeam.set(player.team, (readyByTeam.get(player.team) ?? 0) + 1);
     const row = document.createElement('div');
     row.className = `player-row deployment-player ${player.ready ? 'ready' : ''}`;
     const identity = document.createElement('span');
@@ -273,47 +341,148 @@ function renderPlayers(room: RoomState): void {
     identity.textContent = `${player.owner ? '★ ' : ''}${player.name}`;
     const detail = document.createElement('span');
     detail.className = 'player-loadout';
-    detail.textContent = `${classLabel(player.squadClass)} · ${spawnLabel(player.team, player.spawnIndex)} · ${player.ready ? 'READY' : 'WAIT'}`;
+    detail.textContent = `${classLabel(player.squadClass)} · ${spawnLabel(player.team, player.spawnIndex, room.settings.mapId)} · ${player.ready ? 'READY' : 'WAIT'}`;
     row.append(identity, detail);
-    (player.team === 'blue' ? bluePlayers : redPlayers).appendChild(row);
+    containers.get(player.team)?.appendChild(row);
   }
-  blueCount.textContent = `${blueReady} READY`;
-  redCount.textContent = `${redReady} READY`;
+  for (const team of teams) counts.get(team)!.textContent = `${readyByTeam.get(team) ?? 0} READY`;
 }
 
-function spawnPointPercent(team: Team, index: number): { x: number; y: number } {
-  const bluePositions = [
-    { x: 12, y: 85 },
-    { x: 24, y: 73 },
-    { x: 36, y: 84 },
-  ];
-  const blue = bluePositions[Math.max(0, Math.min(2, index))];
-  return team === 'blue' ? blue : { x: 100 - blue.x, y: 100 - blue.y };
+function mapPreviewCaption(mapId: MapId): string {
+  return mapId === 'OPEN_FIELD'
+    ? '全面が平地で構成された会戦マップ'
+    : '大河・橋・浅瀬・山岳を含む広域戦マップ';
+}
+
+function pointPercent(mapId: MapId, point: { x: number; y: number }): { x: number; y: number } {
+  const map = battlefieldForMap(mapId);
+  const width = map.columns * map.tileSize;
+  const height = map.rows * map.tileSize;
+  return { x: point.x / width * 100, y: point.y / height * 100 };
+}
+
+function renderMapOverview(
+  features: HTMLElement,
+  container: HTMLElement,
+  mapId: MapId,
+  options: { showSpawnLabels?: boolean; showRearZoneLabels?: boolean; teams?: readonly Team[] } = {},
+): void {
+  const showSpawnLabels = options.showSpawnLabels ?? true;
+  const showRearZoneLabels = options.showRearZoneLabels ?? true;
+  const teams = options.teams ?? (['blue', 'red'] as const);
+  const map = battlefieldForMap(mapId);
+  features.innerHTML = '';
+  container.classList.toggle('map-grand-river', mapId === 'GRAND_RIVER');
+  container.classList.toggle('map-open-field', mapId === 'OPEN_FIELD');
+  container.setAttribute('aria-label', `${mapLabel(mapId)} deployment map`);
+
+  const add = (className: string, text = ''): HTMLElement => {
+    const element = document.createElement('div');
+    element.className = className;
+    element.textContent = text;
+    features.appendChild(element);
+    return element;
+  };
+
+  if (mapId === 'GRAND_RIVER') {
+    const blueZone = add('deployment-zone blue-zone');
+    if (showRearZoneLabels) {
+      const blueZoneLabel = document.createElement('span');
+      blueZoneLabel.textContent = 'BLUE 後方';
+      blueZone.appendChild(blueZoneLabel);
+    }
+    const redZone = add('deployment-zone red-zone');
+    if (showRearZoneLabels) {
+      const redZoneLabel = document.createElement('span');
+      redZoneLabel.textContent = 'RED 後方';
+      redZone.appendChild(redZoneLabel);
+    }
+    add('deployment-river', '大河');
+    for (const crossing of [
+      { x: 17, label: '西浅瀬' },
+      { x: 34, label: '西橋' },
+      { x: 50, label: '中央橋' },
+      { x: 66, label: '東橋' },
+      { x: 83, label: '東浅瀬' },
+    ]) {
+      const marker = add('deployment-crossing', crossing.label);
+      marker.style.left = `${crossing.x}%`;
+    }
+  } else {
+    add('open-field-center', '平原');
+    if (teams.length === 2) {
+      add('open-field-half blue-half', 'BLUE FRONT');
+      add('open-field-half red-half', 'RED FRONT');
+    }
+  }
+
+  for (const team of teams) {
+    for (let index = 0; index < SPAWN_AREA_COUNT; index += 1) {
+      const area = map.spawnArea(team, index);
+      const position = pointPercent(mapId, area.center);
+      const halo = add(`spawn-area-halo ${team}`);
+      halo.style.left = `${position.x}%`;
+      halo.style.top = `${position.y}%`;
+      halo.title = `${team.toUpperCase()} ${area.label}`;
+      if (showSpawnLabels) {
+        const label = document.createElement('span');
+        label.textContent = area.shortLabel;
+        halo.appendChild(label);
+      }
+    }
+
+    const position = pointPercent(mapId, map.bannerPosition(team));
+    const marker = add(`map-banner ${team}-banner-marker`, '⚑');
+    marker.style.left = `${position.x}%`;
+    marker.style.top = `${position.y}%`;
+    marker.title = `${team.toUpperCase()} 旗`;
+  }
+}
+
+function refreshCreateMapPreview(): void {
+  const selected = createMapSelect?.value;
+  const mapId: MapId = isMapId(selected) ? selected : 'GRAND_RIVER';
+  const requestedCount = Number(document.querySelector<HTMLSelectElement>('#create-team-count')?.value ?? 2);
+  const teamCount = mapId === 'OPEN_FIELD' ? Math.max(2, Math.min(4, requestedCount)) : 2;
+  if (createMapPreviewFeatures && createMapPreview) renderMapOverview(createMapPreviewFeatures, createMapPreview, mapId, { teams: activeTeamsForCount(teamCount) });
+  if (createMapPreviewTitle) createMapPreviewTitle.textContent = mapLabel(mapId);
+  if (createMapPreviewCaption) createMapPreviewCaption.textContent = mapPreviewCaption(mapId);
 }
 
 function renderDeploymentMap(room: RoomState): void {
   const local = room.players.find((player) => player.id === network.clientId);
   if (!local) return;
+
+  const map = battlefieldForMap(room.settings.mapId);
+  if (deploymentMapFeatures && deploymentMap) {
+    renderMapOverview(deploymentMapFeatures, deploymentMap, room.settings.mapId, {
+      showSpawnLabels: false,
+      showRearZoneLabels: false,
+      teams: activeTeamsForRoom(room),
+    });
+  }
   spawnPoints!.innerHTML = '';
+
   const canEdit = room.phase === 'lobby' || (room.phase === 'battle' && local.formationId === null);
   for (let index = 0; index < SPAWN_AREA_COUNT; index += 1) {
-    const position = spawnPointPercent(local.team, index);
+    const area = map.spawnArea(local.team, index);
+    const position = pointPercent(room.settings.mapId, area.center);
     const button = document.createElement('button');
     button.className = `spawn-point ${local.team}`;
     button.style.left = `${position.x}%`;
     button.style.top = `${position.y}%`;
     button.dataset.spawnIndex = String(index);
-    const own = local.spawnIndex === index;
-    if (own) button.classList.add('selected');
-    button.textContent = BATTLEFIELD_MAP.spawnArea(local.team, index).shortLabel;
-    button.title = `${spawnLabel(local.team, index)} — AREA内から分散出撃`;
+    if (local.spawnIndex === index) button.classList.add('selected');
+    button.textContent = area.shortLabel;
+    button.title = `${area.label} — AREA内から分散出撃`;
     button.disabled = !canEdit || (room.phase === 'lobby' && local.ready);
     button.addEventListener('click', () => network.selectSpawn(index));
     spawnPoints!.appendChild(button);
   }
+
   deploymentStatus!.textContent = local.spawnIndex === null
-    ? `SELECT ${local.team.toUpperCase()} SPAWN AREA`
-    : `${spawnLabel(local.team, local.spawnIndex)} · ${classLabel(local.squadClass)}${room.settings.gameMode === 'CONQUEST' ? ' · 成長編成' : ''}${room.phase === 'battle' && !local.formationId ? ' · 出撃準備' : ''}`;
+    ? `SELECT ${local.team.toUpperCase()} SPAWN AREA · ${mapLabel(room.settings.mapId)}`
+    : `${spawnLabel(local.team, local.spawnIndex, room.settings.mapId)} · ${classLabel(local.squadClass)}${room.settings.gameMode === 'CONQUEST' ? ' · 成長編成' : ''}${room.phase === 'battle' && !local.formationId ? ' · 出撃準備' : ''}`;
 }
 
 function renderClassCards(room: RoomState): void {
@@ -330,9 +499,8 @@ function renderClassCards(room: RoomState): void {
 function renderReadyControls(room: RoomState): void {
   const local = room.players.find((player) => player.id === network.clientId);
   const startButton = document.querySelector<HTMLButtonElement>('#start-match');
-  const blueButton = document.querySelector<HTMLButtonElement>('#join-blue');
-  const redButton = document.querySelector<HTMLButtonElement>('#join-red');
-  if (!local || !startButton || !blueButton || !redButton) return;
+  if (!local || !startButton) return;
+  const teams = activeTeamsForRoom(room);
 
   const stagingMidmatch = room.phase === 'battle' && local.formationId === null;
   const allReady = room.players.length > 0 && room.players.every((player) => player.ready && player.spawnIndex !== null);
@@ -343,10 +511,16 @@ function renderReadyControls(room: RoomState): void {
     ? (local.spawnIndex === null ? 'SELECT SPAWN FIRST' : '出撃')
     : local.ready ? 'CANCEL READY' : local.spawnIndex === null ? 'SELECT SPAWN FIRST' : 'READY';
 
-  const blueFull = room.slots.blue.available <= 0 && local.team !== 'blue';
-  const redFull = room.slots.red.available <= 0 && local.team !== 'red';
-  blueButton.disabled = (room.phase === 'countdown') || (!stagingMidmatch && room.phase !== 'lobby') || local.team === 'blue' || blueFull || (room.phase === 'lobby' && local.ready);
-  redButton.disabled = (room.phase === 'countdown') || (!stagingMidmatch && room.phase !== 'lobby') || local.team === 'red' || redFull || (room.phase === 'lobby' && local.ready);
+  for (const team of TEAM_IDS) {
+    const button = document.querySelector<HTMLButtonElement>(`#join-${team}`);
+    if (!button) continue;
+    const visible = teams.includes(team);
+    button.classList.toggle('hidden', !visible);
+    if (!visible) { button.disabled = true; continue; }
+    const full = room.slots[team].available <= 0 && local.team !== team;
+    button.disabled = (room.phase === 'countdown') || (!stagingMidmatch && room.phase !== 'lobby') || local.team === team || full || (room.phase === 'lobby' && local.ready);
+    button.textContent = `${team.toUpperCase()} · ${factionShortLabel(roomFaction(room, team))}`;
+  }
 
   startButton.classList.toggle('hidden', stagingMidmatch);
   if (stagingMidmatch) return;
@@ -364,9 +538,14 @@ function renderLobby(room: RoomState): void {
   if (!code || !settings) return;
   code.textContent = room.code;
   const local = room.players.find((player) => player.id === network.clientId);
-  const deploymentMode = room.phase === 'battle' && local?.formationId === null ? '途中参戦 — TEAM / CLASS / SPAWNを選択して出撃' : `${room.settings.blueSquads} vs ${room.settings.redSquads} squads`;
+  const teams = activeTeamsForRoom(room);
+  const deploymentMode = room.phase === 'battle' && local?.formationId === null
+    ? '途中参戦 — TEAM / CLASS / SPAWNを選択して出撃'
+    : teams.map((team) => `${team.toUpperCase()} ${roomSquads(room, team)}`).join(' / ');
   const ticketLabel = room.settings.gameMode === 'CONQUEST' ? ` · TICKETS ${room.settings.conquestTickets}` : '';
-  settings.textContent = `${gameModeLabel(room.settings.gameMode)} · ${deploymentMode}${ticketLabel} · BLUE ${factionShortLabel(room.settings.blueFaction)} / RED ${factionShortLabel(room.settings.redFaction)} · INTRO ${room.settings.introEnabled ? 'ON' : 'SKIP'} · BUILD ${room.settings.constructionEnabled ? 'ON' : 'OFF'} · RESPAWN ${room.settings.respawnSeconds}s · BLUE H${room.slots.blue.humans}/${room.slots.blue.total} · RED H${room.slots.red.humans}/${room.slots.red.total} · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
+  const factionText = teams.map((team) => `${team.toUpperCase()} ${factionShortLabel(roomFaction(room, team))}`).join(' / ');
+  const humanText = teams.map((team) => `${team.toUpperCase()} H${room.slots[team].humans}/${room.slots[team].total}`).join(' · ');
+  settings.textContent = `${mapLabel(room.settings.mapId)} · ${room.settings.teamCount} TEAM · ${gameModeLabel(room.settings.gameMode)} · ${deploymentMode}${ticketLabel} · ${factionText} · INTRO ${room.settings.introEnabled ? 'ON' : 'SKIP'} · BUILD ${room.settings.constructionEnabled ? 'ON' : 'OFF'} · RESPAWN ${room.settings.respawnSeconds}s · ${humanText} · ${room.settings.passwordProtected ? 'PASSWORD ON' : 'OPEN ROOM'} · ${room.settings.visibility === 'public' ? 'PUBLIC' : 'UNLISTED'}`;
   const ticketControls = document.querySelector<HTMLElement>('#lobby-ticket-controls');
   const ticketInput = document.querySelector<HTMLInputElement>('#lobby-conquest-tickets');
   const ticketApply = document.querySelector<HTMLButtonElement>('#lobby-ticket-apply');
@@ -377,16 +556,18 @@ function renderLobby(room: RoomState): void {
     ticketInput.disabled = !local?.owner || room.phase !== 'lobby';
   }
   if (ticketApply) ticketApply.disabled = !local?.owner || room.phase !== 'lobby';
-  const blueTeamTitle = document.querySelector<HTMLElement>('.blue-team .team-title h3');
-  const redTeamTitle = document.querySelector<HTMLElement>('.red-team .team-title h3');
-  const blueJoin = document.querySelector<HTMLButtonElement>('#join-blue');
-  const redJoin = document.querySelector<HTMLButtonElement>('#join-red');
-  if (blueTeamTitle) blueTeamTitle.textContent = `BLUE · ${factionShortLabel(room.settings.blueFaction)}`;
-  if (redTeamTitle) redTeamTitle.textContent = `RED · ${factionShortLabel(room.settings.redFaction)}`;
-  if (blueJoin) blueJoin.textContent = `BLUE · ${factionShortLabel(room.settings.blueFaction)}`;
-  if (redJoin) redJoin.textContent = `RED · ${factionShortLabel(room.settings.redFaction)}`;
-  document.querySelector<HTMLElement>('.blue-banner-marker')?.setAttribute('title', `BLUE · ${factionLabel(room.settings.blueFaction)} 旗`);
-  document.querySelector<HTMLElement>('.red-banner-marker')?.setAttribute('title', `RED · ${factionLabel(room.settings.redFaction)} 旗`);
+
+  for (const team of TEAM_IDS) {
+    const card = document.querySelector<HTMLElement>(`.${team}-team`);
+    const title = card?.querySelector<HTMLElement>('.team-title h3');
+    const join = document.querySelector<HTMLButtonElement>(`#join-${team}`);
+    const visible = teams.includes(team);
+    card?.classList.toggle('hidden', !visible);
+    join?.classList.toggle('hidden', !visible);
+    if (title && visible) title.textContent = `${team.toUpperCase()} · ${factionShortLabel(roomFaction(room, team))}`;
+    if (join && visible) join.textContent = `${team.toUpperCase()} · ${factionShortLabel(roomFaction(room, team))}`;
+    document.querySelector<HTMLElement>(`.${team}-banner-marker`)?.setAttribute('title', `${team.toUpperCase()} · ${factionLabel(roomFaction(room, team))} 旗`);
+  }
   renderPlayers(room);
   renderDeploymentMap(room);
   renderClassCards(room);
@@ -454,7 +635,7 @@ function startBattle(payload: MatchStartPayload): void {
   currentBattle = new MultiplayerBattle(network, payload, canvas!);
   networkStatus!.textContent = 'SERVER AUTH';
   const subtitle = document.querySelector<HTMLElement>('#battle-subtitle');
-  if (subtitle) subtitle.textContent = `Room ${payload.room.code} · ${gameModeLabel(payload.room.settings.gameMode)} · ${payload.room.settings.blueSquads}v${payload.room.settings.redSquads}`;
+  if (subtitle) subtitle.textContent = `Room ${payload.room.code} · ${mapLabel(payload.room.settings.mapId)} · ${gameModeLabel(payload.room.settings.gameMode)} · ${payload.room.settings.blueSquads}v${payload.room.settings.redSquads}`;
   renderChat();
 }
 
@@ -469,13 +650,9 @@ function returnToTitle(): void {
   battleShell!.classList.add('hidden');
   menuShell!.classList.remove('hidden');
   showScreen('title');
-  document.title = 'Bannerfall — Version 4.4.5';
+  document.title = 'Bannerfall — Version 4.6.1';
 }
 
-network.onConnection = (connected, text) => {
-  connectionStatus!.textContent = text;
-  connectionDot!.classList.toggle('online', connected);
-};
 network.onError = (message) => showError(message);
 network.onNotice = (message) => showError(message);
 network.onChatHistory = (messages) => {
@@ -510,51 +687,119 @@ network.onMatchCountdown = (seconds) => startCountdown(seconds);
 network.onMatchStart = (payload) => startBattle(payload);
 
 for (const button of document.querySelectorAll<HTMLButtonElement>('[data-back="title"]')) {
-  button.addEventListener('click', () => showScreen('title'));
+  button.addEventListener('click', () => {
+    if (!roomActionPending) showScreen('title');
+  });
 }
 
 document.querySelector('#show-create')?.addEventListener('click', () => {
-  try { cleanPlayerName(); showScreen('create'); } catch (error) { showError(String(error instanceof Error ? error.message : error)); }
+  if (!roomActionPending) showScreen('create');
 });
 document.querySelector('#show-join')?.addEventListener('click', () => {
-  try { cleanPlayerName(); showScreen('join'); } catch (error) { showError(String(error instanceof Error ? error.message : error)); }
+  if (!roomActionPending) showScreen('join');
 });
 
-document.querySelector('#show-browser')?.addEventListener('click', async () => {
-  try {
-    cleanPlayerName();
+document.querySelector('#show-browser')?.addEventListener('click', () => {
+  void runRoomAction(async () => {
     await ensureConnected();
     showScreen('browser');
     roomBrowserSummary!.textContent = 'LOADING ROOMS...';
     network.requestRoomList();
-  } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
-  }
+  });
 });
 
-document.querySelector('#refresh-room-list')?.addEventListener('click', async () => {
-  try {
+document.querySelector('#refresh-room-list')?.addEventListener('click', () => {
+  void runRoomAction(async () => {
     await ensureConnected();
     network.requestRoomList();
-  } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
-  }
+  });
 });
+
+function selectedCreateTeamCount(): 2 | 3 | 4 {
+  const mapId: MapId = isMapId(createMapSelect?.value) ? createMapSelect!.value as MapId : 'GRAND_RIVER';
+  const select = document.querySelector<HTMLSelectElement>('#create-team-count');
+  const requested = Math.max(2, Math.min(4, Number(select?.value ?? 2))) as 2 | 3 | 4;
+  return mapId === 'OPEN_FIELD' ? requested : 2;
+}
+
+function refreshCreateArmyBalance(): void {
+  const count = selectedCreateTeamCount();
+  const values: Record<Team, number> = {
+    blue: numberInput('blue-squads', 1, 50, 20),
+    red: numberInput('red-squads', 1, 50, 20),
+    yellow: numberInput('yellow-squads', 1, 50, 20),
+    green: numberInput('green-squads', 1, 50, 20),
+  };
+  const teams = activeTeamsForCount(count);
+  const symmetric = teams.every((team) => values[team] === values.blue);
+  if (createArmyBalance) {
+    createArmyBalance.textContent = `${teams.map((team) => `${team.toUpperCase()} ${values[team]}`).join(' / ')} · ${symmetric ? '対称戦' : '非対称戦 · AI大軍戦に対応'}`;
+    createArmyBalance.classList.toggle('asymmetric', !symmetric);
+  }
+}
 
 const createGameModeSelect = document.querySelector<HTMLSelectElement>('#create-game-mode');
 const createGameModeDescription = document.querySelector<HTMLElement>('#create-game-mode-description');
+const createConstructionSelect = document.querySelector<HTMLSelectElement>('#create-construction');
+const createTeamCountSelect = document.querySelector<HTMLSelectElement>('#create-team-count');
+let rememberedConquestConstruction = 'on';
+
+function refreshCreateTeamOptions(): void {
+  const mapId: MapId = isMapId(createMapSelect?.value) ? createMapSelect!.value as MapId : 'GRAND_RIVER';
+  if (createTeamCountSelect) {
+    createTeamCountSelect.disabled = mapId !== 'OPEN_FIELD';
+    if (mapId !== 'OPEN_FIELD') createTeamCountSelect.value = '2';
+    createTeamCountSelect.title = mapId === 'OPEN_FIELD' ? '平原は2～4Team対応' : '河川は2Team専用';
+  }
+  const count = selectedCreateTeamCount();
+  document.querySelectorAll<HTMLElement>('.team-yellow-setting').forEach((element) => element.classList.toggle('hidden', count < 3));
+  document.querySelectorAll<HTMLElement>('.team-green-setting').forEach((element) => element.classList.toggle('hidden', count < 4));
+  if (count > 2 && createGameModeSelect) {
+    createGameModeSelect.value = 'BATTLE';
+    createGameModeSelect.disabled = true;
+    createGameModeSelect.title = '3/4Team戦は4.6.1では戦闘モード専用です。';
+  } else if (createGameModeSelect) {
+    createGameModeSelect.disabled = false;
+    createGameModeSelect.title = '';
+  }
+  refreshCreateGameModeDescription();
+  refreshCreateArmyBalance();
+  refreshCreateMapPreview();
+}
+
 function refreshCreateGameModeDescription(): void {
   const value = createGameModeSelect?.value;
   const mode: GameMode = isGameMode(value) ? value : 'BATTLE';
-  if (createGameModeDescription) createGameModeDescription.textContent = `${gameModeLabel(mode)}：${gameModeDescription(mode)}`;
+  const teamCount = selectedCreateTeamCount();
+  if (createGameModeDescription) {
+    createGameModeDescription.textContent = teamCount > 2
+      ? `${teamCount}Team戦：平原・戦闘モード専用。最後まで旗が残ったTeamが勝利します。`
+      : mode === 'BATTLE'
+        ? `${gameModeLabel(mode)}：${gameModeDescription(mode)} · ブロック建築は使用不可`
+        : `${gameModeLabel(mode)}：${gameModeDescription(mode)}`;
+  }
+  if (createConstructionSelect) {
+    if (mode === 'BATTLE' || teamCount > 2) {
+      if (!createConstructionSelect.disabled) rememberedConquestConstruction = createConstructionSelect.value === 'off' ? 'off' : 'on';
+      createConstructionSelect.value = 'off';
+      createConstructionSelect.disabled = true;
+      createConstructionSelect.title = teamCount > 2 ? '3/4Team戦では建築を使用しません。' : '戦闘モードではブロック建築は使用できません。';
+    } else {
+      createConstructionSelect.disabled = false;
+      createConstructionSelect.value = rememberedConquestConstruction;
+      createConstructionSelect.title = '';
+    }
+  }
 }
-createGameModeSelect?.addEventListener('change', refreshCreateGameModeDescription);
-refreshCreateGameModeDescription();
 
 const createBlueFaction = document.querySelector<HTMLSelectElement>('#create-blue-faction');
 const createRedFaction = document.querySelector<HTMLSelectElement>('#create-red-faction');
+const createYellowFaction = document.querySelector<HTMLSelectElement>('#create-yellow-faction');
+const createGreenFaction = document.querySelector<HTMLSelectElement>('#create-green-faction');
 const blueFactionSwatch = document.querySelector<HTMLElement>('#blue-faction-swatch');
 const redFactionSwatch = document.querySelector<HTMLElement>('#red-faction-swatch');
+const yellowFactionSwatch = document.querySelector<HTMLElement>('#yellow-faction-swatch');
+const greenFactionSwatch = document.querySelector<HTMLElement>('#green-faction-swatch');
 
 function factionFromSelect(select: HTMLSelectElement | null, fallback: FactionId): FactionId {
   return isFactionId(select?.value) ? select.value : fallback;
@@ -566,65 +811,73 @@ function updateFactionSwatch(element: HTMLElement | null, faction: FactionId): v
   element.title = factionLabel(faction);
 }
 
-function ensureCreateFactionsDistinct(changed: 'blue' | 'red'): void {
-  if (!createBlueFaction || !createRedFaction) return;
-  let blue = factionFromSelect(createBlueFaction, DEFAULT_BLUE_FACTION);
-  let red = factionFromSelect(createRedFaction, DEFAULT_RED_FACTION);
-  if (blue === red) {
-    const alternate = FACTION_IDS.find((candidate) => candidate !== (changed === 'blue' ? blue : red));
-    if (alternate) {
-      if (changed === 'blue') {
-        red = alternate;
-        createRedFaction.value = red;
-      } else {
-        blue = alternate;
-        createBlueFaction.value = blue;
-      }
-    }
+const factionSelects: Record<Team, HTMLSelectElement | null> = {
+  blue: createBlueFaction, red: createRedFaction, yellow: createYellowFaction, green: createGreenFaction,
+};
+const factionSwatches: Record<Team, HTMLElement | null> = {
+  blue: blueFactionSwatch, red: redFactionSwatch, yellow: yellowFactionSwatch, green: greenFactionSwatch,
+};
+const factionFallbacks: Record<Team, FactionId> = {
+  blue: DEFAULT_BLUE_FACTION, red: DEFAULT_RED_FACTION, yellow: DEFAULT_YELLOW_FACTION, green: DEFAULT_GREEN_FACTION,
+};
+
+function ensureCreateFactionsDistinct(changed: Team = 'blue'): void {
+  const teams = activeTeamsForCount(selectedCreateTeamCount());
+  const used = new Set<FactionId>();
+  // Preserve the just-changed value first, then repair duplicates around it.
+  const order = [changed, ...teams.filter((team) => team !== changed)];
+  for (const team of order) {
+    const select = factionSelects[team];
+    if (!select) continue;
+    let faction = factionFromSelect(select, factionFallbacks[team]);
+    if (used.has(faction)) faction = FACTION_IDS.find((candidate) => !used.has(candidate)) ?? faction;
+    select.value = faction;
+    used.add(faction);
   }
-  updateFactionSwatch(blueFactionSwatch, blue);
-  updateFactionSwatch(redFactionSwatch, red);
+  for (const team of TEAM_IDS) updateFactionSwatch(factionSwatches[team], factionFromSelect(factionSelects[team], factionFallbacks[team]));
 }
 
-createBlueFaction?.addEventListener('change', () => ensureCreateFactionsDistinct('blue'));
-createRedFaction?.addEventListener('change', () => ensureCreateFactionsDistinct('red'));
+createGameModeSelect?.addEventListener('change', refreshCreateGameModeDescription);
+createConstructionSelect?.addEventListener('change', () => {
+  if (!createConstructionSelect.disabled) rememberedConquestConstruction = createConstructionSelect.value;
+});
+createMapSelect?.addEventListener('change', refreshCreateTeamOptions);
+createTeamCountSelect?.addEventListener('change', () => { ensureCreateFactionsDistinct(); refreshCreateTeamOptions(); });
+for (const team of TEAM_IDS) factionSelects[team]?.addEventListener('change', () => ensureCreateFactionsDistinct(team));
+for (const id of ['blue-squads', 'red-squads', 'yellow-squads', 'green-squads']) document.querySelector<HTMLInputElement>(`#${id}`)?.addEventListener('input', refreshCreateArmyBalance);
 ensureCreateFactionsDistinct('blue');
-
-document.querySelector('#create-room')?.addEventListener('click', async () => {
-  try {
+refreshCreateTeamOptions();
+document.querySelector('#create-room')?.addEventListener('click', () => {
+  void runRoomAction(async () => {
     const name = cleanPlayerName();
     await ensureConnected();
     const password = document.querySelector<HTMLInputElement>('#create-password')?.value ?? '';
     const visibilitySelect = document.querySelector<HTMLSelectElement>('#create-visibility');
     const visibility: RoomVisibility = visibilitySelect?.value === 'unlisted' ? 'unlisted' : 'public';
-    const gameModeSelect = document.querySelector<HTMLSelectElement>('#create-game-mode');
-    const selectedMode = gameModeSelect?.value;
-    const gameMode: GameMode = isGameMode(selectedMode) ? selectedMode : 'BATTLE';
+    const selectedMap = document.querySelector<HTMLSelectElement>('#create-map')?.value;
+    const mapId: MapId = isMapId(selectedMap) ? selectedMap : 'GRAND_RIVER';
+    const teamCount = selectedCreateTeamCount();
+    const selectedMode = createGameModeSelect?.value;
+    const gameMode: GameMode = teamCount > 2 ? 'BATTLE' : isGameMode(selectedMode) ? selectedMode : 'BATTLE';
     const introEnabled = document.querySelector<HTMLSelectElement>('#create-intro')?.value !== 'off';
-    const constructionEnabled = document.querySelector<HTMLSelectElement>('#create-construction')?.value !== 'off';
+    const constructionEnabled = teamCount === 2 && gameMode === 'CONQUEST' && createConstructionSelect?.value !== 'off';
     ensureCreateFactionsDistinct('blue');
-    const blueFaction = factionFromSelect(createBlueFaction, DEFAULT_BLUE_FACTION);
-    const redFaction = factionFromSelect(createRedFaction, DEFAULT_RED_FACTION);
     const blueSquads = numberInput('blue-squads', 1, 50, 20);
     const redSquads = numberInput('red-squads', 1, 50, 20);
+    const yellowSquads = numberInput('yellow-squads', 1, 50, 20);
+    const greenSquads = numberInput('green-squads', 1, 50, 20);
     const conquestTickets = Math.max(100, Math.min(400, Math.max(blueSquads, redSquads) * 8));
-    network.createRoom(
-      name,
-      password,
-      blueSquads,
-      redSquads,
-      numberInput('respawn-seconds', 5, 60, 20),
-      conquestTickets,
-      visibility,
-      gameMode,
-      introEnabled,
-      constructionEnabled,
-      blueFaction,
-      redFaction,
-    );
-  } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
-  }
+    network.createRoom(name, password, {
+      blueSquads, redSquads, yellowSquads, greenSquads, teamCount,
+      respawnSeconds: numberInput('respawn-seconds', 5, 60, 20),
+      conquestTickets, visibility, gameMode, introEnabled, constructionEnabled,
+      blueFaction: factionFromSelect(createBlueFaction, DEFAULT_BLUE_FACTION),
+      redFaction: factionFromSelect(createRedFaction, DEFAULT_RED_FACTION),
+      yellowFaction: factionFromSelect(createYellowFaction, DEFAULT_YELLOW_FACTION),
+      greenFaction: factionFromSelect(createGreenFaction, DEFAULT_GREEN_FACTION),
+      mapId,
+    });
+  });
 });
 
 document.querySelector('#lobby-ticket-apply')?.addEventListener('click', () => {
@@ -637,21 +890,21 @@ document.querySelector('#lobby-ticket-apply')?.addEventListener('click', () => {
   network.setConquestTickets(tickets);
 });
 
-document.querySelector('#join-room')?.addEventListener('click', async () => {
-  try {
-    const name = cleanPlayerName();
-    await ensureConnected();
+document.querySelector('#join-room')?.addEventListener('click', () => {
+  void runRoomAction(async () => {
     const code = document.querySelector<HTMLInputElement>('#join-code')?.value ?? '';
     const password = document.querySelector<HTMLInputElement>('#join-password')?.value ?? '';
     if (code.trim().length !== 6) throw new Error('6文字のRoom Codeを入力してください。');
+    const name = cleanPlayerName();
+    await ensureConnected();
     network.joinRoom(name, code, password);
-  } catch (error) {
-    showError(error instanceof Error ? error.message : String(error));
-  }
+  });
 });
 
 document.querySelector('#join-blue')?.addEventListener('click', () => network.changeTeam('blue'));
 document.querySelector('#join-red')?.addEventListener('click', () => network.changeTeam('red'));
+document.querySelector('#join-yellow')?.addEventListener('click', () => network.changeTeam('yellow'));
+document.querySelector('#join-green')?.addEventListener('click', () => network.changeTeam('green'));
 document.querySelector('#lobby-class-cards')?.addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-lobby-class]') : null;
   const value = target?.dataset.lobbyClass;
@@ -679,21 +932,23 @@ document.querySelector('#return-title')?.addEventListener('click', () => returnT
 
 document.querySelector('#copy-invite')?.addEventListener('click', async () => {
   if (!currentRoom) return;
-  const server = serverUrlInput!.value.trim();
-  const url = new URL(window.location.origin + window.location.pathname);
-  if (server) url.searchParams.set('server', server);
-  url.searchParams.set('room', currentRoom.code);
-  const inviteText = `Bannerfall Room: ${currentRoom.code}\n${url.toString()}`;
+  const code = currentRoom.code;
+  let inviteText = code;
+  if (window.top === window) {
+    const url = new URL(window.location.pathname, window.location.href);
+    url.searchParams.set('room', code);
+    inviteText = `Bannerfall Room: ${code}\n${url.toString()}`;
+  }
   try {
     await copyText(inviteText);
     const button = document.querySelector<HTMLButtonElement>('#copy-invite');
     if (button) {
       const oldLabel = button.textContent;
-      button.textContent = `COPIED ${currentRoom.code}`;
+      button.textContent = `COPIED ${code}`;
       window.setTimeout(() => { button.textContent = oldLabel; }, 1600);
     }
   } catch {
-    showError(`Inviteのコピーに失敗しました。Room Code: ${currentRoom.code}`);
+    showError(`招待をコピーできませんでした。ルームコードは ${code} です。`);
   }
 });
 

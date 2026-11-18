@@ -95,13 +95,11 @@ function distance(a: Vec2, b: Vec2): number {
 export class ResourceSystem {
   readonly nodes: ResourceNodeState[];
   readonly stockpiles: Record<Team, ResourceStockpile> = {
-    blue: emptyStockpile(),
-    red: emptyStockpile(),
+    blue: emptyStockpile(), red: emptyStockpile(), yellow: emptyStockpile(), green: emptyStockpile(),
   };
 
   private readonly peakStockpiles: Record<Team, ResourceStockpile> = {
-    blue: emptyStockpile(),
-    red: emptyStockpile(),
+    blue: emptyStockpile(), red: emptyStockpile(), yellow: emptyStockpile(), green: emptyStockpile(),
   };
 
   private readonly gatheredTotals = new Map<string, number>();
@@ -386,8 +384,8 @@ export class ResourceSystem {
   createNetworkState(): ResourceNetworkState {
     return {
       stockpiles: {
-        blue: copyStockpile(this.stockpiles.blue),
-        red: copyStockpile(this.stockpiles.red),
+        blue: copyStockpile(this.stockpiles.blue), red: copyStockpile(this.stockpiles.red),
+        yellow: copyStockpile(this.stockpiles.yellow), green: copyStockpile(this.stockpiles.green),
       },
       nodes: this.nodes.map((node) => ({ ...node, position: { ...node.position } })),
       gatheredTotals: [...this.gatheredTotals.entries()].map(([formationId, total]) => ({ formationId, total })),
@@ -404,6 +402,8 @@ export class ResourceSystem {
   applyNetworkState(state: ResourceNetworkState): void {
     this.stockpiles.blue = copyStockpile(state.stockpiles.blue);
     this.stockpiles.red = copyStockpile(state.stockpiles.red);
+    this.stockpiles.yellow = copyStockpile(state.stockpiles.yellow ?? emptyStockpile());
+    this.stockpiles.green = copyStockpile(state.stockpiles.green ?? emptyStockpile());
     this.noteStockpilePeak('blue');
     this.noteStockpilePeak('red');
     const byId = new Map(state.nodes.map((node) => [node.id, node]));

@@ -17,7 +17,7 @@ export const CONSTRUCTION_DEFINITIONS: Readonly<Record<ConstructionBlockKind, Co
   loophole: Object.freeze({ label: '銃眼', maxHp: 430, bulletDamageMultiplier: 0.24, artilleryDamageMultiplier: 1.20, explosionDamageMultiplier: 0.78 }),
   door: Object.freeze({ label: '扉', maxHp: 460, bulletDamageMultiplier: 0.22, artilleryDamageMultiplier: 1.22, explosionDamageMultiplier: 0.80 }),
   roadTile: Object.freeze({ label: '道路', maxHp: 260, bulletDamageMultiplier: 0.0, artilleryDamageMultiplier: 0.65, explosionDamageMultiplier: 0.55 }),
-  bridgeTile: Object.freeze({ label: '橋', maxHp: 380, bulletDamageMultiplier: 0.0, artilleryDamageMultiplier: 0.90, explosionDamageMultiplier: 0.70 }),
+  bridgeTile: Object.freeze({ label: '橋', maxHp: 620, bulletDamageMultiplier: 0.05, artilleryDamageMultiplier: 0.90, explosionDamageMultiplier: 0.70 }),
 });
 
 export class ConstructionBlock {

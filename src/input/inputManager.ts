@@ -15,6 +15,7 @@ export class InputManager {
   private panDelta: Vec2 = { x: 0, y: 0 };
   private wheelDelta = 0;
   private queuedClassSelection: SquadClass | null = null;
+  private toolWeapon: 'axe' | 'pickaxe' = 'axe';
   private blocked = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -138,7 +139,11 @@ export class InputManager {
   consumeWeaponSelection(): WeaponType | null {
     if (this.consumePressed('1')) return 'musket';
     if (this.consumePressed('2')) return 'bayonet';
-    if (this.consumePressed('3')) return 'axe';
+    if (this.consumePressed('3')) {
+      const selected = this.toolWeapon;
+      this.toolWeapon = this.toolWeapon === 'axe' ? 'pickaxe' : 'axe';
+      return selected;
+    }
     return null;
   }
 

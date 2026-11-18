@@ -1,13 +1,15 @@
 import { Banner } from '../entities/banner';
 import { Formation } from '../entities/formation';
 import { GAME_CONFIG } from '../game/config';
-import { BATTLEFIELD_MAP } from '../game/battlefieldMap';
+import { BATTLEFIELD_MAP, type BattlefieldMap } from '../game/battlefieldMap';
 import { artilleryProfile, chargeProfile, volleyProfile } from '../game/classProfiles';
 import {
   SQUAD_CLASSES,
+  TEAM_IDS,
   canBannerAttackClass,
   isArtilleryClass,
   isChargeCavalryClass,
+  teamStartingDirection,
   type SquadClass,
   type Team,
   type Vec2,
@@ -71,11 +73,17 @@ function zeroScores(): Record<SquadClass, number> {
 }
 
 export class BattleAiSystem {
+  constructor(private readonly battlefieldMap: BattlefieldMap = BATTLEFIELD_MAP) {}
   private readonly controllers = new Map<string, Controller>();
-  private navigationBlockedCells: Record<'blue' | 'red', ReadonlySet<string>> = { blue: new Set(), red: new Set() };
+  private navigationBlockedCells: Record<Team, ReadonlySet<string>> = { blue: new Set(), red: new Set(), yellow: new Set(), green: new Set() };
+  private navigationOpenedCells: ReadonlySet<string> = new Set();
 
-  setNavigationBlockedCells(blue: ReadonlySet<string>, red: ReadonlySet<string> = blue): void {
-    this.navigationBlockedCells = { blue, red };
+  setNavigationBlockedCells(blue: ReadonlySet<string>, red: ReadonlySet<string> = blue, yellow: ReadonlySet<string> = blue, green: ReadonlySet<string> = blue): void {
+    this.navigationBlockedCells = { blue, red, yellow, green };
+  }
+
+  setNavigationOpenedCells(cells: ReadonlySet<string>): void {
+    this.navigationOpenedCells = cells;
   }
 
   invalidateNavigation(): void {
@@ -108,15 +116,13 @@ export class BattleAiSystem {
   update(formations: Formation[], banners: Banner[], dt: number): AiCommand[] {
     const alive = formations.filter((formation) => formation.aliveCount() > 0);
     const aliveById = new Map(alive.map((formation) => [formation.id, formation]));
-    const aliveBlue = alive.filter((formation) => formation.team === 'blue');
-    const aliveRed = alive.filter((formation) => formation.team === 'red');
     const locks = new Map<string, number>();
     for (const controller of this.controllers.values()) {
       if (!controller.targetId || !aliveById.has(controller.targetId)) continue;
       locks.set(controller.targetId, (locks.get(controller.targetId) ?? 0) + 1);
     }
 
-    const activeBannerAttackers = new Map<Team, number>([['blue', 0], ['red', 0]]);
+    const activeBannerAttackers = new Map<Team, number>(TEAM_IDS.map((team) => [team, 0] as [Team, number]));
     for (const formation of formations) {
       if (formation.mode !== 'bannerAttack' || formation.aliveCount() === 0) continue;
       activeBannerAttackers.set(formation.team, (activeBannerAttackers.get(formation.team) ?? 0) + 1);
@@ -131,10 +137,13 @@ export class BattleAiSystem {
       controller.reformCooldown = Math.max(0, controller.reformCooldown - dt);
       controller.navRepathTimer = Math.max(0, controller.navRepathTimer - dt);
 
-      const enemies = formation.team === 'blue' ? aliveRed : aliveBlue;
-      const allies = formation.team === 'blue' ? aliveBlue : aliveRed;
+      const enemies = alive.filter((candidate) => candidate.team !== formation.team);
+      const allies = alive.filter((candidate) => candidate.team === formation.team);
       const ownBanner = banners.find((banner) => banner.team === formation.team)!;
-      const enemyBanner = banners.find((banner) => banner.team !== formation.team)!;
+      const enemyBanner = banners
+        .filter((banner) => banner.team !== formation.team && !banner.destroyed)
+        .sort((a, b) => this.distance(formation.center, a.position) - this.distance(formation.center, b.position))[0]
+        ?? banners.find((banner) => banner.team !== formation.team)!;
       let target = controller.targetId ? aliveById.get(controller.targetId) ?? null : null;
       if (!target || target.team === formation.team || target.mode === 'routed') {
         controller.targetId = null;
@@ -237,7 +246,7 @@ export class BattleAiSystem {
         }
       }
 
-      if (command.chargeTarget && !BATTLEFIELD_MAP.linePassable(formation.center, command.chargeTarget, 1)) {
+      if (command.chargeTarget && !this.battlefieldMap.linePassable(formation.center, command.chargeTarget, 1)) {
         // Do not commit a charge through a mountain ridge. Navigate to a clear
         // approach first, then the next AI think can issue the actual charge.
         command.chargeTarget = null;
@@ -247,7 +256,7 @@ export class BattleAiSystem {
       if (target && !command.reform && !command.chargeTarget && !command.bannerAttackTarget && !command.artilleryTarget) {
         command.move = this.movementForIntent(formation, target, controller, enemyBanner.position, dt);
       } else if (!target && (controller.intent === 'advance' || controller.intent === 'breakthrough')) {
-        const laneTarget = BATTLEFIELD_MAP.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner.position);
+        const laneTarget = this.battlefieldMap.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner.position);
         command.move = this.navigateToward(formation, laneTarget, controller, dt);
       }
 
@@ -388,9 +397,12 @@ export class BattleAiSystem {
       cavalry: GAME_CONFIG.ai.classSoftCapCavalry,
       hussar: GAME_CONFIG.ai.classSoftCapHussar,
       cuirassier: GAME_CONFIG.ai.classSoftCapCuirassier,
+      lancer: 4,
+      militaryBand: 2,
       artillery: GAME_CONFIG.ai.classSoftCapArtillery,
       heavyArtillery: GAME_CONFIG.ai.classSoftCapHeavyArtillery,
       horseArtillery: GAME_CONFIG.ai.classSoftCapHorseArtillery,
+      mortar: 2,
     };
     for (const value of SQUAD_CLASSES) {
       if (counts[value] > caps[value]) scores[value] -= (counts[value] - caps[value]) * (value.includes('Artillery') || value === 'artillery' ? 28 : 17);
@@ -433,7 +445,7 @@ export class BattleAiSystem {
 
     if (!target) {
       controller.intent = ownBanner.underAttackTimer > 0 ? 'defend' : 'advance';
-      command.move = BATTLEFIELD_MAP.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
+      command.move = this.battlefieldMap.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
       return;
     }
 
@@ -442,7 +454,7 @@ export class BattleAiSystem {
     const routedOrBroken = target.mode === 'routed' || target.morale <= GAME_CONFIG.morale.breakthroughMoraleThreshold;
     if (routedOrBroken && formation.morale > 45) {
       controller.intent = 'breakthrough';
-      command.move = BATTLEFIELD_MAP.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
+      command.move = this.battlefieldMap.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
       return;
     }
 
@@ -454,7 +466,7 @@ export class BattleAiSystem {
     );
     if (nearbyBreakthrough && formation.morale > 52 && distance > volley.defensiveRange) {
       controller.intent = 'breakthrough';
-      command.move = BATTLEFIELD_MAP.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
+      command.move = this.battlefieldMap.attackLaneDirection(formation.team, formation.id, formation.center, enemyBanner.position);
       return;
     }
 
@@ -600,7 +612,7 @@ export class BattleAiSystem {
   private movementForIntent(formation: Formation, target: Formation, controller: Controller, enemyBanner: Vec2, dt: number): Vec2 {
     if (formation.mode !== 'line') return { x: 0, y: 0 };
     if (controller.intent === 'breakthrough') {
-      const laneTarget = BATTLEFIELD_MAP.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner);
+      const laneTarget = this.battlefieldMap.attackLaneTarget(formation.team, formation.id, formation.center, enemyBanner);
       return this.navigateToward(formation, laneTarget, controller, dt);
     }
 
@@ -658,25 +670,38 @@ export class BattleAiSystem {
     if (stuck) {
       controller.navDetourPhase += 1;
       const phase = controller.navDetourPhase * 1.73 + this.numericFormationIndex(formation.id) * 0.91;
-      target = BATTLEFIELD_MAP.nearestPassablePoint({
+      target = this.battlefieldMap.nearestPassablePoint({
         x: target.x + Math.cos(phase) * 260,
         y: target.y + Math.sin(phase) * 260,
-      }, 16, this.navigationBlockedCells[formation.team]);
+      }, 16, this.navigationBlockedCells[formation.team], this.navigationOpenedCells);
       directDistance = this.distance(formation.center, target);
     }
-    const directClear = BATTLEFIELD_MAP.linePassable(formation.center, target, isArtilleryClass(formation.squadClass) ? 1 : 0, this.navigationBlockedCells[formation.team]);
+    const blockedCells = this.navigationBlockedCells[formation.team];
+    // OPEN_FIELD is static plain terrain. Running full A* for every long-range move
+    // on an empty 272x152 grid was much more expensive than the river map and caused
+    // noticeable server-side frame spikes. If no construction exists, direct travel
+    // is guaranteed clear. If fortifications exist, only test the actual line.
+    const directClear = this.battlefieldMap.mapId === 'OPEN_FIELD' && blockedCells.size === 0
+      ? true
+      : this.battlefieldMap.linePassable(
+        formation.center,
+        target,
+        isArtilleryClass(formation.squadClass) ? 1 : 0,
+        blockedCells,
+        this.navigationOpenedCells,
+      );
 
-    if (directClear && directDistance < 900) {
+    if (directClear && (this.battlefieldMap.mapId === 'OPEN_FIELD' || directDistance < 900)) {
       controller.navPath = [];
       controller.navTarget = { ...target };
-      controller.navRepathTimer = 0.7;
+      controller.navRepathTimer = this.battlefieldMap.mapId === 'OPEN_FIELD' ? 1.4 : 0.7;
       controller.navStuckTimer = 0;
       formation.debugNavPath = [target];
       return this.toward(formation.center, target);
     }
 
     if (targetChanged || stuck || controller.navRepathTimer <= 0 || controller.navPath.length === 0) {
-      const path = BATTLEFIELD_MAP.findPath(formation.center, target, formation.squadClass, 14000, this.navigationBlockedCells[formation.team]);
+      const path = this.battlefieldMap.findPath(formation.center, target, formation.squadClass, 14000, this.navigationBlockedCells[formation.team], this.navigationOpenedCells);
       controller.navPath = path;
       controller.navTarget = { ...target };
       controller.navRepathTimer = 1.8 + Math.random() * 1.2;
@@ -737,7 +762,7 @@ export class BattleAiSystem {
         // Perfectly overlapping squads need a deterministic direction or they will
         // make identical decisions forever.
         const angle = (this.numericFormationIndex(formation.id) * 2.399963229728653)
-          + (formation.team === 'red' ? Math.PI : 0);
+          + teamStartingDirection(formation.team);
         awayX = Math.cos(angle);
         awayY = Math.sin(angle);
       } else {
@@ -764,7 +789,7 @@ export class BattleAiSystem {
       x: formation.center.x + candidate.x * probeDistance,
       y: formation.center.y + candidate.y * probeDistance,
     };
-    if (!BATTLEFIELD_MAP.linePassable(formation.center, probe, isArtilleryClass(formation.squadClass) ? 1 : 0)) {
+    if (!this.battlefieldMap.linePassable(formation.center, probe, isArtilleryClass(formation.squadClass) ? 1 : 0)) {
       return move;
     }
     return candidate;
@@ -778,10 +803,10 @@ export class BattleAiSystem {
   private distributedTarget(formation: Formation, rawTarget: Vec2): Vec2 {
     const index = this.numericFormationIndex(formation.id);
     const goldenAngle = 2.399963229728653;
-    const angle = index * goldenAngle + (formation.team === 'red' ? Math.PI : 0);
+    const angle = index * goldenAngle + teamStartingDirection(formation.team);
     const radiusBase = isArtilleryClass(formation.squadClass) ? 185 : isChargeCavalryClass(formation.squadClass) ? 155 : 125;
     const radius = radiusBase + (index % 4) * 28;
-    return BATTLEFIELD_MAP.nearestPassablePoint({
+    return this.battlefieldMap.nearestPassablePoint({
       x: rawTarget.x + Math.cos(angle) * radius,
       y: rawTarget.y + Math.sin(angle) * radius,
     }, 14);

@@ -3,12 +3,12 @@ import { Formation } from '../entities/formation';
 import { Fieldwork } from '../entities/fieldwork';
 import { ConstructionBlock, CONSTRUCTION_DEFINITIONS } from '../entities/constructionBlock';
 import { GAME_CONFIG } from '../game/config';
-import { BATTLEFIELD_MAP } from '../game/battlefieldMap';
-import { constructionBlocksProjectiles, segmentIntersectsConstructionBlock } from '../game/constructionSystem';
+import { constructionBlocksProjectiles, isLoopholeFriendlyShot, segmentIntersectsConstructionBlock } from '../game/constructionSystem';
 import { artilleryProfile } from '../game/classProfiles';
 import { artilleryGunLocalOffset, artilleryTargetLocalOffset } from '../game/formationSystem';
 import type { Team, Vec2 } from '../game/types';
 import { armorDamageMultiplier } from '../game/upgradeSystem';
+import type { TerrainDamageSystem } from '../game/terrainDamageSystem';
 
 export interface ArtilleryExplosion {
   position: Vec2;
@@ -57,6 +57,7 @@ export function updateArtilleryShells(
   formations: Formation[],
   fieldworks: Fieldwork[],
   constructionBlocks: ConstructionBlock[],
+  terrainDamage: TerrainDamageSystem,
   dt: number,
   explosions: ArtilleryExplosion[],
   onDeath: (position: Vec2, team: Team, impactDirection: Vec2, sourceFormationId: string, targetFormationId: string) => void,
@@ -66,15 +67,22 @@ export function updateArtilleryShells(
     if (!shell.active) continue;
     const previous = { ...shell.position };
     let impact = shell.update(dt);
-    if (!impact) {
-      const mountainHit = BATTLEFIELD_MAP.segmentHitsMountain(previous, shell.position);
+    if (!impact && shell.sourceClass !== 'mortar') {
+      // Direct-fire artillery must respect terrain/building occlusion. Mortars are
+      // the deliberate exception: their shell represents a high arc and only
+      // becomes collision-relevant at the target point.
+      const mountainHit = terrainDamage.segmentHitsMountain(previous, shell.position);
       if (mountainHit) {
         shell.position = mountainHit;
+        terrainDamage.damageAt(mountainHit, shell.blastDamage, 'artillery');
         shell.active = false;
         impact = true;
       } else {
         for (const block of constructionBlocks) {
           if (!block.active || !constructionBlocksProjectiles(block.kind) || !segmentIntersectsConstructionBlock(previous, shell.position, block, 4)) continue;
+          // Friendly cannon fire may leave through the protected side of a loophole,
+          // mirroring friendly musket fire. Enemy fire and reverse-direction fire hit it.
+          if (isLoopholeFriendlyShot(block, shell.team, shell.velocity)) continue;
           shell.position = { ...block.position };
           if (block.team !== shell.team) {
             block.takeDamage(shell.blastDamage * CONSTRUCTION_DEFINITIONS[block.kind].artilleryDamageMultiplier * 1.65);
@@ -87,6 +95,7 @@ export function updateArtilleryShells(
     }
     if (!impact) continue;
     explodedNearAnything = true;
+    terrainDamage.damageAt(shell.position, shell.blastDamage, 'explosion');
     explosions.push({
       position: { ...shell.position },
       life: GAME_CONFIG.effects.artilleryExplosionLifetime,
@@ -123,7 +132,7 @@ export function updateArtilleryShells(
         const dy = soldier.position.y - shell.position.y;
         const distance = Math.hypot(dx, dy);
         if (distance > shell.blastRadius) continue;
-        if (BATTLEFIELD_MAP.segmentHitsMountain(shell.position, soldier.position)) continue;
+        if (terrainDamage.segmentHitsMountain(shell.position, soldier.position)) continue;
         const blockedByWall = constructionBlocks.some((block) => block.active
           && constructionBlocksProjectiles(block.kind)
           && segmentIntersectsConstructionBlock(shell.position, soldier.position, block, 1));

@@ -1,5 +1,5 @@
-export const GAME_VERSION = '4.4.5';
-export const PROTOCOL_VERSION = 444;
+export const GAME_VERSION = '4.6.1';
+export const PROTOCOL_VERSION = 460;
 
 import type { FormationMode } from '../entities/formation';
 import type { GameMode } from '../game/gameMode';
@@ -11,6 +11,8 @@ import type { ConquestNetState } from '../game/conquestSystem';
 import type { EquipmentUpgradeKind, UpgradeTier } from '../game/upgradeSystem';
 import type { ConstructionBlockKind } from '../entities/constructionBlock';
 import type { ConstructionNetworkState, ConstructionWorkNetState } from '../game/constructionSystem';
+import type { TerrainCellNetState } from '../game/terrainDamageSystem';
+import type { MapId } from '../game/battlefieldMap';
 
 export type RoomPhase = 'lobby' | 'countdown' | 'battle';
 export type RoomVisibility = 'public' | 'unlisted';
@@ -18,6 +20,9 @@ export type RoomVisibility = 'public' | 'unlisted';
 export interface RoomSettings {
   blueSquads: number;
   redSquads: number;
+  yellowSquads: number;
+  greenSquads: number;
+  teamCount: 2 | 3 | 4;
   respawnSeconds: number;
   conquestTickets: number;
   passwordProtected: boolean;
@@ -27,6 +32,9 @@ export interface RoomSettings {
   constructionEnabled: boolean;
   blueFaction: FactionId;
   redFaction: FactionId;
+  yellowFaction: FactionId;
+  greenFaction: FactionId;
+  mapId: MapId;
 }
 
 export interface LobbyPlayer {
@@ -54,7 +62,7 @@ export interface RoomState {
   settings: RoomSettings;
   players: LobbyPlayer[];
   ownerId: string;
-  slots: { blue: TeamSlotState; red: TeamSlotState };
+  slots: Record<Team, TeamSlotState>;
 }
 
 
@@ -66,6 +74,9 @@ export interface RoomBrowserEntry {
   maxPlayers: number;
   blueSquads: number;
   redSquads: number;
+  yellowSquads: number;
+  greenSquads: number;
+  teamCount: 2 | 3 | 4;
   respawnSeconds: number;
   conquestTickets: number;
   passwordProtected: boolean;
@@ -73,10 +84,17 @@ export interface RoomBrowserEntry {
   redHumans: number;
   blueAvailable: number;
   redAvailable: number;
+  yellowHumans: number;
+  greenHumans: number;
+  yellowAvailable: number;
+  greenAvailable: number;
   gameMode: GameMode;
   introEnabled: boolean;
   blueFaction: FactionId;
   redFaction: FactionId;
+  yellowFaction: FactionId;
+  greenFaction: FactionId;
+  mapId: MapId;
   joinable: boolean;
 }
 
@@ -121,6 +139,7 @@ export type PlayerAction =
   | { type: 'formation_shape'; formationId: string; shape: FormationShape }
   | { type: 'construction_place'; formationId: string; kind: ConstructionBlockKind; target: Vec2; direction: number }
   | { type: 'construction_attack'; formationId: string; blockId: string }
+  | { type: 'terrain_attack'; formationId: string; target: Vec2 }
   | { type: 'construction_dismantle'; formationId: string; blockId: string };
 
 export interface SoldierNetState {
@@ -163,6 +182,8 @@ export interface FormationNetState {
   forcedMarch: boolean;
   fieldworkKits: number;
   grenadeCooldown: number;
+  bandCooldown: number;
+  supportBuffTimer: number;
   baseRecoveryRemaining: number | null;
   soldiers: SoldierNetState[];
 }
@@ -219,12 +240,16 @@ export interface FieldworkNetState {
 export type BattlePresentationEvent =
   | { kind: 'volley'; formationId: string; team: Team; x: number; y: number; direction: number; count: number }
   | { kind: 'artillery_fire'; formationId: string; team: Team; squadClass: SquadClass; x: number; y: number; direction: number }
-  | { kind: 'death'; team: Team; x: number; y: number; impactX: number; impactY: number };
+  | { kind: 'death'; team: Team; x: number; y: number; impactX: number; impactY: number }
+  | { kind: 'band_perform'; formationId: string; team: Team; x: number; y: number };
 
 export interface BattleNetSnapshot {
   seq: number;
   time: number;
   winner: Team | null;
+  activeTeams: Team[];
+  bannerStates: Array<{ team: Team; hp: number; maxHp: number; underAttack: number }>;
+  reinforcementWaves: Record<Team, number>;
   conquest: ConquestNetState | null;
   blueBannerHp: number;
   redBannerHp: number;
@@ -239,6 +264,7 @@ export interface BattleNetSnapshot {
   fieldworks: FieldworkNetState[];
   recruitments: RecruitmentNetState[];
   constructionWork: ConstructionWorkNetState[];
+  terrain: TerrainCellNetState[];
 }
 
 export type ClientMessage =

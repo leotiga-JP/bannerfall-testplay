@@ -1,11 +1,11 @@
 {
   "name": "bannerfall-v4",
   "private": true,
-  "version": "0.4.4-5",
+  "version": "0.4.6-1",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -p . && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {

@@ -59,6 +59,9 @@ export class Formation {
   forcedMarch = false;
   fieldworkKits = 0;
   grenadeCooldown = 0;
+  bandCooldown = 0;
+  bandPerformanceTimer = 0;
+  supportBuffTimer = 0;
   weaponTier: UpgradeTier = 1;
   armorTier: UpgradeTier = 1;
   artilleryPerformanceTier: UpgradeTier = 1;
@@ -69,6 +72,7 @@ export class Formation {
   private soldierCapacity = 0;
   private movedThisFrame = false;
   private movedLastUpdate = false;
+  private readonly slotOverrides = new Map<number, Vec2>();
 
   constructor(
     id: string,
@@ -118,6 +122,7 @@ export class Formation {
     this.chargeVictims.clear();
     this.movedThisFrame = false;
     this.movedLastUpdate = false;
+    this.slotOverrides.clear();
     this.morale = GAME_CONFIG.morale.max;
     this.moraleShockTimer = 0;
     this.routTravelled = 0;
@@ -125,6 +130,9 @@ export class Formation {
     this.forcedMarch = false;
     this.fieldworkKits = fieldworkKitCapacity(squadClass);
     this.grenadeCooldown = 0;
+    this.bandCooldown = 0;
+    this.bandPerformanceTimer = 0;
+    this.supportBuffTimer = 0;
     const spec = this.classSpec();
     for (const soldier of this.soldiers) {
       soldier.formationSlotIndex = soldier.slotIndex;
@@ -143,6 +151,9 @@ export class Formation {
     this.forcedMarch = false;
     this.fieldworkKits = fieldworkKitCapacity(squadClass);
     this.grenadeCooldown = 0;
+    this.bandCooldown = 0;
+    this.bandPerformanceTimer = 0;
+    this.supportBuffTimer = 0;
   }
 
   relocate(center: Vec2, direction: number): void {
@@ -388,11 +399,14 @@ export class Formation {
   }
 
   update(dt: number): void {
-    this.reloadTimer = Math.max(0, this.reloadTimer - dt);
+    this.reloadTimer = Math.max(0, this.reloadTimer - dt * (this.supportBuffTimer > 0 ? 1.22 : 1));
     this.spawnProtectionTimer = Math.max(0, this.spawnProtectionTimer - dt);
     this.moraleShockTimer = Math.max(0, this.moraleShockTimer - dt);
     this.rallyGraceTimer = Math.max(0, this.rallyGraceTimer - dt);
     this.grenadeCooldown = Math.max(0, this.grenadeCooldown - dt);
+    this.bandCooldown = Math.max(0, this.bandCooldown - dt);
+    this.bandPerformanceTimer = Math.max(0, this.bandPerformanceTimer - dt);
+    this.supportBuffTimer = Math.max(0, this.supportBuffTimer - dt);
     for (const soldier of this.soldiers) soldier.update(dt);
 
     if (isArtilleryClass(this.squadClass) && this.mode === 'line') {
@@ -437,7 +451,7 @@ export class Formation {
 
     for (const soldier of this.soldiers) {
       if (soldier.dead) continue;
-      const target = this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
+      const target = this.slotOverrides.get(soldier.formationSlotIndex) ?? this.slotPosition(soldier.formationSlotIndex, this.layoutCount);
       const dx = target.x - soldier.position.x;
       const dy = target.y - soldier.position.y;
       const distance = Math.hypot(dx, dy);
@@ -614,7 +628,9 @@ export class Formation {
     const base = player ? spec.playerMoveSpeed : spec.aiMoveSpeed;
     // Column is a marching formation: narrower frontage makes movement slightly easier,
     // without turning formation choice into a raw combat-stat upgrade.
-    return base * (this.formationShape === 'column' ? 1.08 : 1);
+    const formationMultiplier = this.formationShape === 'column' ? 1.08 : 1;
+    const supportMultiplier = this.supportBuffTimer > 0 ? 1.18 : 1;
+    return base * formationMultiplier * supportMultiplier;
   }
 
   forcedMarchMultiplier(): number {
@@ -651,6 +667,13 @@ export class Formation {
       && this.morale <= GAME_CONFIG.morale.routThreshold
       && this.aliveCount() > 0;
   }
+
+  setSlotOverride(index: number, target: Vec2 | null): void {
+    if (target) this.slotOverrides.set(index, { ...target });
+    else this.slotOverrides.delete(index);
+  }
+
+  clearSlotOverrides(): void { this.slotOverrides.clear(); }
 
   slotPosition(index: number, count = this.layoutCount): Vec2 {
     const layout = this.layoutFor(index, count);
@@ -723,11 +746,13 @@ export class Formation {
       case 'lightInfantry':
       case 'grenadier':
       case 'sharpshooter':
-      case 'engineer': return 4;
+      case 'engineer':
+      case 'militaryBand': return 4;
       case 'dragoon':
       case 'cavalry':
       case 'hussar':
-      case 'cuirassier': return 3;
+      case 'cuirassier':
+      case 'lancer': return 3;
       default: return this.classSpec().rows;
     }
   }

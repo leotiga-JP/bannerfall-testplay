@@ -13,15 +13,16 @@ import { type ArtilleryExplosion, createArtilleryShells, updateArtilleryShells }
 import { MeleeSystem, type MeleeStrike } from '../systems/meleeSystem';
 import { Camera } from './camera';
 import { GAME_CONFIG } from './config';
-import { BATTLEFIELD_MAP, MAP_SITES } from './battlefieldMap';
+import { BATTLEFIELD_MAP, BattlefieldMap, MAP_SITES, type MapId } from './battlefieldMap';
 import { minimapRect, type MinimapPosition } from './minimapLayout';
 import { artilleryGunLocalOffset } from './formationSystem';
-import { SQUAD_CLASSES, canBannerAttackClass, canVolleyClass, classLabel as squadClassLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, nextFormationShape, type FormationShape, type SquadClass, type Team, type Vec2, type WeaponType } from './types';
+import { SQUAD_CLASSES, TEAM_IDS, canBannerAttackClass, canVolleyClass, classLabel as squadClassLabel, formationShapeLabel, isArtilleryClass, isChargeCavalryClass, nextFormationShape, teamPrefix, teamStartingDirection, type FormationShape, type SquadClass, type Team, type Vec2, type WeaponType } from './types';
 import { artilleryProfile, artilleryTargetDistance, artilleryTargetIssue, chargeProfile, fieldworkKitCapacity, volleyProfile, type ArtilleryTargetIssue } from './classProfiles';
 import { ArtilleryShell } from '../entities/artilleryShell';
 import { Projectile } from '../entities/projectile';
 import { Fieldwork } from '../entities/fieldwork';
 import { ConstructionBlock, CONSTRUCTION_DEFINITIONS, type ConstructionBlockKind } from '../entities/constructionBlock';
+import { TerrainDamageSystem } from './terrainDamageSystem';
 import { CONSTRUCTION_COSTS, CONSTRUCTION_MOVEMENT_PADDING, CONSTRUCTION_PLACE_RANGE, CONSTRUCTION_REBUILD_COOLDOWN_SECONDS, CONSTRUCTION_ROAD_SPEED_MULTIPLIER, constructionWorkSecondsForClass, constructionBlocksMovement, constructionCellCenter, constructionCellKey, pointInsideConstructionBlock, worldToConstructionCell, type ConstructionNetworkState, type ConstructionWorkNetState } from './constructionSystem';
 import type { BattleNetSnapshot, BattlePresentationEvent, ContinuousControl, PlayerAction } from '../network/protocol';
 import { gameModeRules, isGameMode, type GameMode, type GameModeCapabilities } from './gameMode';
@@ -61,6 +62,9 @@ export interface GameOptions {
   squadsPerTeam?: number;
   blueSquads?: number;
   redSquads?: number;
+  yellowSquads?: number;
+  greenSquads?: number;
+  teamCount?: 2 | 3 | 4;
   respawnSeconds?: number;
   conquestTickets?: number;
   gameMode?: GameMode;
@@ -68,6 +72,7 @@ export interface GameOptions {
   humanFormationIds?: string[];
   introEnabled?: boolean;
   constructionEnabled?: boolean;
+  mapId?: MapId;
   initialClasses?: Record<string, SquadClass>;
   initialSpawnAreas?: Record<string, number>;
   // Multiplayer clients wait for the authoritative server snapshot before creating cannon shells.
@@ -109,6 +114,8 @@ export interface GameSnapshot {
   time: number;
   paused: boolean;
   winner: Team | null;
+  activeTeams: Team[];
+  bannerStates: Array<{ team: Team; hp: number; maxHp: number; underAttack: boolean }>;
   conquestEnabled: boolean;
   conquestInitialTickets: number;
   blueTickets: number;
@@ -166,6 +173,8 @@ export interface GameSnapshot {
   playerForcedMarch: boolean;
   playerFieldworkKits: number;
   playerGrenadeCooldown: number;
+  playerBandCooldown: number;
+  playerSupportBuffRemaining: number;
   playerBaseRecoveryRemaining: number | null;
   playerHasReservedClass: boolean;
   playerHasReservedSpawn: boolean;
@@ -234,6 +243,10 @@ export class Game {
   readonly playerFormation: Formation;
   readonly blueSquads: number;
   readonly redSquads: number;
+  readonly yellowSquads: number;
+  readonly greenSquads: number;
+  readonly activeTeams: Team[];
+  readonly teamSquads: Record<Team, number>;
   readonly respawnSeconds: number;
   readonly humanFormationIds: Set<string>;
   readonly banners: Banner[];
@@ -248,6 +261,8 @@ export class Game {
   readonly artilleryExplosions: ArtilleryExplosion[] = [];
   readonly fieldworks: Fieldwork[] = [];
   readonly constructionBlocks: ConstructionBlock[] = [];
+  readonly battlefieldMap: BattlefieldMap;
+  readonly terrainDamage: TerrainDamageSystem;
   readonly combatStats = new Map<string, FormationCombatStats>();
   readonly resourceSystem: ResourceSystem | null;
   readonly recruitmentSystem: RecruitmentSystem | null;
@@ -255,7 +270,7 @@ export class Game {
 
   private readonly initialClasses: Record<string, SquadClass>;
   private readonly initialSpawnAreas: Record<string, number>;
-  private readonly aiSystem = new BattleAiSystem();
+  private readonly aiSystem: BattleAiSystem;
   private readonly meleeSystem = new MeleeSystem();
   private readonly meleeQuietTimers = new Map<string, number>();
   private readonly respawnTimers = new Map<string, number>();
@@ -315,15 +330,24 @@ export class Game {
 
   constructor(private readonly input: InputManager, options: GameOptions = {}) {
     this.gameMode = isGameMode(options.gameMode) ? options.gameMode : 'BATTLE';
+    this.battlefieldMap = options.mapId === 'OPEN_FIELD' ? new BattlefieldMap('OPEN_FIELD') : BATTLEFIELD_MAP;
+    this.terrainDamage = new TerrainDamageSystem(this.battlefieldMap);
+    this.aiSystem = new BattleAiSystem(this.battlefieldMap);
     this.modeRules = gameModeRules(this.gameMode);
     this.resourceSystem = this.modeRules.resources ? new ResourceSystem() : null;
     this.recruitmentSystem = this.modeRules.recruitment && this.resourceSystem ? new RecruitmentSystem() : null;
     const legacyCount = options.squadsPerTeam ?? GAME_CONFIG.army.squadsPerTeam;
     this.blueSquads = Math.max(1, Math.min(50, Math.floor(options.blueSquads ?? legacyCount)));
     this.redSquads = Math.max(1, Math.min(50, Math.floor(options.redSquads ?? legacyCount)));
+    this.yellowSquads = Math.max(1, Math.min(50, Math.floor(options.yellowSquads ?? legacyCount)));
+    this.greenSquads = Math.max(1, Math.min(50, Math.floor(options.greenSquads ?? legacyCount)));
+    const requestedTeamCount = Math.max(2, Math.min(4, Math.floor(options.teamCount ?? 2))) as 2 | 3 | 4;
+    const teamCount = this.battlefieldMap.mapId === 'OPEN_FIELD' && this.gameMode === 'BATTLE' ? requestedTeamCount : 2;
+    this.activeTeams = TEAM_IDS.slice(0, teamCount) as Team[];
+    this.teamSquads = { blue: this.blueSquads, red: this.redSquads, yellow: this.yellowSquads, green: this.greenSquads };
     this.conquestSystem = this.modeRules.conquest ? new ConquestSystem(this.blueSquads, this.redSquads, options.conquestTickets) : null;
     this.respawnSeconds = Math.max(5, Math.min(60, options.respawnSeconds ?? GAME_CONFIG.army.respawnSeconds));
-    this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds };
+    this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds, yellow: this.respawnSeconds, green: this.respawnSeconds };
     const defaultLocal = `B${String(Math.min(this.blueSquads, GAME_CONFIG.army.playerSquadIndex + 1)).padStart(2, '0')}`;
     const localFormationId = options.localFormationId ?? defaultLocal;
     this.humanFormationIds = new Set(options.humanFormationIds ?? [localFormationId]);
@@ -343,10 +367,7 @@ export class Game {
     this.playerFormation = player;
     this.selectedWeapon = canVolleyClass(player.squadClass) ? 'musket' : 'bayonet';
     this.playerFormation.weapon = this.selectedWeapon;
-    this.banners = [
-      new Banner('blue', { x: GAME_CONFIG.banner.blueX, y: GAME_CONFIG.banner.blueY }),
-      new Banner('red', { x: GAME_CONFIG.banner.redX, y: GAME_CONFIG.banner.redY }),
-    ];
+    this.banners = this.activeTeams.map((team) => new Banner(team, this.battlefieldMap.bannerPosition(team)));
     this.camera = new Camera(this.blueBanner.position);
     this.introActive = this.introConfigured;
     if (this.introActive) this.camera.setCinematic(this.blueBanner.position, 0.76);
@@ -379,7 +400,7 @@ export class Game {
       const areaIndex = this.initialSpawnAreas[formation.id] ?? (teamIndex % 3);
       this.formationSpawnAreas.set(formation.id, areaIndex);
       const spawn = this.initialSpawnFor(formation.team, teamIndex, areaIndex);
-      formation.reset(spawn, formation.team === 'blue' ? 0 : Math.PI, squadClass);
+      formation.reset(spawn, teamStartingDirection(formation.team), squadClass);
       this.restoreUpgrades(formation);
       formation.setActiveStrength(standardStrength(squadClass), true);
       formation.setMaxSoldiers(standardStrength(squadClass));
@@ -420,7 +441,7 @@ export class Game {
     for (const formation of this.formations) {
       this.combatStats.set(formation.id, { kills: 0, losses: 0, bannerDamage: 0 });
     }
-    this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds };
+    this.reinforcementWaveRemaining = { blue: this.respawnSeconds, red: this.respawnSeconds, yellow: this.respawnSeconds, green: this.respawnSeconds };
     this.time = 0;
     this.paused = false;
     this.winner = null;
@@ -627,7 +648,10 @@ export class Game {
     this.aiSystem.setNavigationBlockedCells(
       new Set(movementBlocks.filter((block) => block.kind !== 'door' || block.team !== 'blue').map((block) => block.cellKey)),
       new Set(movementBlocks.filter((block) => block.kind !== 'door' || block.team !== 'red').map((block) => block.cellKey)),
+      new Set(movementBlocks.filter((block) => block.kind !== 'door' || block.team !== 'yellow').map((block) => block.cellKey)),
+      new Set(movementBlocks.filter((block) => block.kind !== 'door' || block.team !== 'green').map((block) => block.cellKey)),
     );
+    this.aiSystem.setNavigationOpenedCells(this.terrainDamage.destroyedMountainCells());
     this.refreshAiEconomicWorkers(dt);
     this.resourceSystem?.update(dt, this.formations, this.remoteControls);
     this.cancelThreatenedAiRecruitment();
@@ -638,7 +662,11 @@ export class Game {
     this.updateCharges(dt);
     this.updateBannerAttacks(dt);
 
-    for (const formation of this.formations) formation.update(dt);
+    for (const formation of this.formations) {
+      this.updateBlockedSlotOverrides(formation);
+      formation.update(dt);
+    }
+    this.updateBandPerformanceMorale(dt);
     for (const banner of this.banners) banner.update(dt);
 
     const struck = this.meleeSystem.update(
@@ -658,6 +686,7 @@ export class Game {
       this.formations,
       this.fieldworks,
       this.constructionBlocks,
+      this.terrainDamage,
       dt,
       (position, team, impactDirection, sourceFormationId, targetFormationId) => this.recordDeath(position, team, impactDirection, sourceFormationId, targetFormationId),
     );
@@ -666,6 +695,7 @@ export class Game {
       this.formations,
       this.fieldworks,
       this.constructionBlocks,
+      this.terrainDamage,
       dt,
       this.artilleryExplosions,
       (position, team, impactDirection, sourceFormationId, targetFormationId) => this.recordDeath(position, team, impactDirection, sourceFormationId, targetFormationId),
@@ -764,12 +794,14 @@ export class Game {
       time: this.time,
       paused: this.paused,
       winner: this.winner,
+      activeTeams: [...this.activeTeams],
+      bannerStates: this.banners.map((banner) => ({ team: banner.team, hp: banner.hp, maxHp: banner.maxHp, underAttack: banner.underAttackTimer > 0 })),
       conquestEnabled: !!this.conquestSystem,
       conquestInitialTickets: this.conquestSystem?.initialTickets ?? 0,
       blueTickets: this.conquestSystem?.tickets.blue ?? 0,
       redTickets: this.conquestSystem?.tickets.red ?? 0,
       capturePoints: this.conquestSystem?.points.map((point) => ({ ...point, position: { ...point.position } })) ?? [],
-      playerReinforcementsExhausted: !!this.conquestSystem && this.playerFormation.aliveCount() === 0 && !this.conquestSystem.canRespawn(this.playerFormation.team),
+      playerReinforcementsExhausted: this.playerFormation.aliveCount() === 0 && !this.canTeamRespawn(this.playerFormation.team),
       timeScale: this.timeScale,
       debugAi: this.debugAi,
       chargeAiming: this.chargeAiming,
@@ -823,6 +855,8 @@ export class Game {
       playerForcedMarch: this.playerFormation.forcedMarch,
       playerFieldworkKits: this.playerFormation.fieldworkKits,
       playerGrenadeCooldown: this.playerFormation.grenadeCooldown,
+      playerBandCooldown: this.playerFormation.bandCooldown,
+      playerSupportBuffRemaining: this.playerFormation.supportBuffTimer,
       playerBaseRecoveryRemaining,
       playerHasReservedClass: this.plannedRespawnClasses.has(this.playerFormation.id),
       playerHasReservedSpawn: this.plannedRespawnAreas.has(this.playerFormation.id),
@@ -929,6 +963,9 @@ export class Game {
         }
         continue;
       }
+      if (event.kind === 'band_perform') {
+        continue;
+      }
       this.spawnCorpse(
         { x: event.x, y: event.y },
         event.team,
@@ -946,7 +983,8 @@ export class Game {
   }
 
   canTeamRespawn(team: Team): boolean {
-    return this.conquestSystem ? this.conquestSystem.canRespawn(team) : true;
+    if (this.conquestSystem) return this.conquestSystem.canRespawn(team);
+    return !this.bannerFor(team).destroyed;
   }
 
   resourceNodes(): readonly ResourceNodeState[] {
@@ -1092,7 +1130,7 @@ export class Game {
     const center = constructionCellCenter(cell.col, cell.row);
     const key = constructionCellKey(cell.col, cell.row);
     const cooldown = this.constructionCooldowns.has(key);
-    const terrain = BATTLEFIELD_MAP.terrainAt(center);
+    const terrain = this.terrainDamage.effectiveTerrainAt(center);
     const terrainValid = kind === 'bridgeTile' ? terrain === 'river' || terrain === 'ford' : kind === 'roadTile' ? terrain !== 'mountain' && terrain !== 'river' : terrain !== 'mountain' && terrain !== 'river';
     const valid = this.constructionEnabled
       && !!this.conquestSystem
@@ -1106,8 +1144,8 @@ export class Game {
       && this.distance(center, this.blueBanner.position) >= 150
       && this.distance(center, this.redBanner.position) >= 150
       && !MAP_SITES.some((site) => site.kind === 'facility' && this.distance(center, site.position) < 125)
-      && !BATTLEFIELD_MAP.inSpawnArea('blue', center, -Math.min(360, BATTLEFIELD_MAP.spawnArea('blue', 0).radiusX * 0.45))
-      && !BATTLEFIELD_MAP.inSpawnArea('red', center, -Math.min(360, BATTLEFIELD_MAP.spawnArea('red', 0).radiusX * 0.45))
+      && !this.battlefieldMap.inSpawnArea('blue', center, -Math.min(360, this.battlefieldMap.spawnArea('blue', 0).radiusX * 0.45))
+      && !this.battlefieldMap.inSpawnArea('red', center, -Math.min(360, this.battlefieldMap.spawnArea('red', 0).radiusX * 0.45))
       && this.resourceSystem.canAfford(formation.team, CONSTRUCTION_COSTS[kind]);
     return { position: center, valid, cooldown };
   }
@@ -1183,6 +1221,8 @@ export class Game {
       forcedMarch: formation.forcedMarch,
       fieldworkKits: formation.fieldworkKits,
       grenadeCooldown: formation.grenadeCooldown,
+      bandCooldown: formation.bandCooldown,
+      supportBuffTimer: formation.supportBuffTimer,
       baseRecoveryRemaining: this.baseRecoveryTimers.has(formation.id)
         ? Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - (this.baseRecoveryTimers.get(formation.id) ?? 0))
         : null,
@@ -1200,6 +1240,9 @@ export class Game {
       seq: ++this.networkSnapshotSeq,
       time: this.time,
       winner: this.winner,
+      activeTeams: [...this.activeTeams],
+      bannerStates: this.banners.map((banner) => ({ team: banner.team, hp: banner.hp, maxHp: banner.maxHp, underAttack: banner.underAttackTimer })),
+      reinforcementWaves: { ...this.reinforcementWaveRemaining },
       conquest: this.conquestSystem?.createNetworkState() ?? null,
       blueBannerHp: this.blueBanner.hp,
       redBannerHp: this.redBanner.hp,
@@ -1239,6 +1282,7 @@ export class Game {
       fieldworks: this.fieldworks.filter((fieldwork) => fieldwork.active).map((fieldwork) => ({ id: fieldwork.id, team: fieldwork.team, sourceFormationId: fieldwork.sourceFormationId, x: fieldwork.position.x, y: fieldwork.position.y, direction: fieldwork.direction, hp: fieldwork.hp, maxHp: fieldwork.maxHp })),
       recruitments: this.recruitmentSystem?.createNetworkState() ?? [],
       constructionWork: [...this.pendingConstructionWork.values()].map((work) => ({ formationId: work.formationId, type: work.type, startedAt: work.startedAt, completeAt: work.completeAt, kind: work.kind, blockId: work.blockId })),
+      terrain: this.terrainDamage.networkState(),
     };
   }
 
@@ -1247,6 +1291,13 @@ export class Game {
     this.networkSnapshotSeq = snapshot.seq;
     this.time = snapshot.time;
     this.winner = snapshot.winner;
+    for (const state of snapshot.bannerStates ?? []) {
+      const banner = this.banners.find((candidate) => candidate.team === state.team);
+      if (!banner) continue;
+      banner.hp = state.hp;
+      banner.underAttackTimer = state.underAttack;
+    }
+    for (const team of this.activeTeams) this.reinforcementWaveRemaining[team] = snapshot.reinforcementWaves?.[team] ?? this.reinforcementWaveRemaining[team];
     if (snapshot.conquest && this.conquestSystem) this.conquestSystem.applyNetworkState(snapshot.conquest);
     this.blueBanner.hp = snapshot.blueBannerHp;
     this.redBanner.hp = snapshot.redBannerHp;
@@ -1260,6 +1311,7 @@ export class Game {
     this.recruitmentSystem?.applyNetworkState(snapshot.recruitments ?? []);
     this.networkConstructionWork.clear();
     for (const work of snapshot.constructionWork ?? []) this.networkConstructionWork.set(work.formationId, work);
+    this.terrainDamage.applyNetworkState(snapshot.terrain ?? []);
 
     const firstSnapshot = !this.hasNetworkSnapshot;
     const teleportDistance = 520;
@@ -1321,6 +1373,8 @@ export class Game {
       formation.forcedMarch = net.forcedMarch;
       formation.fieldworkKits = net.fieldworkKits;
       formation.grenadeCooldown = net.grenadeCooldown;
+      formation.bandCooldown = net.bandCooldown;
+      formation.supportBuffTimer = net.supportBuffTimer;
       if (net.baseRecoveryRemaining === null) this.baseRecoveryTimers.delete(formation.id);
       else this.baseRecoveryTimers.set(formation.id, Math.max(0, GAME_CONFIG.army.baseRecoverySeconds - net.baseRecoveryRemaining));
 
@@ -1473,10 +1527,10 @@ export class Game {
 
   private createArmies(): Formation[] {
     const formations: Formation[] = [];
-    for (const team of ['blue', 'red'] as const) {
+    for (const team of this.activeTeams) {
       const count = this.squadCountFor(team);
       for (let i = 0; i < count; i += 1) {
-        const id = `${team === 'blue' ? 'B' : 'R'}${String(i + 1).padStart(2, '0')}`;
+        const id = `${teamPrefix(team)}${String(i + 1).padStart(2, '0')}`;
         const isPlayer = this.humanFormationIds.has(id);
         const squadClass = this.initialClassForFormation(id, i, count);
         const areaIndex = this.initialSpawnAreas[id] ?? (i % 3);
@@ -1485,7 +1539,7 @@ export class Game {
           id,
           team,
           this.initialSpawnFor(team, i, areaIndex),
-          team === 'blue' ? 0 : Math.PI,
+          teamStartingDirection(team),
           isPlayer,
           squadClass,
         ));
@@ -1517,14 +1571,14 @@ export class Game {
   }
 
   private initialSpawnFor(team: Team, index: number, areaIndex = index % 3): Vec2 {
-    return this.clampFormationPoint(BATTLEFIELD_MAP.spawnPoint(team, areaIndex, index * 5 + areaIndex));
+    return this.clampFormationPoint(this.battlefieldMap.spawnPoint(team, areaIndex, index * 5 + areaIndex));
   }
 
   private respawnFor(team: Team, index: number, areaIndex?: number): Vec2 {
-    const id = `${team === 'blue' ? 'B' : 'R'}${String(index + 1).padStart(2, '0')}`;
+    const id = `${teamPrefix(team)}${String(index + 1).padStart(2, '0')}`;
     const selectedArea = areaIndex ?? this.plannedRespawnAreas.get(id) ?? this.formationSpawnAreas.get(id) ?? (index % 3);
     const serial = this.respawnSerial.get(id) ?? 0;
-    return this.clampFormationPoint(BATTLEFIELD_MAP.spawnPoint(team, selectedArea, index * 7 + serial * 11 + selectedArea));
+    return this.clampFormationPoint(this.battlefieldMap.spawnPoint(team, selectedArea, index * 7 + serial * 11 + selectedArea));
   }
 
   private nextRespawnPoint(formation: Formation, areaIndex: number): Vec2 {
@@ -1532,7 +1586,7 @@ export class Game {
     const serial = (this.respawnSerial.get(formation.id) ?? 0) + 1;
     this.respawnSerial.set(formation.id, serial);
     this.formationSpawnAreas.set(formation.id, areaIndex);
-    return this.clampFormationPoint(BATTLEFIELD_MAP.spawnPoint(formation.team, areaIndex, index * 7 + serial * 11 + areaIndex));
+    return this.clampFormationPoint(this.battlefieldMap.spawnPoint(formation.team, areaIndex, index * 7 + serial * 11 + areaIndex));
   }
 
   private updateIntro(rawDt: number): void {
@@ -1583,7 +1637,7 @@ export class Game {
     this.setHint(
       this.conquestSystem
         ? 'CONQUEST: A/B/Cの旗を奪取 · 2拠点以上で敵Ticket減少 · 部隊壊滅でもTicket -1'
-        : 'BATTLE: 敵Bannerは歩兵系の斧のみで破壊可能 · 1 MUSKET · 2 BAYONET · 3 AXE',
+        : 'BATTLE: 敵Bannerは歩兵系の斧のみで破壊可能 · 1 MUSKET · 2 BAYONET · 3 AXE/PICKAXE',
       8,
     );
   }
@@ -1669,6 +1723,14 @@ export class Game {
 
     formation.direction = Math.atan2(pointer.y - formation.center.y, pointer.x - formation.center.x);
 
+    if (formation.squadClass === 'militaryBand') {
+      this.cancelChargeAim();
+      formation.weapon = 'bayonet';
+      this.movePlayerFormation(dt);
+      if (primaryClick) this.performBandMusic(formation);
+      return;
+    }
+
     if (isArtilleryClass(formation.squadClass)) {
       this.cancelChargeAim();
       this.movePlayerFormation(dt);
@@ -1747,10 +1809,12 @@ export class Game {
         this.setHint('コンクエストでは本陣旗は破壊目標ではありません', 2.4);
         return;
       }
-      const enemyBanner = this.bannerFor(formation.team === 'blue' ? 'red' : 'blue');
-      if (this.distance(pointer, enemyBanner.position) <= GAME_CONFIG.banner.clickRadius) {
+      const enemyBanner = this.banners
+        .filter((banner) => banner.team !== formation.team && !banner.destroyed)
+        .sort((a, b) => this.distance(pointer, a.position) - this.distance(pointer, b.position))[0];
+      if (enemyBanner && this.distance(pointer, enemyBanner.position) <= GAME_CONFIG.banner.clickRadius) {
         formation.beginBannerAttack(enemyBanner.team, enemyBanner.position);
-        this.setNotice('AXE ORDER — ENEMY BANNER', 'info', 2.2);
+        this.setNotice(`AXE ORDER — ${enemyBanner.team.toUpperCase()} BANNER`, 'info', 2.2);
         return;
       }
       this.setHint('斧を装備中：敵旗を右クリック', 2.4);
@@ -1760,6 +1824,8 @@ export class Game {
       this.movePlayerFormation(dt);
       if (primaryClick && this.selectedWeapon === 'musket' && formation.canVolley()) {
         this.performVolley(formation, volleyProfile(formation.squadClass, formation.weaponTier).playerReload);
+      } else if (primaryClick && (this.selectedWeapon === 'axe' || this.selectedWeapon === 'pickaxe')) {
+        this.attackTerrain(formation, pointer);
       } else if (primaryClick && this.selectedWeapon !== 'musket') {
         this.setHint(this.selectedWeapon === 'bayonet'
           ? '銃剣：右クリック長押し → 離して突撃'
@@ -1786,8 +1852,8 @@ export class Game {
         this.baseRecoveryTimers.delete(formation.id);
         continue;
       }
-      const areaIndex = BATTLEFIELD_MAP.nearestSpawnAreaIndex(formation.team, formation.center);
-      const inRecoveryZone = BATTLEFIELD_MAP.inSpawnArea(formation.team, formation.center, GAME_CONFIG.army.baseRecoveryRadius);
+      const areaIndex = this.battlefieldMap.nearestSpawnAreaIndex(formation.team, formation.center);
+      const inRecoveryZone = this.battlefieldMap.inSpawnArea(formation.team, formation.center, GAME_CONFIG.army.baseRecoveryRadius);
       const stable = formation.mode === 'line' || formation.mode === 'reforming';
       const waiting = !formation.movedRecently() && !formation.forcedMarch;
       if (!inRecoveryZone || !stable || !waiting || formation.moraleShockTimer > 0) {
@@ -1849,7 +1915,7 @@ export class Game {
     if (resetForDeployment) {
       const area = Math.max(0, Math.min(2, Math.floor(spawnAreaIndex ?? this.teamIndexOf(formation) % 3)));
       const selectedClass = squadClass ?? formation.squadClass;
-      formation.reset(this.nextRespawnPoint(formation, area), formation.team === 'blue' ? 0 : Math.PI, selectedClass);
+      formation.reset(this.nextRespawnPoint(formation, area), teamStartingDirection(formation.team), selectedClass);
       this.restoreUpgrades(formation);
       const capacity = this.savedCapacity(formation.id, selectedClass);
       formation.setMaxSoldiers(capacity);
@@ -1937,6 +2003,10 @@ export class Game {
       this.attackConstructionBlockWithAxe(formation, action.blockId);
       return;
     }
+    if (action.type === 'terrain_attack') {
+      this.attackTerrain(formation, action.target);
+      return;
+    }
     if (action.type === 'construction_dismantle') {
       this.beginConstructionDismantle(formation, action.blockId);
       return;
@@ -1978,7 +2048,9 @@ export class Game {
     if (formation.mode !== 'line') return;
 
     if (action.type === 'fire') {
-      if (isArtilleryClass(formation.squadClass)) {
+      if (formation.squadClass === 'militaryBand') {
+        this.performBandMusic(formation);
+      } else if (isArtilleryClass(formation.squadClass)) {
         this.performArtilleryShot(formation, action.target, artilleryProfile(formation.squadClass, formation.artilleryPerformanceTier, formation.artilleryBatteryTier).playerReload);
       } else if (canVolleyClass(formation.squadClass) && this.weaponForFormation(formation) === 'musket' && formation.canVolley()) {
         this.performVolley(formation, volleyProfile(formation.squadClass, formation.weaponTier).playerReload);
@@ -1995,7 +2067,9 @@ export class Game {
     if (action.type === 'banner-attack') {
       if (this.conquestSystem) return;
       if (!canBannerAttackClass(formation.squadClass) || this.weaponForFormation(formation) !== 'axe') return;
+      if (action.targetTeam === formation.team) return;
       const banner = this.bannerFor(action.targetTeam);
+      if (banner.destroyed) return;
       formation.beginBannerAttack(banner.team, banner.position);
     }
   }
@@ -2036,7 +2110,8 @@ export class Game {
     if (this.playerFormation.mode === 'line' || this.playerFormation.mode === 'reforming') this.playerFormation.weapon = weapon;
     const label = weapon === 'musket' ? 'MUSKET — 左クリックで一斉射撃'
       : weapon === 'bayonet' ? 'BAYONET — 右クリックで突撃'
-        : 'AXE — 敵旗を右クリックして破壊';
+        : weapon === 'pickaxe' ? 'PICKAXE — 3で斧へ切替 · 山岳/強化壁の破壊に有効'
+          : 'AXE — 3でピッケルへ切替 · 森林/敵旗の破壊に有効';
     this.setHint(label, 2.5);
   }
 
@@ -2051,6 +2126,11 @@ export class Game {
       if (this.handleAiEquipmentUpgrade(formation, dt)) continue;
       if (this.handleAiRecruitment(formation, dt)) continue;
       if (this.handleAiConquestObjective(formation, dt)) continue;
+
+      if (formation.mode === 'line' && formation.squadClass === 'militaryBand' && formation.bandCooldown <= 0) {
+        const nearbyAllies = this.formations.filter((ally) => ally.team === formation.team && ally.aliveCount() > 0 && this.distance(ally.center, formation.center) <= 620);
+        if (nearbyAllies.length >= 2) this.performBandMusic(formation);
+      }
 
       if (formation.mode === 'line' && formation.squadClass === 'grenadier' && formation.grenadeCooldown <= 0) {
         const target = this.nearestEnemyFormation(formation);
@@ -2128,7 +2208,7 @@ export class Game {
     formation.debugIntent = `CAPTURE ${point.id}`;
     formation.debugTargetId = `POINT-${point.id}`;
     if (distance <= 300) {
-      formation.direction = formation.team === 'blue' ? -Math.PI / 4 : Math.PI * 3 / 4;
+      formation.direction = teamStartingDirection(formation.team);
       return true;
     }
     const move = this.aiSystem.navigateToObjective(formation, point.position, dt, `POINT-${point.id}`);
@@ -2329,7 +2409,7 @@ export class Game {
 
     const nextWorkers = new Set<string>();
     const resourceOrder: ResourceType[] = this.modeRules.equipment ? ['wood', 'iron', 'gunpowder', 'alloy'] : ['wood', 'iron'];
-    for (const team of ['blue', 'red'] as const) {
+    for (const team of this.activeTeams) {
       const stockpile = this.resourceSystem.getStockpile(team);
       const targets = this.economicStockTargets(team);
       const hadWorkers = this.formations.some((formation) => formation.team === team && this.aiEconomicWorkers.has(formation.id));
@@ -2458,14 +2538,14 @@ export class Game {
   private updateCharges(dt: number): void {
     for (const charger of this.formations) {
       if (charger.mode !== 'charging' || charger.aliveCount() === 0) continue;
-      if (isChargeCavalryClass(charger.squadClass) && BATTLEFIELD_MAP.isWater(charger.center) && !BATTLEFIELD_MAP.isBridge(charger.center)) {
+      if (isChargeCavalryClass(charger.squadClass) && this.battlefieldMap.isWater(charger.center) && !this.battlefieldMap.isBridge(charger.center)) {
         charger.chargeMomentum = 0;
         charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
         if (charger === this.playerFormation) this.setNotice('渡河中は騎兵突撃できません', 'warning', 2);
         continue;
       }
       const beforeCharge = { ...charger.center };
-      const terrainMultiplier = Math.max(0.28, BATTLEFIELD_MAP.movementMultiplier(charger.center, charger.squadClass));
+      const terrainMultiplier = Math.max(0.28, this.terrainDamage.movementMultiplier(charger.center, charger.squadClass));
       const reached = charger.advanceCharge(dt * terrainMultiplier);
       const constructionWall = this.constructionBlocks.find((block) => block.active && constructionBlocksMovement(block.kind) && !(block.kind === 'door' && block.team === charger.team) && pointInsideConstructionBlock(charger.center, block, 34));
       if (constructionWall) {
@@ -2484,13 +2564,13 @@ export class Game {
         if (charger === this.playerFormation) this.setNotice('突撃阻止 — 防壁！', 'warning', 2);
         continue;
       }
-      if (!BATTLEFIELD_MAP.isPassable(charger.center)) {
+      if (!this.terrainDamage.isPassable(charger.center)) {
         charger.center = beforeCharge;
         charger.chargeMomentum = 0;
         charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
         continue;
       }
-      if (isChargeCavalryClass(charger.squadClass) && BATTLEFIELD_MAP.isWater(charger.center) && !BATTLEFIELD_MAP.isBridge(charger.center)) {
+      if (isChargeCavalryClass(charger.squadClass) && this.battlefieldMap.isWater(charger.center) && !this.battlefieldMap.isBridge(charger.center)) {
         charger.chargeMomentum = 0;
         charger.beginReform(charger.direction, this.clampFormationPoint(charger.center), GAME_CONFIG.charge.postChargeReloadPenalty);
         if (charger === this.playerFormation) this.setNotice('渡河で突撃が止まりました', 'warning', 2);
@@ -2590,7 +2670,7 @@ export class Game {
       const dx = formation.center.x - banner.position.x;
       const dy = formation.center.y - banner.position.y;
       let distance = Math.hypot(dx, dy);
-      let nx = distance > 0.001 ? dx / distance : formation.team === 'blue' ? -1 : 1;
+      let nx = distance > 0.001 ? dx / distance : -Math.cos(teamStartingDirection(formation.team));
       let ny = distance > 0.001 ? dy / distance : 0;
       const targetCenter = {
         x: banner.position.x + nx * GAME_CONFIG.banner.approachDistance,
@@ -2636,9 +2716,9 @@ export class Game {
         );
       }
       if (beforeRatio > 0.5 && banner.ratio <= 0.5) {
-        this.setNotice(`${banner.team.toUpperCase()} BANNER — 50%`, banner.team === 'blue' ? 'warning' : 'success', 2.8);
+        this.setNotice(`${banner.team.toUpperCase()} BANNER — 50%`, banner.team === this.playerFormation.team ? 'warning' : 'success', 2.8);
       } else if (beforeRatio > 0.25 && banner.ratio <= 0.25) {
-        this.setNotice(`${banner.team.toUpperCase()} BANNER — 25%`, banner.team === 'blue' ? 'warning' : 'success', 3.2);
+        this.setNotice(`${banner.team.toUpperCase()} BANNER — 25%`, banner.team === this.playerFormation.team ? 'warning' : 'success', 3.2);
       }
 
       if (formation.isPlayerControlled || this.distanceToPlayer(formation.center) < 520) {
@@ -2654,8 +2734,8 @@ export class Game {
       if (formation.shouldRout()) {
         const distance = GAME_CONFIG.morale.routedDistance;
         const target = this.clampFormationPoint({
-          x: formation.center.x + (formation.team === 'blue' ? -distance : distance),
-          y: formation.center.y + (Math.random() - 0.5) * 180,
+          x: formation.center.x - Math.cos(teamStartingDirection(formation.team)) * distance + (Math.random() - 0.5) * 120,
+          y: formation.center.y - Math.sin(teamStartingDirection(formation.team)) * distance + (Math.random() - 0.5) * 120,
         });
         if (formation.beginRout(target)) {
           this.applyNearbyMoraleShock(formation, 5.5, 430);
@@ -2686,10 +2766,26 @@ export class Game {
   private updateRespawns(dt: number): void {
     if (this.winner) return;
 
-    for (const team of ['blue', 'red'] as const) {
+    for (const team of this.activeTeams) {
       const dead = this.formations.filter((formation) => formation.team === team && formation.aliveCount() === 0);
       if (dead.length === 0) {
         this.reinforcementWaveRemaining[team] = this.respawnSeconds;
+        continue;
+      }
+
+      if (!this.conquestSystem && this.bannerFor(team).destroyed) {
+        this.reinforcementWaveRemaining[team] = 0;
+        for (const formation of dead) {
+          this.remoteControls.delete(formation.id);
+          this.recruitmentSystem?.clearFormation(formation.id);
+          this.respawnTimers.delete(formation.id);
+          this.deferredRespawns.delete(formation.id);
+          this.baseRecoveryTimers.delete(formation.id);
+        }
+        if (this.playerFormation.team === team && this.playerFormation.aliveCount() === 0) {
+          this.cancelChargeAim();
+          this.setHint('旗が陥落 — 残存部隊が最後の戦力です', 0.5);
+        }
         continue;
       }
 
@@ -2769,7 +2865,7 @@ export class Game {
         const chosenArea = formation.isPlayerControlled
           ? (this.plannedRespawnAreas.get(formation.id) ?? this.formationSpawnAreas.get(formation.id) ?? (index % 3))
           : (index % 3);
-        formation.reset(this.nextRespawnPoint(formation, chosenArea), formation.team === 'blue' ? 0 : Math.PI, chosenClass);
+        formation.reset(this.nextRespawnPoint(formation, chosenArea), teamStartingDirection(formation.team), chosenClass);
         this.restoreUpgrades(formation);
         if (this.recruitmentSystem && isRecruitableClass(chosenClass)) {
           const capacity = this.savedCapacity(formation.id, chosenClass);
@@ -2865,9 +2961,9 @@ export class Game {
   }
 
   private rescueFormationFromMountain(formation: Formation): void {
-    if (BATTLEFIELD_MAP.isPassable(formation.center)) return;
-    const safe = BATTLEFIELD_MAP.nearestPassablePoint(formation.center);
-    if (!BATTLEFIELD_MAP.isPassable(safe)) return;
+    if (this.terrainDamage.isPassable(formation.center)) return;
+    const safe = this.battlefieldMap.nearestPassablePoint(formation.center);
+    if (!this.terrainDamage.isPassable(safe)) return;
     const dx = safe.x - formation.center.x;
     const dy = safe.y - formation.center.y;
     formation.center.x = safe.x;
@@ -2897,6 +2993,37 @@ export class Game {
     return this.clampChargeTarget(formation, pointer);
   }
 
+  private updateBlockedSlotOverrides(formation: Formation): void {
+    if (formation.aliveCount() === 0) { formation.clearSlotOverrides(); return; }
+    const movementBlocks = this.constructionBlocks.filter((block) => block.active && constructionBlocksMovement(block.kind));
+    const blocked = (point: Vec2): boolean => {
+      if (!this.terrainDamage.isPassable(point)) return true;
+      return movementBlocks.some((block) => {
+        if (block.kind === 'door' && block.team === formation.team) return false;
+        return pointInsideConstructionBlock(point, block, 7);
+      });
+    };
+    for (const soldier of formation.aliveSoldiers()) {
+      const index = soldier.formationSlotIndex;
+      const ideal = formation.slotPosition(index);
+      if (!blocked(ideal)) { formation.setSlotOverride(index, null); continue; }
+      let best: Vec2 | null = null;
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const radius of [18, 30, 42, 56, 72, 92]) {
+        for (let i = 0; i < 16; i += 1) {
+          const angle = i / 16 * Math.PI * 2;
+          const candidate = { x: ideal.x + Math.cos(angle) * radius, y: ideal.y + Math.sin(angle) * radius };
+          if (blocked(candidate)) continue;
+          const towardCenter = Math.hypot(candidate.x - formation.center.x, candidate.y - formation.center.y);
+          const score = radius + towardCenter * 0.08;
+          if (score < bestScore) { bestScore = score; best = candidate; }
+        }
+        if (best) break;
+      }
+      formation.setSlotOverride(index, best ?? formation.center);
+    }
+  }
+
   private clampChargeTarget(formation: Formation, desired: Vec2): Vec2 {
     const origin = formation.center;
     const dx = desired.x - origin.x;
@@ -2922,6 +3049,53 @@ export class Game {
     const clamped = this.clampFormationPoint(formation.center);
     formation.center.x = clamped.x;
     formation.center.y = clamped.y;
+  }
+
+  private updateBandPerformanceMorale(dt: number): void {
+    const radius = 680;
+    const allyRecoveryPerSecond = 2.5;
+    const selfRecoveryPerSecond = 1.6;
+    const rallyThreshold = GAME_CONFIG.morale.postRoutMoraleFloor + 8;
+    const activeBands = this.formations.filter((formation) =>
+      formation.squadClass === 'militaryBand'
+      && formation.aliveCount() > 0
+      && formation.bandPerformanceTimer > 0,
+    );
+    if (activeBands.length === 0) return;
+
+    // Band performance morale sustain intentionally does not stack. A formation
+    // standing inside two performances still receives one aura's recovery.
+    for (const ally of this.formations) {
+      if (ally.aliveCount() === 0) continue;
+      const sourceBand = activeBands.find((band) =>
+        band.team === ally.team && this.distance(ally.center, band.center) <= radius,
+      );
+      if (!sourceBand) continue;
+
+      const recovery = ally.squadClass === 'militaryBand' ? selfRecoveryPerSecond : allyRecoveryPerSecond;
+      ally.morale = Math.min(GAME_CONFIG.morale.max, ally.morale + recovery * dt);
+      if (ally.mode === 'routed' && ally.morale >= rallyThreshold) ally.beginPostRoutRecovery();
+    }
+  }
+
+  private performBandMusic(formation: Formation): boolean {
+    if (formation.squadClass !== 'militaryBand' || formation.aliveCount() === 0 || formation.mode !== 'line' || formation.bandCooldown > 0) return false;
+    const radius = 680;
+    const duration = 10;
+    let affected = 0;
+    for (const ally of this.formations) {
+      if (ally.team !== formation.team || ally.aliveCount() === 0) continue;
+      if (this.distance(ally.center, formation.center) > radius) continue;
+      ally.morale = Math.min(GAME_CONFIG.morale.max, ally.morale + (ally === formation ? 18 : 28));
+      ally.supportBuffTimer = Math.max(ally.supportBuffTimer, duration);
+      if (ally.mode === 'routed' && ally.morale >= GAME_CONFIG.morale.postRoutMoraleFloor + 8) ally.beginPostRoutRecovery();
+      affected += 1;
+    }
+    formation.bandPerformanceTimer = duration;
+    formation.bandCooldown = 24;
+    this.queuePresentationEvent({ kind: 'band_perform', formationId: formation.id, team: formation.team, x: formation.center.x, y: formation.center.y });
+    if (formation === this.playerFormation) this.setNotice(`軍楽演奏 — ${affected}部隊を鼓舞`, 'success', 2.8);
+    return true;
   }
 
   private performVolley(formation: Formation, reloadSeconds: number): void {
@@ -3144,13 +3318,14 @@ export class Game {
       if (this.winner) this.setNotice(`${this.winner.toUpperCase()} VICTORY — ENEMY REINFORCEMENTS EXHAUSTED`, 'success', 7);
       return;
     }
-    if (this.blueBanner.destroyed) {
-      this.winner = 'red';
-      this.setNotice('BLUE BANNER HAS FALLEN', 'warning', 6);
-    } else if (this.redBanner.destroyed) {
-      this.winner = 'blue';
-      this.setNotice('RED BANNER HAS FALLEN', 'success', 6);
+    const standing = this.banners.filter((banner) => !banner.destroyed);
+    if (standing.length === 1 && this.activeTeams.length > 1) {
+      this.winner = standing[0].team;
+      this.setNotice(`${this.winner.toUpperCase()} VICTORY — LAST BANNER STANDING`, 'success', 7);
+      return;
     }
+    const justDestroyed = this.banners.find((banner) => banner.destroyed && banner.underAttackTimer > 0);
+    if (justDestroyed) this.setNotice(`${justDestroyed.team.toUpperCase()} BANNER HAS FALLEN`, 'warning', 3.5);
   }
 
   private updateUiTimers(rawDt: number): void {
@@ -3194,10 +3369,10 @@ export class Game {
     const length = Math.hypot(dx, dy);
     if (length <= 0.0001 || baseDistance <= 0) return false;
     this.rescueFormationFromMountain(formation);
-    const terrainMultiplier = BATTLEFIELD_MAP.movementMultiplier(formation.center, formation.squadClass);
+    const terrainMultiplier = this.terrainDamage.movementMultiplier(formation.center, formation.squadClass);
     if (terrainMultiplier <= 0) return false;
     const floorMultiplier = this.constructionFloorMovementMultiplier(formation);
-    const next = BATTLEFIELD_MAP.resolveStep(
+    const next = this.terrainDamage.resolveStep(
       formation.center,
       { x: dx / length, y: dy / length },
       baseDistance * terrainMultiplier * floorMultiplier,
@@ -3215,7 +3390,7 @@ export class Game {
       const offsets = [Math.PI / 12, -Math.PI / 12, Math.PI / 6, -Math.PI / 6, Math.PI / 4, -Math.PI / 4, Math.PI / 3, -Math.PI / 3, Math.PI / 2, -Math.PI / 2];
       let found: Vec2 | null = null;
       for (const offset of offsets) {
-        const candidate = BATTLEFIELD_MAP.resolveStep(formation.center, { x: Math.cos(baseAngle + offset), y: Math.sin(baseAngle + offset) }, baseDistance * terrainMultiplier * floorMultiplier);
+        const candidate = this.battlefieldMap.resolveStep(formation.center, { x: Math.cos(baseAngle + offset), y: Math.sin(baseAngle + offset) }, baseDistance * terrainMultiplier * floorMultiplier);
         if (!constructionBlocked(candidate) && Math.hypot(candidate.x - formation.center.x, candidate.y - formation.center.y) > 0.05) { found = candidate; break; }
       }
       if (!found) return false;
@@ -3235,9 +3410,9 @@ export class Game {
     const floor = this.constructionBlocks.find((block) => block.active && block.col === cell.col && block.row === cell.row && (block.kind === 'roadTile' || block.kind === 'bridgeTile'));
     if (!floor) return 1;
     if (floor.kind === 'roadTile') return CONSTRUCTION_ROAD_SPEED_MULTIPLIER;
-    const terrain = BATTLEFIELD_MAP.terrainAt(formation.center);
+    const terrain = this.terrainDamage.effectiveTerrainAt(formation.center);
     if (terrain === 'river' || terrain === 'ford') {
-      const raw = BATTLEFIELD_MAP.movementMultiplier(formation.center, formation.squadClass);
+      const raw = this.terrainDamage.movementMultiplier(formation.center, formation.squadClass);
       return raw > 0 ? Math.max(1, 1 / raw) : 1;
     }
     return 1;
@@ -3314,16 +3489,16 @@ export class Game {
     const key = constructionCellKey(cell.col, cell.row);
     const center = constructionCellCenter(cell.col, cell.row);
     if (this.distance(formation.center, center) > CONSTRUCTION_PLACE_RANGE) return false;
-    const terrain = BATTLEFIELD_MAP.terrainAt(center);
+    const terrain = this.terrainDamage.effectiveTerrainAt(center);
     if (kind === 'bridgeTile') {
       if (terrain !== 'river' && terrain !== 'ford') return false;
     } else if (terrain === 'mountain' || terrain === 'river') return false;
     if (this.constructionCooldowns.has(key)) return false;
     if (this.constructionBlocks.some((block) => block.active && block.cellKey === key)) return false;
-    if (this.distance(center, this.blueBanner.position) < 150 || this.distance(center, this.redBanner.position) < 150) return false;
+    if (this.banners.some((banner) => this.distance(center, banner.position) < 150)) return false;
     if (MAP_SITES.some((site) => site.kind === 'facility' && this.distance(center, site.position) < 125)) return false;
-    if (BATTLEFIELD_MAP.inSpawnArea('blue', center, -Math.min(360, BATTLEFIELD_MAP.spawnArea('blue', 0).radiusX * 0.45))
-      || BATTLEFIELD_MAP.inSpawnArea('red', center, -Math.min(360, BATTLEFIELD_MAP.spawnArea('red', 0).radiusX * 0.45))) return false;
+    if (this.battlefieldMap.inSpawnArea('blue', center, -Math.min(360, this.battlefieldMap.spawnArea('blue', 0).radiusX * 0.45))
+      || this.battlefieldMap.inSpawnArea('red', center, -Math.min(360, this.battlefieldMap.spawnArea('red', 0).radiusX * 0.45))) return false;
     return ignoreCost || this.resourceSystem.canAfford(formation.team, CONSTRUCTION_COSTS[kind]);
   }
 
@@ -3398,16 +3573,44 @@ export class Game {
   }
 
   private attackConstructionBlockWithAxe(formation: Formation, blockId: string): boolean {
-    if (!canBannerAttackClass(formation.squadClass) || this.weaponForFormation(formation) !== 'axe' || formation.aliveCount() === 0) return false;
+    const weapon = this.weaponForFormation(formation);
+    if (!canBannerAttackClass(formation.squadClass) || (weapon !== 'axe' && weapon !== 'pickaxe') || formation.aliveCount() === 0) return false;
     const block = this.constructionBlocks.find((candidate) => candidate.id === blockId && candidate.active && candidate.team !== formation.team);
     if (!block || this.distance(formation.center, block.position) > 170) return false;
     const readyAt = this.constructionAxeReadyAt.get(formation.id) ?? 0;
     if (this.time < readyAt) return false;
-    const damage = formation.squadClass === 'engineer' ? 125 : 72;
+    const engineer = formation.squadClass === 'engineer';
+    const damage = weapon === 'pickaxe'
+      ? (block.kind === 'ironWall' ? (engineer ? 205 : 165) : (engineer ? 92 : 62))
+      : (engineer ? 125 : 72);
     block.takeDamage(damage);
     this.constructionAxeReadyAt.set(formation.id, this.time + 0.72);
     this.constructionDirty = true;
     if (!block.active) this.handleDestroyedConstructionBlocks();
+    return true;
+  }
+
+  private attackTerrain(formation: Formation, target: Vec2): boolean {
+    const weapon = this.weaponForFormation(formation);
+    if ((weapon !== 'axe' && weapon !== 'pickaxe') || formation.aliveCount() === 0) return false;
+    if (this.distance(formation.center, target) > 180) return false;
+    const terrain = this.terrainDamage.effectiveTerrainAt(target);
+    if (terrain !== 'forest' && terrain !== 'mountain') return false;
+    if (terrain === 'mountain' && weapon !== 'pickaxe') {
+      if (formation === this.playerFormation) this.setHint('山岳の掘削には PICKAXE が必要です · 3キーで斧/ピッケル切替', 1.8);
+      return false;
+    }
+    const readyAt = this.constructionAxeReadyAt.get(formation.id) ?? 0;
+    if (this.time < readyAt) return false;
+    const engineer = formation.squadClass === 'engineer';
+    const amount = weapon === 'pickaxe' ? (engineer ? 125 : 105) : (engineer ? 105 : 85);
+    const state = this.terrainDamage.damageAt(target, amount, weapon);
+    if (!state) return false;
+    this.constructionAxeReadyAt.set(formation.id, this.time + 0.72);
+    if (state.destroyed) {
+      this.aiSystem.invalidateNavigation();
+      if (formation === this.playerFormation) this.setNotice(`${state.terrain === 'mountain' ? '山岳' : '森林'}タイルを破壊`, 'success', 1.8);
+    }
     return true;
   }
 
@@ -3432,15 +3635,15 @@ export class Game {
   }
 
   private bannerFor(team: Team): Banner {
-    return team === 'blue' ? this.blueBanner : this.redBanner;
+    return this.banners.find((banner) => banner.team === team) ?? this.blueBanner;
   }
 
   private squadCountFor(team: Team): number {
-    return team === 'blue' ? this.blueSquads : this.redSquads;
+    return this.teamSquads[team] ?? 0;
   }
 
   private teamIndexOf(formation: Formation): number {
-    const prefix = formation.team === 'blue' ? 'B' : 'R';
+    const prefix = teamPrefix(formation.team);
     return Math.max(0, Number.parseInt(formation.id.replace(prefix, ''), 10) - 1);
   }
 
@@ -3462,7 +3665,9 @@ export class Game {
   }
 
   private enemyDirectionPoint(team: Team): Vec2 {
-    return team === 'blue' ? this.redBanner.position : this.blueBanner.position;
+    const own = this.bannerFor(team).position;
+    const enemy = this.banners.filter((banner) => banner.team !== team && !banner.destroyed).sort((a, b) => this.distance(own, a.position) - this.distance(own, b.position))[0];
+    return enemy?.position ?? own;
   }
 
   private minimapWorldPoint(point: Vec2): Vec2 | null {
